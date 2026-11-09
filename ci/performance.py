@@ -50,6 +50,8 @@ def evaluate(results_dir, baselines):
             if any(r["exit_code"] for r in records):
                 failures.append(f"{target}/{name}: benchmark failed")
                 continue
+            if any(r.get("skip_reason") for r in records):
+                continue  # Busy-node skips provide no measurement or candidate.
             definition = definitions[name]
             for metric in definition.get("metrics", []):
                 samples = []

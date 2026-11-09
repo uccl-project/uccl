@@ -4395,10 +4395,9 @@
     },
     {
       "sources": [
-        ".github/workflows/benchmark_comment.py",
         "ep/src/bench_kernel.cu"
       ],
-      "reason": "Workflow reporting helper and kernel implementation linked by registered benchmarks; not standalone test entry points."
+      "reason": "Kernel implementation linked by registered benchmarks; not a standalone test entry point."
     }
   ]
 }

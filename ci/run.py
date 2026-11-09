@@ -19,6 +19,80 @@ import uuid
 import xml.etree.ElementTree as ET
 
 from catalog import ROOT, read_catalog, tracked_files, validate, plan
+from idle import skip_reason
+
+
+class TargetSkipped(Exception):
+    pass
+
+
+def skip_results(names, definitions, target, reason):
+    return [
+        dict(
+            id=name,
+            tier=definitions[name]["tier"],
+            target=target,
+            node=node,
+            exit_code=0,
+            seconds=0,
+            skip_reason=reason,
+        )
+        for name in names
+        for node in range(definitions[name].get("nodes", 1))
+    ]
+
+
+def remote_preflight(ssh, hosts, target, root):
+    """Probe every selected machine before uploading source or building anything."""
+    states = {}
+    script = (ROOT / "ci/idle.py").read_text()
+    for host in hosts:
+        command = shlex.join(
+            [
+                "python3",
+                "-",
+                "--root",
+                root,
+                "--gpus",
+                str(target["gpus"]),
+                "--capabilities",
+                ",".join(target["capabilities"]),
+            ]
+        )
+        result = subprocess.run(
+            [*ssh, host, command],
+            input=script,
+            text=True,
+            capture_output=True,
+            timeout=60,
+            check=True,
+        )
+        states[host] = json.loads(result.stdout)
+        if skip_reason(states[host]):
+            break
+    return states
+
+
+def receive_all(workers, event, timeout=2700):
+    pending, messages = set(range(len(workers))), {}
+    deadline = time.monotonic() + timeout
+    while pending:
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"Workers did not reach {event}")
+        for index in list(pending):
+            try:
+                message = workers[index].events.get_nowait()
+            except queue.Empty:
+                continue
+            if message.get("event") != event:
+                raise RuntimeError(f"Expected {event}, got {message}")
+            if message.get("skip_reason"):
+                raise TargetSkipped(message["skip_reason"])
+            messages[index] = message
+            pending.remove(index)
+        if pending:
+            time.sleep(0.05)
+    return [messages[index] for index in range(len(workers))]
 
 
 def check(args, **kwargs):
@@ -123,17 +197,35 @@ def collect_results(workers, name, timeout):
                 raise RuntimeError(f"Expected result for {name}, got {result}")
             pending.remove(index)
             results[index] = result
-            if result["exit_code"] not in {0, 125} and not cancelled:
+            if (
+                result["exit_code"] not in {0, 125} or result.get("skip_reason")
+            ) and not cancelled:
                 cancelled = True
                 for peer in pending:
                     try:
-                        workers[peer].send({"cancel": name})
+                        workers[peer].send(
+                            {
+                                "cancel": name,
+                                **(
+                                    {"skip_reason": result["skip_reason"]}
+                                    if result.get("skip_reason")
+                                    else {}
+                                ),
+                            }
+                        )
                     except BrokenPipeError:
                         # The final result may already be queued after worker exit.
                         pass
         if pending:
             time.sleep(0.05)
-    return [results[i] for i in range(len(workers))]
+    values = [results[i] for i in range(len(workers))]
+    busy = next((r["skip_reason"] for r in values if r.get("skip_reason")), None)
+    if busy:
+        for result in values:
+            result.update(
+                interrupted_exit_code=result["exit_code"], exit_code=0, skip_reason=busy
+            )
+    return values
 
 
 def write_summary(results, output, error=None):
@@ -152,7 +244,9 @@ def write_summary(results, output, error=None):
             classname=f"{result['target']}.node{result['node']}",
             time=str(result["seconds"]),
         )
-        if result["exit_code"]:
+        if result.get("skip_reason"):
+            ET.SubElement(case, "skipped", message=result["skip_reason"])
+        elif result["exit_code"]:
             ET.SubElement(
                 case,
                 "failure",
@@ -165,6 +259,7 @@ def write_summary(results, output, error=None):
     suite.set("tests", str(len(suite)))
     suite.set("failures", str(len(suite.findall("testcase/failure"))))
     suite.set("errors", str(len(suite.findall("testcase/error"))))
+    suite.set("skipped", str(len(suite.findall("testcase/skipped"))))
     ET.ElementTree(suite).write(
         output / "junit.xml", encoding="unicode", xml_declaration=True
     )
@@ -264,6 +359,15 @@ def main():
     local = None
     try:
         tmp = tmpdir.name
+        admission = remote_preflight(ssh, hosts, target, args.root)
+        (output / "admission.json").write_text(json.dumps(admission, indent=2))
+        busy = [
+            f"{host}: {skip_reason(state)}"
+            for host, state in admission.items()
+            if skip_reason(state)
+        ]
+        if busy:
+            raise TargetSkipped("; ".join(busy))
         archive = Path(tmp) / "source.tar.gz"
         archive_source(archive)
         source["archive_sha256"] = hashlib.sha256(archive.read_bytes()).hexdigest()
@@ -292,11 +396,17 @@ def main():
                     "--local",
                 ]
             workers.append(Worker(command, output / f"node-{index}.ssh.log"))
-        ready = [worker.receive("ready") for worker in workers]
+        ready = receive_all(workers, "ready")
         for worker in workers:
             worker.send({"tests": selected, "master_addr": ready[0]["address"]})
+        receive_all(workers, "initialized")
         for index, name in enumerate(selected):
-            prepared = [worker.receive("prepared") for worker in workers]
+            available = receive_all(workers, "available")
+            if any(r["id"] != name for r in available):
+                raise RuntimeError("Workers disagree about test ordering")
+            for worker in workers:
+                worker.send({"action": "prepare", "id": name})
+            prepared = receive_all(workers, "prepared")
             if any(p["id"] != name for p in prepared):
                 raise RuntimeError("Workers disagree about test ordering")
             action = "run" if all(p["ok"] for p in prepared) else "skip"
@@ -304,10 +414,25 @@ def main():
                 worker.send({"action": action, "port": 24000 + index % 10000})
             current = collect_results(workers, name, timeout=3700)
             results.extend(current)
+            if any(r.get("skip_reason") for r in current):
+                raise TargetSkipped(
+                    next(r["skip_reason"] for r in current if r.get("skip_reason"))
+                )
             status = "FAIL" if any(r["exit_code"] for r in current) else "PASS"
             print(f"{args.target}: {name}: {status}", flush=True)
         for worker in workers:
             worker.receive("complete", timeout=30)
+    except TargetSkipped as exc:
+        completed = {r["id"] for r in results}
+        results.extend(
+            skip_results(
+                [name for name in selected if name not in completed],
+                definitions,
+                args.target,
+                str(exc),
+            )
+        )
+        print(f"{args.target}: SKIPPED: {exc}", flush=True)
     except (Exception, KeyboardInterrupt) as exc:
         error = str(exc) or type(exc).__name__
         print(f"CI infrastructure error: {error}", file=sys.stderr)

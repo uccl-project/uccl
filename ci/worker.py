@@ -16,6 +16,7 @@ import xml.etree.ElementTree as ET
 
 from catalog import ROOT, read_catalog, target_interface
 from process import run
+from idle import probe, skip_reason
 
 
 def emit(event, **values):
@@ -52,8 +53,16 @@ def main():
     lock = open(ci_root / "hardware.lock", "a")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError as exc:
-        raise RuntimeError("Another CI run holds this machine's lease") from exc
+    except BlockingIOError:
+        emit("ready", skip_reason="Another CI run holds this machine's lease")
+        return 0
+    guard = None
+    if not args.local or target["gpus"]:
+        guard = lambda: skip_reason(probe(target, ci_root, lease=False))
+        busy = skip_reason(probe(target, ci_root, lease=False, cleanup=True))
+        if busy:
+            emit("ready", skip_reason=busy)
+            return 0
     filesystems = {}
     for directory in (ci_root, ci_root / "cache", ROOT):
         directory.mkdir(parents=True, exist_ok=True)
@@ -106,14 +115,6 @@ def main():
         )
         if len(gpu_info.strip().splitlines()) < target["gpus"]:
             raise RuntimeError("Fewer GPUs than declared in config/targets.json")
-        active = subprocess.check_output(
-            ["nvidia-smi", "--query-compute-apps=pid", "--format=csv,noheader"],
-            text=True,
-        ).strip()
-        if active:
-            raise RuntimeError(
-                "GPU is busy; refusing to interrupt an existing workload"
-            )
         metadata["gpus"] = gpu_info
         env.update(
             {
@@ -179,19 +180,29 @@ def main():
             subprocess.run(
                 command, stdout=stream, stderr=subprocess.STDOUT, check=False
             )
+    # All peers must pass admission before any dependency installation starts.
+    emit("ready", address=address, artifacts=str(artifacts), metadata=metadata)
+    request = receive()
+    busy = guard() if guard else None
+    if busy:
+        emit("initialized", skip_reason=busy)
+        return 0
     initial = run(
         ["bash", "ci/setup.sh", "environment"],
         artifacts / "environment.log",
         1800,
         env,
         True,
+        guard=guard,
     )
+    if initial.get("skip_reason"):
+        emit("initialized", skip_reason=initial["skip_reason"])
+        return 0
     if initial["exit_code"]:
         emit("fatal", **initial)
         return 1
     os.environ.update(env)
-    emit("ready", address=address, artifacts=str(artifacts), metadata=metadata)
-    request = receive()
+    emit("initialized")
     selected = {t["id"]: t for t in catalog["tests"]}
     built, broken, results = set(), {}, []
     p2p_profile = None
@@ -199,6 +210,10 @@ def main():
         test = selected[name]
         if not test["enabled"] or args.target not in test["targets"]:
             raise RuntimeError(f"Test {name} is not enabled on {args.target}")
+        busy = guard() if guard else None
+        emit("available", id=name, skip_reason=busy)
+        if receive().get("action") != "prepare":
+            raise RuntimeError("Expected prepare instruction")
         participating = args.node < test.get("nodes", 1)
         setup_error = None
         if participating:
@@ -215,19 +230,25 @@ def main():
                         2400,
                         env,
                         True,
+                        guard=guard,
                     )
+                    if result.get("skip_reason"):
+                        busy = result["skip_reason"]
+                        break
                     if result["exit_code"]:
                         broken[component] = setup_error = result
                         break
                     built.add(component)
                     if component in {"p2p", "compression"}:
                         p2p_profile = component
+        busy = busy or (guard() if guard else None)
         emit(
             "prepared",
             id=name,
             ok=setup_error is None,
             participating=participating,
             error=setup_error,
+            skip_reason=busy,
         )
         message = receive()
         if message.get("action") != "run" or setup_error:
@@ -263,8 +284,9 @@ def main():
                 test_env,
                 True,
                 name,
+                guard=guard,
             )
-            if result["exit_code"] == 0:
+            if result["exit_code"] == 0 and not result.get("skip_reason"):
                 log_text = Path(result["log"]).read_text(errors="replace")
                 for pattern in test.get("failure_patterns", []):
                     if re.search(pattern, log_text):
@@ -273,7 +295,7 @@ def main():
                         )
                         break
             junit = Path(test_env["CI_TEST_JUNIT"])
-            if junit.exists():
+            if junit.exists() and not result.get("skip_reason"):
                 cases = ET.parse(junit).getroot().findall(".//testcase")
                 result["cases"] = len(cases)
                 result["skipped"] = sum(c.find("skipped") is not None for c in cases)

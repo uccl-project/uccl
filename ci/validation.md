@@ -11,6 +11,14 @@ GB10, including the jump host. Hardware runs used the isolated
   `libibverbs-dev` and aligning Black with version 26.5.1.
 - All 62 example/experimental entries remain disabled; GIN CI is removed.
 - CI now records suite timings and checks measured performance against a 90% floor.
+- Removed six unused workflow helpers; the five remaining workflows handle CI,
+  formatting, manual dispatch, Docker publication and releases.
+- Busy-node protection passed live checks: L4 skipped before source upload for
+  another user's jobs; GB10 admitted both idle nodes and passed
+  `nixl.internode.nccl`. Skips produce no performance sample or baseline candidate.
+- All 34 CI harness tests passed on GB10 Linux, including recorded stale-CI
+  cleanup while preserving an unrelated process. AMD detection uses fixtures;
+  no new GH200/AMD hardware run was possible.
 
 ## Planned GH200 pair restoration
 
@@ -87,13 +95,15 @@ contain the measured failures; the CSV includes earlier checks too.
 
 | Suite | Target | Failure |
 |---|---|---|
-| `collective.rdma.transport` | L4, GB10 | No transfer progress; 300-second timeout |
+| `collective.rdma.transport` | L4, GB10 | Transfers finish; shutdown times out |
 | `p2p.compression_unit` | L4, GB10 | Removed/private fixture APIs |
 | `ep.internode_simple` | GB10 | Outdated address/Buffer APIs |
 | `ep.bench.pcie_bench` | L4 | Illegal GPU memory access |
 | `nixl.internode.nccl` | L4 | Illegal GPU memory access, then timeout |
 
-These stay enabled and visible. Broken benchmarks have no fabricated baseline;
+These stay enabled and visible. Fixes are in separate PR [#1135](https://github.com/uccl-project/uccl/pull/1135);
+the combined suite still needs retesting after integration.
+Broken benchmarks have no fabricated baseline;
 GH200-only benchmarks remain uncalibrated. Performance-only verification runs
 excluded known crashing fixtures after the full sweep had already tested them.
 
@@ -103,8 +113,8 @@ excluded known crashing fixtures after the full sweep had already tested them.
 - Update IPC/Ray fixtures, architecture handling and pinned NIXL setup.
 - Support CUDA 13's clock-rate query; use GB10's CUDA 13 assembler for Triton.
 - Invoke Triton tests through pytest with JUnit; reject swallowed benchmark errors.
-- Extract metrics, enforce thresholds and report per-suite times. All 18 CI
-  harness tests pass; registry validation accounts for 184 suites.
+- Extract metrics, enforce thresholds and report per-suite times. Registry
+  validation accounts for 184 suites.
 
 ## Deployment state and remaining administrator actions
 

@@ -9,8 +9,19 @@ import subprocess
 import sys
 import time
 
+from idle import record_process
 
-def run(command, log, timeout, env=None, watch_stdin=False, test_id=None):
+
+def run(
+    command,
+    log,
+    timeout,
+    env=None,
+    watch_stdin=False,
+    test_id=None,
+    guard=None,
+    guard_interval=5,
+):
     Path(log).parent.mkdir(parents=True, exist_ok=True)
     start = time.monotonic()
     with open(log, "wb") as output:
@@ -22,8 +33,10 @@ def run(command, log, timeout, env=None, watch_stdin=False, test_id=None):
             env=env,
             start_new_session=True,
         )
-        reason = None
+        reason, busy, record = None, None, None
+        next_probe = time.monotonic() + guard_interval
         try:
+            record = record_process(child.pid, env)
             while child.poll() is None:
                 if time.monotonic() - start >= timeout:
                     reason = "timeout"
@@ -31,9 +44,17 @@ def run(command, log, timeout, env=None, watch_stdin=False, test_id=None):
                 if watch_stdin and select.select([sys.stdin], [], [], 0)[0]:
                     # Only cancellation/EOF is sent while a child is running.
                     message = sys.stdin.readline()
-                    if not message or json.loads(message).get("cancel") == test_id:
+                    request = json.loads(message) if message else {}
+                    if not message or request.get("cancel") == test_id:
+                        busy = request.get("skip_reason")
                         reason = "controller disconnected or cancelled"
                         break
+                if guard and time.monotonic() >= next_probe:
+                    busy = guard()
+                    if busy:
+                        reason = "node became busy"
+                        break
+                    next_probe = time.monotonic() + guard_interval
                 time.sleep(0.1)
         finally:
             # Also reap descendants left behind by an otherwise successful test.
@@ -50,11 +71,16 @@ def run(command, log, timeout, env=None, watch_stdin=False, test_id=None):
             except ProcessLookupError:
                 pass
             child.wait()
+            if record:
+                record.unlink(missing_ok=True)
     return {
         "exit_code": (
-            124 if reason == "timeout" else (125 if reason else child.returncode)
+            0
+            if busy
+            else (124 if reason == "timeout" else (125 if reason else child.returncode))
         ),
         "seconds": round(time.monotonic() - start, 3),
         "error": reason,
         "log": str(log),
+        **({"skip_reason": busy} if busy else {}),
     }

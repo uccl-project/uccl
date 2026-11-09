@@ -21,35 +21,45 @@ def report_plan(path):
 
 def report_results(root):
     print(
-        "### Results\n\n| Target | Passed ranks | Failed ranks | Infrastructure |\n|---|---:|---:|---|"
+        "### Results\n\n| Target | Passed ranks | Failed ranks | Skipped ranks | Infrastructure |\n|---|---:|---:|---:|---|"
     )
     found = False
     failed_suites = []
+    skip_reasons = []
     timings = []
     for path in sorted(root.glob("*/results.json")):
         found = True
         data = json.loads(path.read_text())
         results = [r for r in data["results"] if not r.get("not_participating")]
         failed = [r for r in results if r["exit_code"]]
+        skipped = [r for r in results if r.get("skip_reason")]
         for name in dict.fromkeys(r["id"] for r in results):
             ranks = [r for r in results if r["id"] == name]
             timings.append(
                 (
                     path.parent.name,
                     name,
-                    any(r["exit_code"] for r in ranks),
+                    (
+                        "SKIP"
+                        if any(r.get("skip_reason") for r in ranks)
+                        else ("FAIL" if any(r["exit_code"] for r in ranks) else "PASS")
+                    ),
                     max(r["seconds"] for r in ranks),
                 )
             )
         print(
-            f"| {path.parent.name} | {len(results)-len(failed)} | {len(failed)} | {'FAILED' if data.get('infrastructure_error') else 'OK'} |"
+            f"| {path.parent.name} | {len(results)-len(failed)-len(skipped)} | {len(failed)} | {len(skipped)} | {'FAILED' if data.get('infrastructure_error') else 'OK'} |"
         )
+        for reason in dict.fromkeys(r["skip_reason"] for r in skipped):
+            skip_reasons.append(f"- Skipped `{path.parent.name}`: {reason}")
         for result in failed:
             failed_suites.append(
                 f"- `{path.parent.name}/{result['id']}` node {result['node']}: exit {result['exit_code']}; see artifact log."
             )
     if failed_suites:
         print("\n" + "\n".join(failed_suites))
+    if skip_reasons:
+        print("\n" + "\n".join(skip_reasons))
     if not found:
         print("\nNo results were produced; inspect the job failure.")
     if timings:
@@ -57,10 +67,8 @@ def report_results(root):
             "\n### Suite timings\n\nTime is the slowest participating rank, including builds in the suite command but excluding shared environment/dependency setup.\n"
         )
         print("| Target | Suite | Result | Seconds |\n|---|---|---|---:|")
-        for target, name, failed, seconds in timings:
-            print(
-                f"| {target} | `{name}` | {'FAIL' if failed else 'PASS'} | {seconds:.3f} |"
-            )
+        for target, name, status, seconds in timings:
+            print(f"| {target} | `{name}` | {status} | {seconds:.3f} |")
     performance = root / "performance.json"
     if performance.exists():
         data = json.loads(performance.read_text())

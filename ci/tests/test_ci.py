@@ -4,9 +4,11 @@ import copy
 from contextlib import redirect_stdout
 import io
 import json
+import os
 from pathlib import Path
 import queue
 import signal
+import subprocess
 import sys
 import tempfile
 import time
@@ -15,10 +17,329 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import catalog
+import idle
+import run as controller
 from performance import compare, evaluate
 from process import run
 from report import report_results
 from run import Worker, collect_results, write_summary
+
+
+class AdmissionTests(unittest.TestCase):
+    def process(self, pid, uid=1000, ppid=1, name="python3", **kwargs):
+        return dict(
+            pid=pid,
+            uid=uid,
+            ppid=ppid,
+            pgid=pid,
+            name=name,
+            state="S",
+            kernel=False,
+            start="100",
+            **kwargs,
+        )
+
+    def test_waiting_user_jobs_and_same_uid_jobs_are_busy(self):
+        snapshot = {
+            1: self.process(1, uid=0, name="systemd"),
+            10: self.process(10, name="bash"),
+            20: self.process(20, ppid=10),
+            21: self.process(21, ppid=20),
+            30: self.process(30),
+        }
+        own = idle.owned_processes(snapshot, pid=20)
+        self.assertEqual(own, {1, 10, 20, 21})
+        self.assertEqual(idle.user_jobs(snapshot, own), ["PID 30 (python3, uid 1000)"])
+
+    def xml(self, pid=None, utilization=0):
+        processes = (
+            "" if pid is None else f"<process_info><pid>{pid}</pid></process_info>"
+        )
+        return f"<nvidia_smi_log><gpu><processes>{processes}</processes><utilization><gpu_util>{utilization} %</gpu_util></utilization></gpu></nvidia_smi_log>"
+
+    def test_nvidia_idle_foreign_and_own_contexts(self):
+        target = dict(gpus=1, capabilities=["cuda"])
+        with patch("idle.query", return_value=self.xml()):
+            self.assertEqual(idle.gpu_jobs(target, set()), [])
+        with patch("idle.query", return_value=self.xml(50, 0)):
+            self.assertIn("PID 50", idle.gpu_jobs(target, set())[0])
+        with patch("idle.query", return_value=self.xml(50, 100)):
+            self.assertEqual(idle.gpu_jobs(target, {50}), [])
+
+    def test_idle_editors_do_not_hide_cpu_workloads(self):
+        before = {
+            10: dict(self.process(10, name="code"), ticks=100),
+            20: dict(self.process(20, name="custom-job"), ticks=100),
+        }
+        after = copy.deepcopy(before)
+        after[20]["ticks"] += os.sysconf("SC_CLK_TCK")
+        self.assertEqual(
+            idle.user_jobs(after, set(), before, 1), ["PID 20 (custom-job, uid 1000)"]
+        )
+
+    def test_idle_desktop_context_does_not_reserve_gpu(self):
+        xml = self.xml(50).replace("<pid>50</pid>", "<pid>50</pid><type>G</type>")
+        with patch("idle.query", return_value=xml):
+            self.assertEqual(
+                idle.gpu_jobs(dict(gpus=1, capabilities=["cuda"]), set()), []
+            )
+
+    def test_gpu_activity_without_visible_context_is_busy(self):
+        with patch("idle.query", return_value=self.xml(utilization=20)):
+            self.assertTrue(
+                idle.gpu_jobs(dict(gpus=1, capabilities=["cuda"]), set(), settle=False)
+            )
+
+    def test_recent_ci_utilization_settles_before_next_suite(self):
+        with (
+            patch("idle.query", side_effect=[self.xml(utilization=20), self.xml()]),
+            patch("idle.time.sleep"),
+        ):
+            self.assertEqual(
+                idle.gpu_jobs(dict(gpus=1, capabilities=["cuda"]), set()), []
+            )
+
+    def test_amd_kfd_and_utilization_checks(self):
+        target = dict(gpus=1, capabilities=["rocm"])
+        usage = json.dumps({"card0": {"GPU use (%)": "0"}})
+        with patch("idle.query", side_effect=["No KFD PIDs currently running", usage]):
+            self.assertEqual(idle.gpu_jobs(target, set()), [])
+        with patch(
+            "idle.query", side_effect=["PID 55 is using 1 DRM device(s)", usage]
+        ):
+            self.assertEqual(idle.gpu_jobs(target, set()), ["GPU process PID 55"])
+        with patch("idle.query", return_value="unrecognized ROCm output"):
+            with self.assertRaises(ValueError):
+                idle.gpu_jobs(target, set())
+
+    def test_unknown_activity_never_admits_a_node(self):
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch("idle.processes", side_effect=PermissionError),
+        ):
+            result = idle.probe(dict(gpus=0), tmp, lease=False)
+            self.assertEqual(result["state"], "unavailable")
+            self.assertTrue(idle.skip_reason(result))
+        for error in (ValueError, AttributeError, IndexError):
+            with (
+                self.subTest(error=error),
+                tempfile.TemporaryDirectory() as tmp,
+                patch("idle.cleanup_stale", side_effect=error),
+            ):
+                result = idle.probe(dict(gpus=0), tmp, lease=False, cleanup=True)
+                self.assertEqual(result["state"], "unavailable")
+
+    def test_active_lease_prevents_cleanup(self):
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch("idle.fcntl.flock", side_effect=BlockingIOError),
+            patch("idle.cleanup_stale") as cleanup,
+        ):
+            self.assertEqual(idle.probe(dict(gpus=0), tmp)["state"], "busy")
+            cleanup.assert_not_called()
+
+    def test_stale_cleanup_checks_pid_identity_and_owner(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            records = root / "owned-processes"
+            records.mkdir()
+            data = self.process(50, uid=os.getuid())
+            data["run"] = str(root / "runs" / "old" / "src")
+            record = records / "50.json"
+            record.write_text(json.dumps(data))
+            with (
+                patch("idle.processes", return_value={50: dict(data, start="reused")}),
+                patch("idle.os.killpg") as kill,
+            ):
+                self.assertEqual(idle.cleanup_stale(root), [])
+                kill.assert_not_called()
+            record.write_text(json.dumps(data))
+            with (
+                patch(
+                    "idle.processes", return_value={50: dict(data, uid=os.getuid() + 1)}
+                ),
+                patch("idle.os.killpg") as kill,
+            ):
+                with self.assertRaises(ValueError):
+                    idle.cleanup_stale(root)
+                kill.assert_not_called()
+            record.write_text(json.dumps(data))
+            with (
+                patch("idle.processes", return_value={50: data}),
+                patch("idle.os.killpg") as kill,
+                patch("idle.time.monotonic", side_effect=[0, 3]),
+            ):
+                self.assertEqual(idle.cleanup_stale(root), [50])
+                self.assertEqual(
+                    [c.args for c in kill.call_args_list],
+                    [(50, signal.SIGTERM), (50, signal.SIGKILL)],
+                )
+            record.write_text(json.dumps(data))
+            child = dict(self.process(51, uid=os.getuid(), ppid=50), pgid=50)
+            with (
+                patch(
+                    "idle.processes", side_effect=[{50: data, 51: child}, {51: child}]
+                ),
+                patch("idle.os.killpg") as kill,
+                patch("idle.time.monotonic", side_effect=[0, 3]),
+            ):
+                self.assertEqual(idle.cleanup_stale(root), [50])
+                self.assertEqual(
+                    [c.args for c in kill.call_args_list],
+                    [(50, signal.SIGTERM), (50, signal.SIGKILL)],
+                )
+
+    def test_host_suite_on_gpu_node_still_checks_gpu_activity(self):
+        with (
+            patch("idle.shutil.which", return_value="/usr/bin/nvidia-smi"),
+            patch("idle.query", return_value=self.xml(50)),
+        ):
+            self.assertEqual(
+                idle.gpu_jobs(dict(gpus=0, capabilities=["cpu"]), set()),
+                ["GPU process PID 50"],
+            )
+
+    def test_busy_peer_skips_target_before_upload_or_workers(self):
+        definition = dict(id="t", tier="performance", nodes=2)
+        target = dict(enabled=True, hosts=["a", "b"], gpus=1, capabilities=["cuda"])
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.object(sys, "argv", ["run.py", "--target", "gpu", "--output", tmp]),
+            patch(
+                "run.read_catalog",
+                return_value=({"tests": [definition]}, {"gpu": target}),
+            ),
+            patch("run.validate"),
+            patch("run.tracked_files", return_value=[]),
+            patch(
+                "run.plan",
+                return_value={"include": [{"target": "gpu", "tests": ["t"]}]},
+            ),
+            patch("run.subprocess.check_output", side_effect=["sha\n", b""]),
+            patch(
+                "run.remote_preflight",
+                return_value={
+                    "a": {"state": "idle", "reason": ""},
+                    "b": {"state": "busy", "reason": "real job"},
+                },
+            ),
+            patch("run.archive_source") as archive,
+            patch("run.Worker") as worker,
+            redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(controller.main(), 0)
+            archive.assert_not_called()
+            worker.assert_not_called()
+            payload = json.loads((Path(tmp) / "gpu/results.json").read_text())
+            self.assertIsNone(payload["infrastructure_error"])
+            self.assertEqual(len(payload["results"]), 2)
+            self.assertTrue(
+                all(r["skip_reason"] == "b: real job" for r in payload["results"])
+            )
+
+    @unittest.skipUnless(
+        sys.platform.startswith("linux"), "Linux process identity requires /proc"
+    )
+    def test_recorded_stale_group_cleanup_leaves_unrecorded_process_alive(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            work = root / "runs" / "old" / "src"
+            work.mkdir(parents=True)
+            command = [sys.executable, "-c", "import time; time.sleep(60)"]
+            stale = subprocess.Popen(command, cwd=work, start_new_session=True)
+            other = subprocess.Popen(command, start_new_session=True)
+            try:
+                record = idle.record_process(
+                    stale.pid, {"CI_ROOT": str(root), "CI_REPO": str(work)}
+                )
+                with open(root / "hardware.lock", "a") as lease:
+                    idle.fcntl.flock(lease, idle.fcntl.LOCK_EX | idle.fcntl.LOCK_NB)
+                    self.assertEqual(idle.cleanup_stale(root), [stale.pid])
+                stale.wait(timeout=5)
+                self.assertFalse(record.exists())
+                self.assertIsNone(other.poll())
+            finally:
+                for child in (stale, other):
+                    if child.poll() is None:
+                        child.terminate()
+                    child.wait(timeout=5)
+
+    def test_busy_peer_interrupts_admission_without_waiting_for_setup(self):
+        class Fake:
+            def __init__(self):
+                self.events = queue.Queue()
+
+        a, b = Fake(), Fake()
+        b.events.put(dict(event="initialized", skip_reason="job started"))
+        with self.assertRaises(controller.TargetSkipped):
+            controller.receive_all([a, b], "initialized", timeout=0.5)
+
+    def test_running_ci_yields_without_killing_external_process(self):
+        external = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(60)"]
+        )
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                result = run(
+                    [sys.executable, "-c", "import time; time.sleep(60)"],
+                    Path(tmp) / "log",
+                    10,
+                    guard=lambda: "external job started",
+                    guard_interval=0.05,
+                )
+                self.assertEqual(result["exit_code"], 0)
+                self.assertEqual(result["skip_reason"], "external job started")
+                self.assertIsNone(external.poll())
+        finally:
+            external.terminate()
+            external.wait()
+
+    def test_skip_cancels_peer_and_never_becomes_a_performance_pass(self):
+        class Fake:
+            def __init__(self, initial=None):
+                self.events = queue.Queue()
+                if initial:
+                    self.events.put(initial)
+
+            def send(self, message):
+                self.events.put(
+                    dict(
+                        event="result",
+                        id="t",
+                        exit_code=125,
+                        skip_reason=message["skip_reason"],
+                    )
+                )
+
+        values = collect_results(
+            [
+                Fake(dict(event="result", id="t", exit_code=0, skip_reason="busy")),
+                Fake(),
+            ],
+            "t",
+            2,
+        )
+        self.assertTrue(all(v["skip_reason"] == "busy" for v in values))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            rows = controller.skip_results(
+                ["t"], {"t": dict(tier="performance", nodes=2)}, "gpu", "busy"
+            )
+            write_summary(rows, root / "gpu")
+            xml = (root / "gpu/junit.xml").read_text()
+            self.assertIn('skipped="2"', xml)
+            self.assertNotIn("<failure", xml)
+            with patch(
+                "performance.read_catalog", return_value=({"tests": [{"id": "t"}]}, {})
+            ):
+                self.assertEqual(
+                    evaluate(root, {}), {"measurements": [], "failures": []}
+                )
+            output = io.StringIO()
+            with redirect_stdout(output):
+                report_results(root)
+            self.assertIn("SKIP", output.getvalue())
+            self.assertIn("| gpu | 0 | 0 | 2 | OK |", output.getvalue())
 
 
 class SelectionTests(unittest.TestCase):

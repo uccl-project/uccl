@@ -122,8 +122,18 @@ after merging; use `/run-ci` for pre-merge hardware validation. There is no
 nightly or label trigger. Benchmarks do not run correctness suites first.
 
 Host and hardware jobs can run in parallel. Hardware runs serialize per target
-and take a machine-local lock. Busy GPUs fail preflight; unrelated processes
-are never killed.
+and take a machine-local lock. Before source upload, CI checks every required
+node for NVIDIA/AMD compute contexts, GPU activity, waiting compute launchers,
+and CPU processes using at least 20% of one core. Idle shells/editors are ignored.
+If any node is busy, or activity cannot be verified, the target is **skipped**.
+
+Workers recheck before setup and each suite, and every five seconds while running.
+If a real job starts, CI stops its own processes and skips the remaining target.
+This is cooperative protection, not a scheduler reservation. Only recorded,
+same-user stale CI process groups may be cleaned, with PID identity and an
+unheld machine lease verified; unrelated jobs and active CI runs are never killed.
+Artifacts/JUnit show skip reasons, and skipped benchmarks produce no performance
+measurement or baseline candidate. A skipped suite is not a passing test.
 
 Replace retired workflow checks in branch protection with `CI status`, retain
 formatting checks, and remove the GIN check.
@@ -192,7 +202,8 @@ inputs and hashed locks live in `requirements/`; external source pins live in
 `config/dependencies.json`. Artifacts include the selection plan, results, JUnit,
 per-rank logs, source identity and machine/toolchain inventories.
 
-Both ranks must succeed. Setup failures, timeouts, disconnects and all-skipped
+Both ranks must succeed unless the target is skipped for node activity.
+Setup failures, timeouts, disconnects and all-skipped
 pytest suites fail the job; cancellation stops only owned processes. Workspaces
 are removed after artifact collection, even for failed tests. Use `--keep-remote`
 to debug; collection failures preserve the workspace automatically. Reusable
