@@ -2,7 +2,7 @@ name: UCCL CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, codex/gh200-validation-20261109]
   pull_request:
   workflow_dispatch:
     inputs:
@@ -48,10 +48,10 @@ jobs:
           EVENT: ${{ github.event_name }}
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
-          TARGETS: ${{ inputs.targets }}
+          TARGETS: ${{ inputs.targets || 'gh200' }}
           TESTS: ${{ inputs.tests }}
           EXCLUDE: ${{ inputs.exclude }}
-          TIERS: ${{ inputs.tiers || 'host,build,integration' }}
+          TIERS: ${{ inputs.tiers || 'host,build,integration,performance' }}
         run: |
           args=(--full)
           if [[ $EVENT == pull_request ]]; then
