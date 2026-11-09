@@ -1303,7 +1303,15 @@
       "nodes": 1,
       "gpus": 1,
       "timeout": 600,
-      "command": "bash ci/suites.sh ep-rb cas"
+      "command": "bash ci/suites.sh ep-rb cas",
+      "metrics": [
+        {
+          "name": "throughput_w128_p4_mops",
+          "pattern": "(?m)^Warps:\\s*128, Rings:\\s*4, Proxies:\\s*4, Throughput:\\s*([0-9.]+) Mops/sec",
+          "unit": "Mops/s",
+          "direction": "higher"
+        }
+      ]
     },
     {
       "id": "ep.rb.fc",
@@ -1324,7 +1332,15 @@
       "nodes": 1,
       "gpus": 1,
       "timeout": 600,
-      "command": "bash ci/suites.sh ep-rb fc"
+      "command": "bash ci/suites.sh ep-rb fc",
+      "metrics": [
+        {
+          "name": "throughput_w128_p4_mops",
+          "pattern": "(?m)^\\s*128\\s*\\|\\s*([0-9.]+)\\s*$",
+          "unit": "Mops/s",
+          "direction": "higher"
+        }
+      ]
     },
     {
       "id": "ep.rb.lock",
@@ -1345,7 +1361,15 @@
       "nodes": 1,
       "gpus": 1,
       "timeout": 600,
-      "command": "bash ci/suites.sh ep-rb lock"
+      "command": "bash ci/suites.sh ep-rb lock",
+      "metrics": [
+        {
+          "name": "throughput_w128_p4_mops",
+          "pattern": "(?s)Configuration:\\s*Warps:\\s*128\\s+Proxies:\\s*4\\b(?:(?!===== Test Results).)*?CPU Side:\\s*Total processed:\\s*\\d+\\s+Throughput:\\s*([0-9.]+) Mops/sec",
+          "unit": "Mops/s",
+          "direction": "higher"
+        }
+      ]
     },
     {
       "id": "ep.rb.multi_ring",
@@ -1366,7 +1390,15 @@
       "nodes": 1,
       "gpus": 1,
       "timeout": 600,
-      "command": "bash ci/suites.sh ep-rb multi_ring"
+      "command": "bash ci/suites.sh ep-rb multi_ring",
+      "metrics": [
+        {
+          "name": "throughput_w128_p4_mops",
+          "pattern": "(?m)^Warps:\\s*128, Proxies:\\s*4, Rings/proxy:\\s*32, Throughput:\\s*([0-9.]+) Mops/sec",
+          "unit": "Mops/s",
+          "direction": "higher"
+        }
+      ]
     },
     {
       "id": "util.runtime",

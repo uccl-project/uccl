@@ -579,6 +579,39 @@ class ProcessTests(unittest.TestCase):
 
 
 class PerformanceTests(unittest.TestCase):
+    def test_ring_benchmarks_compare_the_same_configuration(self):
+        fixtures = {
+            "ep.rb.cas": "Warps: 64, Rings: 4, Proxies: 4, Throughput: 99 Mops/sec\nWarps: 128, Rings: 4, Proxies: 4, Throughput: 1.2 Mops/sec\nWarps: 128, Rings: 8, Proxies: 8, Throughput: 99 Mops/sec\n",
+            "ep.rb.fc": "   64 | 99\n  128 | 2.3\n  256 | 99\n",
+            "ep.rb.lock": "===== Test Results =====\nConfiguration:\n  Warps: 128\n  Proxies: 4\nGPU Side:\n  Throughput: 99 Mops/sec\nCPU Side:\n  Total processed: 123\n  Throughput: 3.4 Mops/sec\n===== Test Results =====\nConfiguration:\n  Warps: 256\n  Proxies: 4\nCPU Side:\n  Total processed: 456\n  Throughput: 99 Mops/sec\n",
+            "ep.rb.multi_ring": "Warps: 64, Proxies: 4, Rings/proxy: 16, Throughput: 99 Mops/sec\nWarps: 128, Proxies: 4, Rings/proxy: 32, Throughput: 4.5 Mops/sec\n",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "gh200"
+            target.mkdir()
+            (target / "results.json").write_text(
+                json.dumps(
+                    {
+                        "results": [
+                            dict(id=name, tier="performance", exit_code=0)
+                            for name in fixtures
+                        ]
+                    }
+                )
+            )
+            for name, content in fixtures.items():
+                (target / (name + ".log")).write_text(content)
+            result = evaluate(root, {})
+            self.assertFalse(result["failures"])
+            self.assertEqual(
+                sorted(m["value"] for m in result["measurements"]), [1.2, 2.3, 3.4, 4.5]
+            )
+            # A missing selected case must not borrow a different warp count.
+            for name, content in fixtures.items():
+                (target / (name + ".log")).write_text(content.replace("128", "512"))
+            self.assertEqual(len(evaluate(root, {})["failures"]), 4)
+
     def test_additional_benchmark_metrics(self):
         fixtures = {
             "ep.bench.pcie_bench": "CPU wait time: 100 us, bw: 12.5 GBps\n",
