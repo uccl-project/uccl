@@ -1073,8 +1073,8 @@
       ],
       "nodes": 2,
       "gpus": 1,
-      "timeout": 600,
-      "command": "bash ci/torchrun.sh ep/bench/test_low_latency.py --num-tokens=32 --hidden=7168 --num-topk=8 --num-experts=16",
+      "timeout": 1800,
+      "command": "for repetition in 1 2 3; do\n(\nbash ci/torchrun.sh ep/bench/test_low_latency.py --num-tokens=32 --hidden=7168 --num-topk=8 --num-experts=16\n)\ndone",
       "setup": [
         "ep"
       ],
@@ -3546,11 +3546,11 @@
       ],
       "nodes": 2,
       "gpus": 1,
-      "timeout": 180,
+      "timeout": 540,
       "setup": [
         "p2p"
       ],
-      "command": "bash ci/torchrun.sh p2p/benchmarks/benchmark_uccl.py --device=cpu --pinned --sizes=1048576 --iters=128",
+      "command": "for repetition in 1 2 3; do\n(\nbash ci/torchrun.sh p2p/benchmarks/benchmark_uccl.py --device=cpu --pinned --sizes=1048576 --iters=128\n)\ndone",
       "metrics": [
         {
           "name": "bandwidth_gbps",
@@ -3581,11 +3581,11 @@
       ],
       "nodes": 2,
       "gpus": 1,
-      "timeout": 180,
+      "timeout": 540,
       "setup": [
         "p2p"
       ],
-      "command": "bash ci/torchrun.sh p2p/benchmarks/benchmark_uccl.py --device=gpu --mode=write --sizes=1048576 --iters=128",
+      "command": "for repetition in 1 2 3; do\n(\nbash ci/torchrun.sh p2p/benchmarks/benchmark_uccl.py --device=gpu --mode=write --sizes=1048576 --iters=128\n)\ndone",
       "metrics": [
         {
           "name": "bandwidth_gbps",

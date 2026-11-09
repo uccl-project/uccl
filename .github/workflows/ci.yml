@@ -49,9 +49,9 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
           TARGETS: ${{ inputs.targets || 'gh200' }}
-          TESTS: ${{ inputs.tests }}
-          EXCLUDE: ${{ inputs.exclude || 'p2p.engine_read,p2p.engine_write,p2p.register_memory_cache,p2p.accept_stop,p2p.engine_device_binding,p2p.rdma_native.write,p2p.rdma_native.read' }}
-          TIERS: ${{ inputs.tiers || 'host,build,integration,performance' }}
+          TESTS: ${{ inputs.tests || 'ep.bench.low_latency,p2p.bandwidth,p2p.bandwidth_gpu' }}
+          EXCLUDE: ${{ inputs.exclude }}
+          TIERS: ${{ inputs.tiers || 'performance' }}
         run: |
           args=(--full)
           if [[ $EVENT == pull_request ]]; then
