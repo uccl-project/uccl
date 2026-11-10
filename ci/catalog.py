@@ -116,6 +116,8 @@ def validate(catalog, targets, files=None):
         if not test.get("enabled") and not test.get("reason"):
             errors.append(f"{name}: disabled test needs a reason")
         if test.get("enabled"):
+            if test.get("tier") == "host" and test.get("targets") != ["cpu"]:
+                errors.append(f"{name}: host suites must use only the cpu target")
             if (
                 not test.get("command")
                 or not test.get("paths")

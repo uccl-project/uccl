@@ -45,13 +45,14 @@ Full selection before changed-file filtering:
 
 | Target | Default (`host,build,integration`) | Opt-in `performance` |
 |---|---:|---:|
-| `cpu` | 27 | 0 |
-| `l4` | 38 | 8 |
+| `cpu` | 34 | 0 |
+| `l4` | 31 | 8 |
 | `gh200` | 31 | 16 |
 | `gb10` | 20 | 6 |
 
-Target counts overlap. Seven host-tier protocol suites use L4's build
-environment. No standalone build-tier entries are enabled.
+Target counts overlap. All 34 host suites run on GitHub. Seven protocol suites
+install pinned CUDA headers/runtime for compilation, without requiring a GPU or
+driver. No standalone build-tier entries are enabled.
 
 All 62 entries under `examples/` and `experimental/` are disabled, including
 GIN fixtures built through the experimental tree. The remaining 33 exclusions
@@ -128,14 +129,14 @@ Automatic PR jobs receive no lab credentials. Hardware checks on `main` happen
 after merging; use `/run-ci` for pre-merge hardware validation. There is no
 nightly or label trigger. Benchmarks do not run correctness suites first.
 
-Host and hardware jobs can run in parallel. Hardware runs serialize per target
-and take a machine-local lock. Before source upload, CI checks every required
-node for NVIDIA/AMD compute contexts, GPU activity, waiting compute launchers,
-and CPU processes using at least 20% of one core. Idle shells, editors, Python
-interpreters and notebook servers are ignored unless they own a GPU context;
-explicit distributed launchers still reserve the node while waiting.
-If any node is busy, another CI run holds its lock, or activity cannot be
-verified, the target is **skipped**. SSH connection failures remain failures.
+CPU-only CI runs on GitHub's `ubuntu-24.04` runners. Lab nodes run GPU/RDMA
+hardware suites, including RDMA tests using host memory. Host and hardware jobs
+can run in parallel; hardware runs serialize per target and take a node-local
+lock. Before source upload, CI checks every required node for NVIDIA/AMD compute
+contexts and GPU activity. CPU-only jobs and Python/notebook sessions without
+GPU contexts do not block hardware CI. If any GPU is occupied, another CI run
+holds the lock, or GPU activity cannot be verified, the target is **skipped**.
+SSH connection failures remain failures.
 
 Workers recheck before setup and each suite, and every five seconds while running.
 If a real job starts, CI stops its own processes and skips the remaining target.
@@ -200,7 +201,8 @@ workflow is active.
 
 Controllers need Python 3.12+ and SSH/rsync on macOS/Linux. Local CPU execution
 requires Linux and Ubuntu packages `build-essential`, `python3-venv`,
-`libgtest-dev`, `libibverbs-dev`. SSH aliases must log in as `uccl`.
+`libgtest-dev`, `libibverbs-dev`, `libgflags-dev`, `zlib1g-dev` and `libelf-dev`.
+SSH aliases for hardware execution must log in as `uccl`.
 
 ```bash
 python3 ci/run.py --local --target cpu --output ci-results/host-run
@@ -236,7 +238,8 @@ baselines are artifacts and never replace active thresholds automatically.
 Workflow summaries show each suite's execution time, excluding shared setup.
 
 All 27 GitHub host suites and formatting passed at `16c25c12`. The updated
-busy detector passed 38 Linux harness tests and admits idle Python sessions.
+busy detector follows the legacy GPU occupancy policy; CPU-only activity does
+not reserve a lab node.
 Both GH200 nodes run CI; EP and host/GPU P2P passed independent baseline checks.
 AMD remains unavailable.
 

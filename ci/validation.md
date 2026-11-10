@@ -36,12 +36,19 @@ Python/Jupyter process as a running job. GH200_0 had no compute contexts, 0% GPU
 utilization and 0 MiB GPU memory; its sleeping Python process used about 1.5%
 of one CPU core. That skip was a false positive.
 
-Idle interpreters no longer block CI. GPU contexts (including at 0% utilization),
-active CPU/I/O work and explicit distributed launchers still do. CPU sampling now
-excludes time spent querying GPU status. All **38 harness tests passed on Linux**,
-including idle Python, active/root CPU jobs, waiting launchers and slow GPU queries.
-Live checks admitted GH200_0 and L4. L4 passed PCIe, then yielded when another
-user's CPU activity started; no unrelated process was killed.
+Lab admission now uses the requested legacy **GPU-only** policy: NVIDIA/AMD
+compute contexts (even at 0% utilization) and unattributed GPU activity block CI;
+CPU-only work and interpreter/launcher names do not. Node locks, verified stale-CI
+cleanup and mid-run GPU checks remain. CPU-only CI stays on GitHub runners;
+the one-off Linux detector validation on GH200_0 was manual debugging only.
+
+## CPU-only placement — 2026-11-09
+
+Moved the seven SACK bitmap, TIMELY, timing-wheel and LRPC suites from L4 to the
+GitHub `cpu` target. There are now **34 host suites**, all on GitHub Ubuntu;
+registry validation rejects host suites assigned to lab targets. Their original
+commands/workloads are preserved, with pinned CUDA headers/runtime and standard
+Ubuntu build libraries supplied on the runner. They do not need a GPU or driver.
 
 ## GH200 pair restoration — 2026-11-09
 

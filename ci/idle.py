@@ -12,46 +12,6 @@ import subprocess
 import time
 import xml.etree.ElementTree as ET
 
-# Login/session plumbing is not a submitted job. Do not inspect or log
-# command-line secrets. CPU-only workloads are detected from sampled activity.
-SESSION_PROCESSES = {
-    "bash",
-    "sh",
-    "dash",
-    "zsh",
-    "fish",
-    "sshd",
-    "sshd-session",
-    "sshd-auth",
-    "systemd",
-    "(sd-pam)",
-    "dbus-daemon",
-    "dbus-broker",
-    "dbus-broker-lau",
-    "tmux: server",
-    "tmux: client",
-    "screen",
-    "login",
-}
-ROOT_SERVICES = SESSION_PROCESSES | {
-    "containerd",
-    "containerd-shim",
-    "dockerd",
-    "cron",
-    "crond",
-    "systemd-journal",
-    "systemd-udevd",
-    "systemd-logind",
-    "NetworkManager",
-    "irqbalance",
-    "rsyslogd",
-    "nvidia-persiste",
-    "nvidia-fabricma",
-    "nv-hostengine",
-    "multipathd",
-    "landscape-sysin",  # Ubuntu login/MOTD status helper (comm is truncated).
-}
-
 
 def processes(proc=Path("/proc")):
     result = {}
@@ -91,37 +51,6 @@ def owned_processes(snapshot, pid=None):
         pid = snapshot[pid]["ppid"]
         own.add(pid)
     return own
-
-
-def user_jobs(snapshot, own, previous=None, elapsed=0):
-    jobs = []
-    for pid, p in snapshot.items():
-        if pid in own or p["kernel"] or p["state"] == "Z":
-            continue
-        before = (previous or {}).get(pid)
-        active = p["state"] == "D"
-        if before and before["start"] == p["start"] and elapsed > 0:
-            # One process consuming >=20% of one CPU is enough; do not divide
-            # by node core count and miss a single-core job on a large server.
-            active |= (p["ticks"] - before["ticks"]) / os.sysconf(
-                "SC_CLK_TCK"
-            ) / elapsed >= 0.2
-        else:
-            active |= p["state"] == "R"
-        # Generic interpreters and notebook servers can be idle services.
-        # Explicit distributed launchers still reserve a node while waiting.
-        launcher = re.match(r"^(torchrun|pt_elastic|mpirun|mpiexec|ray::)", p["name"])
-        user_job = (
-            (1000 <= p["uid"] < 65534 or p["uid"] == os.getuid())
-            and p["name"] not in SESSION_PROCESSES
-            and (active or launcher)
-        )
-        root_job = (
-            p["uid"] == 0 and p["name"] not in ROOT_SERVICES and (active or launcher)
-        )
-        if user_job or root_job:
-            jobs.append(f"PID {pid} ({p['name']}, uid {p['uid']})")
-    return jobs
 
 
 def query(command):
@@ -271,15 +200,11 @@ def probe(target, root, lease=True, cleanup=False):
         mounts = Path("/proc/mounts").read_text()
         if re.search(r"(?:^|,)hidepid=(?!0(?:,|\s))", mounts):
             raise ValueError("Process visibility is restricted by hidepid")
-        previous = processes()
-        started = time.monotonic()
-        time.sleep(0.25)
         snapshot = processes()
-        elapsed = time.monotonic() - started
         own = owned_processes(snapshot)
-        # GPU queries may block or wait for utilization to settle. They are
-        # outside the CPU sampling interval and must not dilute CPU activity.
-        reasons = gpu_jobs(target, own) + user_jobs(snapshot, own, previous, elapsed)
+        # Match the legacy GPU occupancy policy. CPU-only activity is not a
+        # reason to reserve a lab node; contexts and GPU utilization are.
+        reasons = gpu_jobs(target, own)
         return {
             "state": "busy" if reasons else "idle",
             "reason": "; ".join(reasons[:12]),

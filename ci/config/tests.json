@@ -1431,18 +1431,21 @@
       "tier": "host",
       "enabled": true,
       "targets": [
-        "l4"
+        "cpu"
       ],
       "paths": [
         "collective/tests/**"
       ],
       "requires": [
-        "cuda"
+        "cpu"
       ],
       "nodes": 1,
       "gpus": 0,
       "timeout": 180,
-      "command": "make -C collective/tests test"
+      "command": "bash ci/suites.sh sack-host",
+      "setup": [
+        "host-cuda-headers"
+      ]
     },
     {
       "id": "collective.rdma.eqds_credit",
@@ -2634,7 +2637,7 @@
       "tier": "host",
       "enabled": true,
       "targets": [
-        "l4"
+        "cpu"
       ],
       "paths": [
         "collective/afxdp/**"
@@ -2646,7 +2649,9 @@
       "gpus": 0,
       "timeout": 300,
       "command": "bash ci/suites.sh scalar-host afxdp.timely",
-      "setup": []
+      "setup": [
+        "host-cuda-headers"
+      ]
     },
     {
       "id": "collective.afxdp.timing_wheel",
@@ -2656,7 +2661,7 @@
       "tier": "host",
       "enabled": true,
       "targets": [
-        "l4"
+        "cpu"
       ],
       "paths": [
         "collective/afxdp/**"
@@ -2668,7 +2673,9 @@
       "gpus": 0,
       "timeout": 300,
       "command": "bash ci/suites.sh scalar-host afxdp.timing_wheel",
-      "setup": []
+      "setup": [
+        "host-cuda-headers"
+      ]
     },
     {
       "id": "disabled.collective.afxdp.transport-test.cc",
@@ -2716,7 +2723,7 @@
       "tier": "host",
       "enabled": true,
       "targets": [
-        "l4"
+        "cpu"
       ],
       "paths": [
         "collective/afxdp/**"
@@ -2728,7 +2735,9 @@
       "gpus": 0,
       "timeout": 300,
       "command": "bash ci/suites.sh scalar-host afxdp.util_lrpc",
-      "setup": []
+      "setup": [
+        "host-cuda-headers"
+      ]
     },
     {
       "id": "disabled.collective.dpdk.transport-test.cc",
@@ -2836,7 +2845,7 @@
       "tier": "host",
       "enabled": true,
       "targets": [
-        "l4"
+        "cpu"
       ],
       "paths": [
         "collective/efa/**"
@@ -2848,7 +2857,9 @@
       "gpus": 0,
       "timeout": 300,
       "command": "bash ci/suites.sh scalar-host efa.timely",
-      "setup": []
+      "setup": [
+        "host-cuda-headers"
+      ]
     },
     {
       "id": "collective.efa.timing_wheel",
@@ -2858,7 +2869,7 @@
       "tier": "host",
       "enabled": true,
       "targets": [
-        "l4"
+        "cpu"
       ],
       "paths": [
         "collective/efa/**"
@@ -2870,7 +2881,9 @@
       "gpus": 0,
       "timeout": 300,
       "command": "bash ci/suites.sh scalar-host efa.timing_wheel",
-      "setup": []
+      "setup": [
+        "host-cuda-headers"
+      ]
     },
     {
       "id": "disabled.collective.efa.transport-test.cc",
@@ -2937,7 +2950,7 @@
       "tier": "host",
       "enabled": true,
       "targets": [
-        "l4"
+        "cpu"
       ],
       "paths": [
         "collective/efa/**"
@@ -2949,7 +2962,9 @@
       "gpus": 0,
       "timeout": 300,
       "command": "bash ci/suites.sh scalar-host efa.util_lrpc",
-      "setup": []
+      "setup": [
+        "host-cuda-headers"
+      ]
     },
     {
       "id": "disabled.collective.mccl.tests.connection-test.cc",

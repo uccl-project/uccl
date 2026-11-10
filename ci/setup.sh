@@ -19,6 +19,15 @@ if [[ $component == environment ]]; then
   exit 0
 fi
 case $component in
+  host-cuda-headers)
+    sdk="$CI_DEPS/host-cuda-12.8"
+    if [[ ! -f $sdk/.complete ]]; then
+      python3 -m pip install --require-hashes --no-deps --target "$sdk" -r ci/requirements/host-cuda.lock
+      ln -sfn lib "$sdk/nvidia/cuda_runtime/lib64"
+      ln -sfn libcudart.so.12 "$sdk/nvidia/cuda_runtime/lib/libcudart.so"
+      touch "$sdk/.complete"
+    fi
+    ;;
   p2p)
     make -C p2p clean
     make -C p2p -j"$CI_JOBS" PYTHON=python3 ENABLE_EFA=0 ENABLE_CXI=1 \

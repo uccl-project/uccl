@@ -39,7 +39,7 @@ class AdmissionTests(unittest.TestCase):
             **kwargs,
         )
 
-    def test_active_same_uid_jobs_are_busy_but_own_tree_is_excluded(self):
+    def test_own_process_tree_is_excluded(self):
         snapshot = {
             1: self.process(1, uid=0, name="systemd"),
             10: self.process(10, name="bash"),
@@ -49,56 +49,33 @@ class AdmissionTests(unittest.TestCase):
         }
         own = idle.owned_processes(snapshot, pid=20)
         self.assertEqual(own, {1, 10, 20, 21})
-        self.assertEqual(idle.user_jobs(snapshot, own), ["PID 30 (python3, uid 1000)"])
+        self.assertNotIn(30, own)
 
-    def test_idle_interpreters_are_not_jobs_but_active_ones_are(self):
-        before = {
-            10: dict(self.process(10, name="python"), ticks=100),
-            20: dict(self.process(20, name="jupyter"), ticks=100),
-            30: dict(self.process(30, name="python3"), ticks=100),
-            40: dict(self.process(40, uid=0, name="python3"), ticks=100),
+    def test_cpu_activity_does_not_reserve_an_idle_gpu(self):
+        snapshot = {
+            10: dict(self.process(10, name="python"), state="R", ticks=10000),
+            20: dict(self.process(20, name="jupyter"), ticks=10000),
+            30: dict(self.process(30, name="mpirun"), state="D", ticks=10000),
         }
-        after = copy.deepcopy(before)
-        for pid in (30, 40):
-            after[pid]["ticks"] += os.sysconf("SC_CLK_TCK")
-        self.assertEqual(
-            idle.user_jobs(after, set(), before, 1),
-            ["PID 30 (python3, uid 1000)", "PID 40 (python3, uid 0)"],
-        )
-
-    def test_waiting_distributed_launchers_still_reserve_the_node(self):
-        for name in ("torchrun", "pt_elastic", "mpirun", "mpiexec", "ray::worker"):
-            with self.subTest(name=name):
-                self.assertTrue(
-                    idle.user_jobs({10: self.process(10, name=name)}, set())
-                )
-        self.assertTrue(idle.user_jobs({10: dict(self.process(10), state="D")}, set()))
-
-    def test_gpu_query_time_does_not_dilute_cpu_activity(self):
-        clock = [100.0]
-        before = {10: dict(self.process(10), ticks=100)}
-        after = copy.deepcopy(before)
-        after[10]["ticks"] += os.sysconf("SC_CLK_TCK") // 4
-
-        def sleep(seconds):
-            clock[0] += seconds
-
-        def gpu_query(*args):
-            clock[0] += 2
-            return []
-
         with (
             tempfile.TemporaryDirectory() as tmp,
             patch("idle.Path.read_text", return_value=""),
-            patch("idle.processes", side_effect=[before, after]),
+            patch("idle.processes", return_value=snapshot),
             patch("idle.owned_processes", return_value=set()),
-            patch("idle.time.monotonic", side_effect=lambda: clock[0]),
-            patch("idle.time.sleep", side_effect=sleep),
-            patch("idle.gpu_jobs", side_effect=gpu_query),
+            patch("idle.query", return_value=self.xml()),
         ):
-            result = idle.probe(dict(gpus=1), tmp, lease=False)
-        self.assertEqual(result["state"], "busy")
-        self.assertIn("PID 10", result["reason"])
+            result = idle.probe(dict(gpus=1, capabilities=["cuda"]), tmp, lease=False)
+        self.assertEqual(result["state"], "idle")
+
+    def test_own_gpu_activity_does_not_hide_a_foreign_context(self):
+        xml = self.xml(50, 100).replace(
+            "</processes>", "<process_info><pid>60</pid></process_info></processes>"
+        )
+        with patch("idle.query", return_value=xml):
+            self.assertEqual(
+                idle.gpu_jobs(dict(gpus=1, capabilities=["cuda"]), {50}),
+                ["GPU process PID 60"],
+            )
 
     def xml(self, pid=None, utilization=0):
         processes = (
@@ -114,21 +91,6 @@ class AdmissionTests(unittest.TestCase):
             self.assertIn("PID 50", idle.gpu_jobs(target, set())[0])
         with patch("idle.query", return_value=self.xml(50, 100)):
             self.assertEqual(idle.gpu_jobs(target, {50}), [])
-
-    def test_idle_editors_do_not_hide_cpu_workloads(self):
-        before = {
-            10: dict(self.process(10, name="code"), ticks=100),
-            20: dict(self.process(20, name="custom-job"), ticks=100),
-            30: dict(self.process(30, uid=0, name="landscape-sysin"), ticks=100),
-            40: dict(self.process(40, uid=0, name="root-job"), ticks=100),
-        }
-        after = copy.deepcopy(before)
-        for pid in (20, 30, 40):
-            after[pid]["ticks"] += os.sysconf("SC_CLK_TCK")
-        self.assertEqual(
-            idle.user_jobs(after, set(), before, 1),
-            ["PID 20 (custom-job, uid 1000)", "PID 40 (root-job, uid 0)"],
-        )
 
     def test_idle_desktop_context_does_not_reserve_gpu(self):
         xml = self.xml(50).replace("<pid>50</pid>", "<pid>50</pid><type>G</type>")
@@ -499,6 +461,18 @@ class SelectionTests(unittest.TestCase):
         self.catalog["tests"][1]["gpus"] = -1
         with self.assertRaisesRegex(ValueError, "gpus must be a nonnegative"):
             catalog.validate(self.catalog, self.targets)
+
+    def test_host_suites_cannot_be_assigned_to_lab_targets(self):
+        self.catalog["tests"][0]["targets"] = ["gpu"]
+        self.catalog["tests"][0]["requires"] = []
+        with self.assertRaisesRegex(ValueError, "host suites must use only the cpu"):
+            catalog.validate(self.catalog, self.targets)
+        registered, _ = catalog.read_catalog()
+        host_suites = [
+            t for t in registered["tests"] if t["enabled"] and t["tier"] == "host"
+        ]
+        self.assertTrue(host_suites)
+        self.assertTrue(all(t["targets"] == ["cpu"] for t in host_suites))
 
     def test_host_interfaces_follow_alias_when_ranks_are_reordered(self):
         target = self.targets["gpu"]
