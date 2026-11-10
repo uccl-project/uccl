@@ -8,6 +8,7 @@
 #include <arpa/inet.h>  // for htonl, ntohl
 #include <chrono>
 #include <cstdlib>
+#include <fstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -32,6 +33,18 @@ static bool is_normal_mode_remote_peer(Proxy::Config const& cfg, int my_rank,
 }
 
 static constexpr uint64_t kCxiInternalWrId = UINT64_MAX;
+
+// NUMA node of the CXI NIC that CxiTransport selects for this local rank
+// (cxi<local_rank>), or -1 if sysfs does not report it.
+static int cxi_nic_numa_node(int local_rank) {
+  std::string const path =
+      "/sys/class/cxi/cxi" + std::to_string(local_rank) + "/device/numa_node";
+  std::ifstream file(path);
+
+  int node = -1;
+  if (!(file >> node)) return -1;
+  return node;
+}
 
 #ifndef USE_SUBSET_BARRIER
 static std::string shm_name_for_barrier(std::string const& ip,
@@ -360,6 +373,17 @@ void Proxy::init_common() {
     fifo_pending_dst_.assign(cfg_.d2h_queues.size(), std::deque<int>{});
     dst_pending_.assign(256, 0);  // TransferCmd::dst_rank is a uint8_t
 #endif
+
+    ctx_.numa_node = cxi_nic_numa_node(cfg_.local_rank);
+    if (ctx_.numa_node >= 0) {
+      pin_thread_to_numa_wrapper();
+    } else if (cfg_.pin_thread) {
+      fprintf(stderr,
+              "[Proxy] NUMA node of cxi%d is unknown; proxy thread %d is not "
+              "pinned\n",
+              cfg_.local_rank, cfg_.thread_idx);
+    }
+
     return;
   }
 
