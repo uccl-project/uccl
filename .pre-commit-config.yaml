@@ -1,0 +1,24 @@
+minimum_pre_commit_version: '4.5.1'
+default_install_hook_types: [pre-commit]
+
+# Keep the formatter versions in pyproject.toml's dev group in sync.
+# CI, format.sh, and installed commit hooks all use these filters and versions.
+repos:
+  - repo: local
+    hooks:
+      - id: clang-format
+        name: clang-format (C++ and CUDA)
+        language: python
+        entry: bash scripts/clang-format.sh
+        additional_dependencies: [clang-format==14.0.6]
+        types: [file]
+        files: ^(collective|ep|experimental|p2p|include)/.*\.(cpp|cxx|cc|h|hpp|cu|cuh)$
+        exclude: ^(collective/afxdp/lib/|experimental/lite/lite-collective/thirdparty/)
+      - id: black
+        name: Black (Python)
+        language: python
+        entry: black
+        additional_dependencies: [black==26.5.1]
+        types: [file]
+        files: ^(p2p|ep)/.*\.pyi?$
+        exclude: thirdparty|docs|build
