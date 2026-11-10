@@ -397,77 +397,78 @@ int NCCLEndpoint::comm_index_for_recv_(Conn const& conn) const {
 
 bool NCCLEndpoint::send_internal_(Conn& conn, void const* data, size_t size,
                                   int comm_index, NcclRequest* ureq) {
-  if (!ureq) return false;
-  if (size == 0) {
-    ureq->context = nullptr;
-    ureq->engine_idx = 0;
-    return true;
-  }
-  if (!data) return false;
-  if (comm_index < 0 || comm_index > 1) return false;
-  if (!conn.comm[comm_index] || !conn.stream[comm_index]) return false;
-  if (!fence_default_stream(conn.local_gpu_idx, conn.stream[comm_index])) {
-    return false;
-  }
-  // Enqueue NCCL send on the selected communicator/stream.
-  ncclResult_t rc = ncclSend(data, size, ncclChar, conn.remote_peer,
-                             conn.comm[comm_index], conn.stream[comm_index]);
-  if (rc != ncclSuccess) {
-    std::cerr << "[nccl] ncclSend failed: " << ncclGetErrorString(rc)
-              << std::endl;
-    return false;
-  }
-
-  gpuEvent_t evt = nullptr;
-  if (gpuEventCreateWithFlags(&evt, gpuEventDisableTiming) != gpuSuccess) {
-    return false;
-  }
-  if (gpuEventRecord(evt, conn.stream[comm_index]) != gpuSuccess) {
-    gpuEventDestroy(evt);
-    return false;
-  }
-
-  // Track completion via UcclRequest.
-  auto* handle = new AsyncHandle();
-  handle->event = evt;
-  ureq->context = handle;
-  ureq->engine_idx = comm_index;
-  return true;
+  return transfer_internal_(conn, const_cast<void*>(data), size, comm_index,
+                            ureq, true);
 }
 
 bool NCCLEndpoint::recv_internal_(Conn& conn, void* data, size_t size,
                                   int comm_index, NcclRequest* ureq) {
+  return transfer_internal_(conn, data, size, comm_index, ureq, false);
+}
+
+bool NCCLEndpoint::transfer_internal_(Conn& conn, void* data, size_t size,
+                                      int comm_index, NcclRequest* ureq,
+                                      bool send) {
   if (!ureq) return false;
   if (size == 0) {
     ureq->context = nullptr;
     ureq->engine_idx = 0;
     return true;
   }
-  if (!data) return false;
-  if (comm_index < 0 || comm_index > 1) return false;
-  if (!conn.comm[comm_index] || !conn.stream[comm_index]) return false;
-  if (!fence_default_stream(conn.local_gpu_idx, conn.stream[comm_index])) {
-    return false;
-  }
-  // Enqueue NCCL recv on the selected communicator/stream.
-  ncclResult_t rc = ncclRecv(data, size, ncclChar, conn.remote_peer,
-                             conn.comm[comm_index], conn.stream[comm_index]);
-  if (rc != ncclSuccess) {
-    std::cerr << "[nccl] ncclRecv failed: " << ncclGetErrorString(rc)
-              << std::endl;
-    return false;
+  if (!data || comm_index < 0 || comm_index > 1) return false;
+  auto stream = conn.stream[comm_index];
+  if (!conn.comm[comm_index] || !stream) return false;
+  if (!fence_default_stream(conn.local_gpu_idx, stream)) return false;
+
+  gpuPointerAttribute_t attributes{};
+  auto error = gpuPointerGetAttributes(&attributes, data);
+  bool device =
+      error == gpuSuccess && (gpuMemTypeOf(attributes) == gpuMemoryTypeDevice ||
+                              gpuMemTypeOf(attributes) == gpuMemoryTypeManaged);
+  if (error != gpuSuccess) {
+    if (error != gpuErrorInvalidValue) return false;
+    // Some runtimes return invalid-value for ordinary malloc memory.
+    (void)gpuGetLastError();
   }
 
-  gpuEvent_t evt = nullptr;
-  if (gpuEventCreateWithFlags(&evt, gpuEventDisableTiming) != gpuSuccess) {
+  // NCCL kernels cannot access arbitrary host allocations on discrete GPUs.
+  // Stream-ordered allocation avoids a device-wide synchronization while a
+  // different NCCL operation may still be waiting for its peer.
+  void* buffer = data;
+  if (!device && gpuMallocAsync(&buffer, size, stream) != gpuSuccess)
+    return false;
+  auto release = [stream, device](void* ptr) {
+    if (!device) gpuFreeAsync(ptr, stream);
+  };
+  std::unique_ptr<void, decltype(release)> staging(buffer, release);
+  if (!device && send &&
+      gpuMemcpyAsync(buffer, data, size, gpuMemcpyHostToDevice, stream) !=
+          gpuSuccess)
+    return false;
+
+  ncclResult_t rc = send ? ncclSend(buffer, size, ncclChar, conn.remote_peer,
+                                    conn.comm[comm_index], stream)
+                         : ncclRecv(buffer, size, ncclChar, conn.remote_peer,
+                                    conn.comm[comm_index], stream);
+  if (rc != ncclSuccess) {
+    std::cerr << "[nccl] " << (send ? "ncclSend" : "ncclRecv")
+              << " failed: " << ncclGetErrorString(rc) << std::endl;
     return false;
   }
-  if (gpuEventRecord(evt, conn.stream[comm_index]) != gpuSuccess) {
+  if (!device && !send &&
+      gpuMemcpyAsync(data, buffer, size, gpuMemcpyDeviceToHost, stream) !=
+          gpuSuccess)
+    return false;
+  staging.reset();
+
+  gpuEvent_t evt = nullptr;
+  if (gpuEventCreateWithFlags(&evt, gpuEventDisableTiming) != gpuSuccess)
+    return false;
+  if (gpuEventRecord(evt, stream) != gpuSuccess) {
     gpuEventDestroy(evt);
     return false;
   }
-
-  // Track completion via UcclRequest.
+  // Receive completion and remote write ACKs include the copy back to host.
   auto* handle = new AsyncHandle();
   handle->event = evt;
   ureq->context = handle;

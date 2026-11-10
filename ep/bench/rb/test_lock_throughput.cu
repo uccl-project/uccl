@@ -76,7 +76,8 @@ __global__ void lock_throughput_kernel(DeviceToHostCmdBuffer** ring_buffers,
   metrics[warp_id].total_cycles = 0;
 
   // Create dummy transfer command
-  TransferCmd dummy_cmd;
+  TransferCmd dummy_cmd{};
+  dummy_cmd.cmd_type = make_cmd_type(CmdType::WRITE, false, false);
   dummy_cmd.dst_rank = proxy_id;
   dummy_cmd.bytes = config.payload_size;
   dummy_cmd.req_rptr = warp_id;
@@ -152,6 +153,7 @@ void cpu_proxy_thread(DeviceToHostCmdBuffer* ring_buffer, int proxy_id,
 
       TransferCmd& cmd_entry = ring_buffer->load_cmd_entry(i);
       cmds_to_process.push_back(cmd_entry);
+      ring_buffer->volatile_clear_cmd_type(i);
       seen = i + 1;
     }
 
