@@ -5,6 +5,7 @@
 #include "ring_buffer.cuh"
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <exception>
 #include <iostream>
 #include <set>
@@ -236,11 +237,17 @@ FifoProxy::FifoProxy(int thread_idx, uintptr_t gpu_buffer_addr,
   cfg.num_ranks = 2;
   cfg.num_nodes = 2;
   proxy_ = std::make_unique<Proxy>(cfg);
+  // RDMA connection setup requires an atomic MR even for write-only commands.
+  GPU_RT_CHECK(cudaHostAlloc(&atomic_buffer_ptr_, kAtomicBufferSize,
+                             cudaHostAllocMapped));
+  std::memset(atomic_buffer_ptr_, 0, kAtomicBufferSize);
+  proxy_->set_atomic_buffer_ptr(atomic_buffer_ptr_);
 }
 
 FifoProxy::~FifoProxy() {
   stop();
   if (proxy_->listen_fd_ >= 0) close(proxy_->listen_fd_);
+  if (atomic_buffer_ptr_) cudaFreeHost(atomic_buffer_ptr_);
 }
 
 void FifoProxy::set_fifo(mscclpp::Fifo* fifo) { fifo_ = fifo; }
