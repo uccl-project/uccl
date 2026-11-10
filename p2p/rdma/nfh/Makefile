@@ -2,6 +2,7 @@
 #
 #   make                      # libnfh_codec.so for GPU_ARCH (default sm_90)
 #   make GPU_ARCH=sm_100a
+#   make GPU_ARCH_FLAGS="-gencode=arch=compute_89,code=sm_89 ..."   # several
 #   make test                 # build and run the round-trip checks
 #
 # The P2P build links this library when built with USE_NFH=1.
@@ -9,7 +10,8 @@
 CUDA_HOME ?= /usr/local/cuda
 NVCC ?= $(CUDA_HOME)/bin/nvcc
 GPU_ARCH ?= sm_90
-NVCC_FLAGS ?= -O3 -std=c++17 -arch=$(GPU_ARCH) -Xcompiler -fPIC
+GPU_ARCH_FLAGS ?= -arch=$(GPU_ARCH)
+NVCC_FLAGS ?= -O3 -std=c++17 $(GPU_ARCH_FLAGS) -Xcompiler -fPIC
 
 LIB := libnfh_codec.so
 
