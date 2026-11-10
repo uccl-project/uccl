@@ -39,17 +39,66 @@ class AdmissionTests(unittest.TestCase):
             **kwargs,
         )
 
-    def test_waiting_user_jobs_and_same_uid_jobs_are_busy(self):
+    def test_active_same_uid_jobs_are_busy_but_own_tree_is_excluded(self):
         snapshot = {
             1: self.process(1, uid=0, name="systemd"),
             10: self.process(10, name="bash"),
             20: self.process(20, ppid=10),
             21: self.process(21, ppid=20),
-            30: self.process(30),
+            30: dict(self.process(30), state="R"),
         }
         own = idle.owned_processes(snapshot, pid=20)
         self.assertEqual(own, {1, 10, 20, 21})
         self.assertEqual(idle.user_jobs(snapshot, own), ["PID 30 (python3, uid 1000)"])
+
+    def test_idle_interpreters_are_not_jobs_but_active_ones_are(self):
+        before = {
+            10: dict(self.process(10, name="python"), ticks=100),
+            20: dict(self.process(20, name="jupyter"), ticks=100),
+            30: dict(self.process(30, name="python3"), ticks=100),
+            40: dict(self.process(40, uid=0, name="python3"), ticks=100),
+        }
+        after = copy.deepcopy(before)
+        for pid in (30, 40):
+            after[pid]["ticks"] += os.sysconf("SC_CLK_TCK")
+        self.assertEqual(
+            idle.user_jobs(after, set(), before, 1),
+            ["PID 30 (python3, uid 1000)", "PID 40 (python3, uid 0)"],
+        )
+
+    def test_waiting_distributed_launchers_still_reserve_the_node(self):
+        for name in ("torchrun", "pt_elastic", "mpirun", "mpiexec", "ray::worker"):
+            with self.subTest(name=name):
+                self.assertTrue(
+                    idle.user_jobs({10: self.process(10, name=name)}, set())
+                )
+        self.assertTrue(idle.user_jobs({10: dict(self.process(10), state="D")}, set()))
+
+    def test_gpu_query_time_does_not_dilute_cpu_activity(self):
+        clock = [100.0]
+        before = {10: dict(self.process(10), ticks=100)}
+        after = copy.deepcopy(before)
+        after[10]["ticks"] += os.sysconf("SC_CLK_TCK") // 4
+
+        def sleep(seconds):
+            clock[0] += seconds
+
+        def gpu_query(*args):
+            clock[0] += 2
+            return []
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch("idle.Path.read_text", return_value=""),
+            patch("idle.processes", side_effect=[before, after]),
+            patch("idle.owned_processes", return_value=set()),
+            patch("idle.time.monotonic", side_effect=lambda: clock[0]),
+            patch("idle.time.sleep", side_effect=sleep),
+            patch("idle.gpu_jobs", side_effect=gpu_query),
+        ):
+            result = idle.probe(dict(gpus=1), tmp, lease=False)
+        self.assertEqual(result["state"], "busy")
+        self.assertIn("PID 10", result["reason"])
 
     def xml(self, pid=None, utilization=0):
         processes = (

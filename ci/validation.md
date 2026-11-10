@@ -28,6 +28,21 @@ These targeted checks do not replace the full sweep below. A busy-node skip is
 visible in artifacts/JUnit but does not fail the aggregate check; it is not
 evidence that the selected tests passed. Unreachable SSH remains a failure.
 
+## Busy-node detector correction — 2026-11-09
+
+The old GH200/GB10 workflows checked `nvidia-smi --query-compute-apps=pid`.
+The new detector retained GPU context checks but incorrectly treated every
+Python/Jupyter process as a running job. GH200_0 had no compute contexts, 0% GPU
+utilization and 0 MiB GPU memory; its sleeping Python process used about 1.5%
+of one CPU core. That skip was a false positive.
+
+Idle interpreters no longer block CI. GPU contexts (including at 0% utilization),
+active CPU/I/O work and explicit distributed launchers still do. CPU sampling now
+excludes time spent querying GPU status. All **38 harness tests passed on Linux**,
+including idle Python, active/root CPU jobs, waiting launchers and slow GPU queries.
+Live checks admitted GH200_0 and L4. L4 passed PCIe, then yielded when another
+user's CPU activity started; no unrelated process was killed.
+
 ## GH200 pair restoration — 2026-11-09
 
 Both nodes now accept the dedicated CI key, run CUDA 13.2 with driver 595.58.03,

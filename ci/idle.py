@@ -108,7 +108,9 @@ def user_jobs(snapshot, own, previous=None, elapsed=0):
             ) / elapsed >= 0.2
         else:
             active |= p["state"] == "R"
-        launcher = re.match(r"python|torchrun|mpirun|mpiexec|jupyter|ray::", p["name"])
+        # Generic interpreters and notebook servers can be idle services.
+        # Explicit distributed launchers still reserve a node while waiting.
+        launcher = re.match(r"^(torchrun|pt_elastic|mpirun|mpiexec|ray::)", p["name"])
         user_job = (
             (1000 <= p["uid"] < 65534 or p["uid"] == os.getuid())
             and p["name"] not in SESSION_PROCESSES
@@ -273,10 +275,11 @@ def probe(target, root, lease=True, cleanup=False):
         started = time.monotonic()
         time.sleep(0.25)
         snapshot = processes()
+        elapsed = time.monotonic() - started
         own = owned_processes(snapshot)
-        reasons = gpu_jobs(target, own) + user_jobs(
-            snapshot, own, previous, time.monotonic() - started
-        )
+        # GPU queries may block or wait for utilization to settle. They are
+        # outside the CPU sampling interval and must not dilute CPU activity.
+        reasons = gpu_jobs(target, own) + user_jobs(snapshot, own, previous, elapsed)
         return {
             "state": "busy" if reasons else "idle",
             "reason": "; ".join(reasons[:12]),

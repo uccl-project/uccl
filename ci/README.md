@@ -131,7 +131,9 @@ nightly or label trigger. Benchmarks do not run correctness suites first.
 Host and hardware jobs can run in parallel. Hardware runs serialize per target
 and take a machine-local lock. Before source upload, CI checks every required
 node for NVIDIA/AMD compute contexts, GPU activity, waiting compute launchers,
-and CPU processes using at least 20% of one core. Idle shells/editors are ignored.
+and CPU processes using at least 20% of one core. Idle shells, editors, Python
+interpreters and notebook servers are ignored unless they own a GPU context;
+explicit distributed launchers still reserve the node while waiting.
 If any node is busy, another CI run holds its lock, or activity cannot be
 verified, the target is **skipped**. SSH connection failures remain failures.
 
@@ -233,10 +235,10 @@ Benchmarks without configured metrics retain logs and exit status. Candidate
 baselines are artifacts and never replace active thresholds automatically.
 Workflow summaries show each suite's execution time, excluding shared setup.
 
-At `9d7aada6`, all 27 GitHub host suites, 35 harness tests, both formatting checks
-and `CI status` passed. Both GH200 nodes now run CI; their EP and host/GPU P2P
-benchmarks passed independent checks against the new baselines. Live busy-node
-skips protected other users on L4 and GH200. AMD remains unavailable.
+All 27 GitHub host suites and formatting passed at `16c25c12`. The updated
+busy detector passed 38 Linux harness tests and admits idle Python sessions.
+Both GH200 nodes run CI; EP and host/GPU P2P passed independent baseline checks.
+AMD remains unavailable.
 
 [validation.md](validation.md) records hardware results, timings, baseline
 provenance and remaining failures. There are 28 calibrated metrics, including
