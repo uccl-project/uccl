@@ -112,3 +112,6 @@ thirdparty/gdrcopy/
 worktrees/
 *.csv
 *.egg-info/
+
+# Lightweight environment for formatting hooks
+/.venv-format/
