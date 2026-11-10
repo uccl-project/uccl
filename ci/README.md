@@ -26,14 +26,14 @@ excluded explicitly. Host-staged GB10 EP/NIXL remains enabled.
 
 ## Current coverage
 
-**184 registered suites: 89 enabled, 95 disabled.** Enabled entries comprise
-73 default-tier suites and 16 opt-in performance benchmarks. These are suite
+**185 registered suites: 90 enabled, 95 disabled.** Enabled entries comprise
+74 default-tier suites and 16 opt-in performance benchmarks. These are suite
 counts, not individual test cases; enabled does not mean passing.
 
 | Enabled family | Entries | What it checks |
 |---|---:|---|
 | `ci.*` | 1 | Selection, inventory, process cleanup and performance comparisons |
-| `p2p.*` | 41 | Host APIs, registration, IPC, RDMA, compression, notifications and benchmarks |
+| `p2p.*` | 42 | Host APIs, registration, IPC, RDMA, compression, notifications and benchmarks |
 | `ep.*` | 22 | Compatibility, synchronization, communication, Triton packing and benchmarks |
 | `mccl.host.*` | 4 | MUSA plugin host fixtures; no GPU execution |
 | `collective.*` | 14 | Protocols, congestion control, RDMA transport and CUDA utilities |
@@ -46,9 +46,9 @@ Full selection before changed-file filtering:
 | Target | Default (`host,build,integration`) | Opt-in `performance` |
 |---|---:|---:|
 | `cpu` | 34 | 0 |
-| `l4` | 31 | 8 |
-| `gh200` | 31 | 16 |
-| `gb10` | 20 | 6 |
+| `l4` | 32 | 8 |
+| `gh200` | 32 | 16 |
+| `gb10` | 21 | 6 |
 
 Target counts overlap. All 34 host suites run on GitHub. Seven protocol suites
 install pinned CUDA headers/runtime for compilation, without requiring a GPU or
@@ -237,18 +237,16 @@ Benchmarks without configured metrics retain logs and exit status. Candidate
 baselines are artifacts and never replace active thresholds automatically.
 Workflow summaries show each suite's execution time, excluding shared setup.
 
-All 27 GitHub host suites and formatting passed at `16c25c12`. The updated
-busy detector follows the legacy GPU occupancy policy; CPU-only activity does
-not reserve a lab node.
-Both GH200 nodes run CI; EP and host/GPU P2P passed independent baseline checks.
-AMD remains unavailable.
+At `94f3dcd8`, all **34 GitHub host suites**, **37 CI harness tests**, formatting
+and `CI status` passed. Lab admission uses GPU occupancy only. Both GH200 nodes
+run CI; AMD remains unavailable.
 
 [validation.md](validation.md) records hardware results, timings, baseline
 provenance and remaining failures. There are 28 calibrated metrics, including
 11 on GH200; independent checks passed 9/11, with Ray read/write below their floors. The November 8
 L4/GB10 checks passed 13/17
-metrics; four remain noisy. Fixture fixes in #1135 still need integration and
-a combined sweep. Enabled suites may fail; disabling one requires a registry
+metrics; four remain noisy. Targeted combined validation of #1135 passes; its runtime fixes must land
+before the hardware matrix is expected to pass. Enabled suites may fail; disabling one requires a registry
 reason. Historical example/experimental results are excluded from coverage.
 
 Developer checks:

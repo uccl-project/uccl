@@ -1,0 +1,103 @@
+run,target,suite,result,seconds,validation_commit,reason
+control-gb10,gb10,ep.bench.batched_gpu_to_cpu_bench,PASS,1.838,79cb83f64b9c74e84ef35bb92b020a81c621fd7f,
+fifo-gh200,gh200,ep.bench.rdma_fifo,PASS,7.165,d37c0682c177e1536389ac6525ba30a7fdf7ec18,
+final-gb10,gb10,ep.internode_simple,PASS,7.487,71369b9cbd19cb0f90faf66b274ac1ca683746fd,
+final-gb10,gb10,ep.bench.pcie_bench,PASS,3.222,71369b9cbd19cb0f90faf66b274ac1ca683746fd,
+final-gb10,gb10,ep.bench.batched_gpu_to_cpu_bench,PASS,1.418,71369b9cbd19cb0f90faf66b274ac1ca683746fd,
+final-gb10,gb10,collective.rdma.transport,PASS,4.047,71369b9cbd19cb0f90faf66b274ac1ca683746fd,
+final-gb10,gb10,p2p.compression_unit,PASS,3.644,71369b9cbd19cb0f90faf66b274ac1ca683746fd,
+final-gb10,gb10,nixl.internode.nccl,PASS,5.571,71369b9cbd19cb0f90faf66b274ac1ca683746fd,
+final-gb10,gb10,ep.bench.pack_unpack,PASS,24.563,71369b9cbd19cb0f90faf66b274ac1ca683746fd,
+final-gb10,gb10,p2p.nccl.host_memory,PASS,2.036,71369b9cbd19cb0f90faf66b274ac1ca683746fd,
+final-gh200-pair,gh200,ep.bench.low_latency,PASS,15.848,78379c153924934e4636a435808182fc1afba65b,
+final-gh200-pair,gh200,ep.internode_simple,PASS,10.14,78379c153924934e4636a435808182fc1afba65b,
+final-gh200-pair,gh200,collective.rdma.transport,PASS,7.658,78379c153924934e4636a435808182fc1afba65b,
+final-gh200-pair,gh200,p2p.compression_unit,PASS,7.287,78379c153924934e4636a435808182fc1afba65b,
+final-gh200-pair,gh200,nixl.internode.nccl,SKIP,0,78379c153924934e4636a435808182fc1afba65b,"PID 44310 (python, uid 1006)"
+final-gh200-pair,gh200,p2p.bench.nccl,SKIP,0,78379c153924934e4636a435808182fc1afba65b,"PID 44310 (python, uid 1006)"
+final-gh200-pair,gh200,ep.bench.rdma_fifo,SKIP,0,78379c153924934e4636a435808182fc1afba65b,"PID 44310 (python, uid 1006)"
+final-gh200-pair,gh200,p2p.nccl.host_memory,SKIP,0,78379c153924934e4636a435808182fc1afba65b,"PID 44310 (python, uid 1006)"
+final-l4,l4,ep.bench.pcie_bench,SKIP,0,71369b9cbd19cb0f90faf66b274ac1ca683746fd,"l40: PID 1483477 (python, uid 1005); PID 1483550 (python, uid 1005)"
+final-l4,l4,ep.bench.batched_gpu_to_cpu_bench,SKIP,0,71369b9cbd19cb0f90faf66b274ac1ca683746fd,"l40: PID 1483477 (python, uid 1005); PID 1483550 (python, uid 1005)"
+final-l4,l4,collective.rdma.transport,SKIP,0,71369b9cbd19cb0f90faf66b274ac1ca683746fd,"l40: PID 1483477 (python, uid 1005); PID 1483550 (python, uid 1005)"
+final-l4,l4,p2p.compression_unit,SKIP,0,71369b9cbd19cb0f90faf66b274ac1ca683746fd,"l40: PID 1483477 (python, uid 1005); PID 1483550 (python, uid 1005)"
+final-l4,l4,nixl.internode.nccl,SKIP,0,71369b9cbd19cb0f90faf66b274ac1ca683746fd,"l40: PID 1483477 (python, uid 1005); PID 1483550 (python, uid 1005)"
+final-l4,l4,p2p.nccl.host_memory,SKIP,0,71369b9cbd19cb0f90faf66b274ac1ca683746fd,"l40: PID 1483477 (python, uid 1005); PID 1483550 (python, uid 1005)"
+gpu-only-gh200,gh200,p2p.bandwidth,PASS,6.721,35e5d522a9eb347f9960f8af084abd6b95448c84,
+gpu-only-gh200,gh200,p2p.bandwidth_gpu,PASS,6.655,35e5d522a9eb347f9960f8af084abd6b95448c84,
+gpu-only-gh200,gh200,nixl.internode.nccl,PASS,3.265,35e5d522a9eb347f9960f8af084abd6b95448c84,
+gpu-only-gh200,gh200,p2p.bench.nccl,PASS,5.37,35e5d522a9eb347f9960f8af084abd6b95448c84,
+gpu-only-gh200,gh200,ep.bench.rdma_fifo,FAIL,57.149,35e5d522a9eb347f9960f8af084abd6b95448c84,controller disconnected or cancelled
+gpu-only-gh200,gh200,p2p.nccl.host_memory,PASS,2.262,35e5d522a9eb347f9960f8af084abd6b95448c84,
+gpu-only-l4,l4,ep.bench.pcie_bench,PASS,4.479,35e5d522a9eb347f9960f8af084abd6b95448c84,
+gpu-only-l4,l4,ep.bench.batched_gpu_to_cpu_bench,PASS,3.178,35e5d522a9eb347f9960f8af084abd6b95448c84,
+gpu-only-l4,l4,collective.rdma.transport,PASS,6.639,35e5d522a9eb347f9960f8af084abd6b95448c84,
+gpu-only-l4,l4,p2p.compression_unit,PASS,4.38,35e5d522a9eb347f9960f8af084abd6b95448c84,
+gpu-only-l4,l4,nixl.internode.nccl,PASS,3.08,35e5d522a9eb347f9960f8af084abd6b95448c84,
+gpu-only-l4,l4,p2p.bench.nccl,PASS,4.885,35e5d522a9eb347f9960f8af084abd6b95448c84,
+gpu-only-l4,l4,p2p.nccl.host_memory,PASS,2.734,35e5d522a9eb347f9960f8af084abd6b95448c84,
+nccl-check-gh200,gh200,p2p.bench.nccl,PASS,4.985,d37c0682c177e1536389ac6525ba30a7fdf7ec18,
+r1-gb10,gb10,ep.internode_simple,PASS,7.64,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,
+r1-gb10,gb10,ep.bench.pcie_bench,PASS,3.135,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,
+r1-gb10,gb10,ep.bench.batched_gpu_to_cpu_bench,PASS,1.434,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,
+r1-gb10,gb10,collective.rdma.transport,PASS,5.052,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,
+r1-gb10,gb10,p2p.compression_unit,PASS,3.827,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,
+r1-gb10,gb10,nixl.internode.nccl,PASS,5.548,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,
+r1-gb10,gb10,ep.bench.pack_unpack,PASS,24.488,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,
+r1-gb10,gb10,p2p.nccl.host_memory,PASS,2.521,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,
+r1-gh200,gh200,ep.internode_simple,SKIP,0,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,"gh200_0: PID 37448 (uv, uid 1006)"
+r1-gh200,gh200,ep.bench.pcie_bench,SKIP,0,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,"gh200_0: PID 37448 (uv, uid 1006)"
+r1-gh200,gh200,ep.bench.batched_gpu_to_cpu_bench,SKIP,0,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,"gh200_0: PID 37448 (uv, uid 1006)"
+r1-gh200,gh200,ep.rb.cas,SKIP,0,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,"gh200_0: PID 37448 (uv, uid 1006)"
+r1-gh200,gh200,ep.rb.fc,SKIP,0,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,"gh200_0: PID 37448 (uv, uid 1006)"
+r1-gh200,gh200,ep.rb.lock,SKIP,0,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,"gh200_0: PID 37448 (uv, uid 1006)"
+r1-gh200,gh200,ep.rb.multi_ring,SKIP,0,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,"gh200_0: PID 37448 (uv, uid 1006)"
+r1-gh200,gh200,collective.rdma.transport,SKIP,0,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,"gh200_0: PID 37448 (uv, uid 1006)"
+r1-gh200,gh200,p2p.compression_unit,SKIP,0,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,"gh200_0: PID 37448 (uv, uid 1006)"
+r1-gh200,gh200,nixl.internode.nccl,SKIP,0,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,"gh200_0: PID 37448 (uv, uid 1006)"
+r1-gh200,gh200,p2p.bench.nccl,SKIP,0,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,"gh200_0: PID 37448 (uv, uid 1006)"
+r1-gh200,gh200,ep.bench.pack_unpack,SKIP,0,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,"gh200_0: PID 37448 (uv, uid 1006)"
+r1-gh200,gh200,ep.bench.fifo,SKIP,0,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,"gh200_0: PID 37448 (uv, uid 1006)"
+r1-gh200,gh200,p2p.nccl.host_memory,SKIP,0,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,"gh200_0: PID 37448 (uv, uid 1006)"
+r1-l4,l4,ep.bench.pcie_bench,SKIP,0,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,"l40: PID 100047 (check-new-relea, uid 0); PID 1483477 (python, uid 1005); PID 1483550 (python, uid 1005)"
+r1-l4,l4,ep.bench.batched_gpu_to_cpu_bench,SKIP,0,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,"l40: PID 100047 (check-new-relea, uid 0); PID 1483477 (python, uid 1005); PID 1483550 (python, uid 1005)"
+r1-l4,l4,collective.rdma.transport,SKIP,0,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,"l40: PID 100047 (check-new-relea, uid 0); PID 1483477 (python, uid 1005); PID 1483550 (python, uid 1005)"
+r1-l4,l4,p2p.compression_unit,SKIP,0,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,"l40: PID 100047 (check-new-relea, uid 0); PID 1483477 (python, uid 1005); PID 1483550 (python, uid 1005)"
+r1-l4,l4,nixl.internode.nccl,SKIP,0,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,"l40: PID 100047 (check-new-relea, uid 0); PID 1483477 (python, uid 1005); PID 1483550 (python, uid 1005)"
+r1-l4,l4,p2p.bench.nccl,SKIP,0,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,"l40: PID 100047 (check-new-relea, uid 0); PID 1483477 (python, uid 1005); PID 1483550 (python, uid 1005)"
+r1-l4,l4,p2p.nccl.host_memory,SKIP,0,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,"l40: PID 100047 (check-new-relea, uid 0); PID 1483477 (python, uid 1005); PID 1483550 (python, uid 1005)"
+r2-gb10,gb10,ep.bench.batched_gpu_to_cpu_bench,PASS,1.837,58095aa669c377a4b07f179314c13a284c6069d7,
+r2-gh200-single,gh200,ep.bench.pcie_bench,PASS,4.159,58095aa669c377a4b07f179314c13a284c6069d7,
+r2-gh200-single,gh200,ep.bench.batched_gpu_to_cpu_bench,PASS,2.259,58095aa669c377a4b07f179314c13a284c6069d7,
+r2-gh200-single,gh200,ep.rb.cas,PASS,67.199,58095aa669c377a4b07f179314c13a284c6069d7,
+r2-gh200-single,gh200,ep.rb.fc,FAIL,195.461,58095aa669c377a4b07f179314c13a284c6069d7,
+r2-gh200-single,gh200,ep.rb.lock,PASS,42.504,58095aa669c377a4b07f179314c13a284c6069d7,
+r2-gh200-single,gh200,ep.rb.multi_ring,PASS,30.99,58095aa669c377a4b07f179314c13a284c6069d7,
+r2-gh200-single,gh200,p2p.compression_unit,PASS,6.772,58095aa669c377a4b07f179314c13a284c6069d7,
+r2-gh200-single,gh200,ep.bench.fifo,PASS,57.038,58095aa669c377a4b07f179314c13a284c6069d7,
+r3-gb10,gb10,ep.bench.batched_gpu_to_cpu_bench,PASS,1.92,ef29a6c9d3f8598a0ef27895fc1a103ff0da9484,
+r3-gh200-single,gh200,ep.bench.batched_gpu_to_cpu_bench,FAIL,268.146,71369b9cbd19cb0f90faf66b274ac1ca683746fd,
+r3-gh200-single,gh200,ep.rb.fc,PASS,40.187,71369b9cbd19cb0f90faf66b274ac1ca683746fd,
+r3-gh200-single,gh200,ep.bench.pack_unpack,PASS,7.869,71369b9cbd19cb0f90faf66b274ac1ca683746fd,
+r4-gb10,gb10,ep.bench.batched_gpu_to_cpu_bench,PASS,1.836,519ed05526524f2588739b98c7d456ae23aff1ef,
+r4-gh200-zero,gh200,ep.bench.batched_gpu_to_cpu_bench,PASS,3.165,78379c153924934e4636a435808182fc1afba65b,
+r5-gb10,gb10,ep.bench.batched_gpu_to_cpu_bench,PASS,1.822,d535a5cc8fb29a0786386d7062eae427b54dc9dd,
+r6-gb10,gb10,ep.bench.batched_gpu_to_cpu_bench,PASS,1.837,c7df963cd4f31d9a0d36efc873dda278a3ff5342,
+r7-gb10,gb10,ep.bench.batched_gpu_to_cpu_bench,PASS,1.834,71369b9cbd19cb0f90faf66b274ac1ca683746fd,
+r8-gb10,gb10,ep.bench.batched_gpu_to_cpu_bench,PASS,1.819,78379c153924934e4636a435808182fc1afba65b,
+single-gh200,gh200,ep.bench.pcie_bench,SKIP,0,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,"gh200_1: PID 40384 (uv, uid 1006)"
+single-gh200,gh200,ep.bench.batched_gpu_to_cpu_bench,SKIP,0,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,"gh200_1: PID 40384 (uv, uid 1006)"
+single-gh200,gh200,ep.rb.cas,SKIP,0,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,"gh200_1: PID 40384 (uv, uid 1006)"
+single-gh200,gh200,ep.rb.fc,SKIP,0,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,"gh200_1: PID 40384 (uv, uid 1006)"
+single-gh200,gh200,ep.rb.lock,SKIP,0,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,"gh200_1: PID 40384 (uv, uid 1006)"
+single-gh200,gh200,ep.rb.multi_ring,SKIP,0,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,"gh200_1: PID 40384 (uv, uid 1006)"
+single-gh200,gh200,p2p.compression_unit,SKIP,0,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,"gh200_1: PID 40384 (uv, uid 1006)"
+single-gh200,gh200,ep.bench.pack_unpack,SKIP,0,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,"gh200_1: PID 40384 (uv, uid 1006)"
+single-gh200,gh200,ep.bench.fifo,SKIP,0,390af1bc80c1d3d70d2f210414e27b9c7f527bd3,"gh200_1: PID 40384 (uv, uid 1006)"
+verified-idle-l4,l4,ep.bench.pcie_bench,PASS,4.679,2437da1035f59cb53bb61fbb584d40fd1b5d4ca1,
+verified-idle-l4,l4,ep.bench.batched_gpu_to_cpu_bench,SKIP,0,2437da1035f59cb53bb61fbb584d40fd1b5d4ca1,"PID 455582 (MainThread, uid 1005)"
+verified-idle-l4,l4,collective.rdma.transport,SKIP,0,2437da1035f59cb53bb61fbb584d40fd1b5d4ca1,"PID 455582 (MainThread, uid 1005)"
+verified-idle-l4,l4,p2p.compression_unit,SKIP,0,2437da1035f59cb53bb61fbb584d40fd1b5d4ca1,"PID 455582 (MainThread, uid 1005)"
+verified-idle-l4,l4,nixl.internode.nccl,SKIP,0,2437da1035f59cb53bb61fbb584d40fd1b5d4ca1,"PID 455582 (MainThread, uid 1005)"
+verified-idle-l4,l4,p2p.bench.nccl,SKIP,0,2437da1035f59cb53bb61fbb584d40fd1b5d4ca1,"PID 455582 (MainThread, uid 1005)"
+verified-idle-l4,l4,p2p.nccl.host_memory,SKIP,0,2437da1035f59cb53bb61fbb584d40fd1b5d4ca1,"PID 455582 (MainThread, uid 1005)"

@@ -49,6 +49,44 @@ GitHub `cpu` target. There are now **34 host suites**, all on GitHub Ubuntu;
 registry validation rejects host suites assigned to lab targets. Their original
 commands/workloads are preserved, with pinned CUDA headers/runtime and standard
 Ubuntu build libraries supplied on the runner. They do not need a GPU or driver.
+All **34 host suites and 37 harness tests passed** at `94f3dcd8` in
+[GitHub CI](https://github.com/uccl-project/uccl/actions/runs/42732608112);
+[both formatting checks](https://github.com/uccl-project/uccl/actions/runs/42732608095)
+also passed.
+
+## Hardware fixture fixes — PR #1135
+
+Targeted validation combined this runner with #1135 (`4beb4548`), keeping runtime
+fixes in that separate PR. Latest reruns passed **18 GH200, 7 L4 and 8 GB10 suite
+commands**. These are targeted checks, not a new full-matrix sweep. The registry
+now includes the eight-case NCCL host/GPU memory fixture and uses the corrected
+compression make target: **185 suites, 90 enabled, 95 disabled**.
+
+GH200 fixes cover CUDA 13 clock queries, valid ring commands, flat-combiner
+initialization/shutdown, batched queue synchronization, and RDMA FIFO setup and
+completion tracking. The FIFO run completed 40,000 commands per proxy (160,000
+total) in 492.762 ms; its suite took 7.165 s excluding setup. Existing workloads,
+iteration counts, timing/statistics and 28 active baselines remain unchanged.
+
+| Check | Latest measurement | Gate |
+|---|---:|---:|
+| L4 batched latency / throughput | 3.660 µs / 23.54 Mops/s | pass both |
+| GB10 batched latency / throughput | 6.755 µs / 15.03 Mops/s | pass both |
+| GH200 EP dispatch + combine | 225.025 µs | <=245.094 µs |
+| GH200 host / GPU P2P | 274.72 / 283.59 Gbps | >=172.422 / 247.275 Gbps |
+| GH200 PyTorch/NCCL | 7.52, then 67.37 Gbps | **fail**, requires >=71.739 Gbps |
+
+The PyTorch/NCCL benchmark is byte-identical to `main`; its gate remains failing.
+Historical Ray threshold failures remain unresolved. New ring/batched GH200
+measurements are recorded as unbaselined, pending repeated calibration. No
+failure was hidden by changing a benchmark protocol or relaxing a threshold.
+
+[Suite outcomes/timings](reports/hardware-fixes-2026-11-09.csv) and
+[performance samples](reports/performance-hardware-fixes-2026-11-09.csv) retain
+intermediate failures and false skips as well as successful reruns. #1135's
+[host tests](https://github.com/uccl-project/uccl/actions/runs/42733516205) and
+[formatting](https://github.com/uccl-project/uccl/actions/runs/42733516328) passed;
+its legacy hardware workflows skipped, so hardware evidence here is direct SSH.
 
 ## GH200 pair restoration — 2026-11-09
 

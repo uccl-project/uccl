@@ -3441,7 +3441,7 @@
       "nodes": 1,
       "gpus": 1,
       "timeout": 300,
-      "command": "bash ci/suites.sh compression",
+      "command": "make -C p2p -j\"$CI_JOBS\" PYTHON=python3 ENABLE_EFA=0 ENABLE_CXI=1 USE_DIETGPU=1 test-compression",
       "setup": [
         "compression"
       ]
@@ -4422,6 +4422,33 @@
         "TRANSPORT": "tcp"
       },
       "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+    },
+    {
+      "id": "p2p.nccl.host_memory",
+      "sources": [
+        "p2p/tests/test_nccl_host_memory.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gh200",
+        "gb10"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cuda",
+        "rdma"
+      ],
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 180,
+      "command": "if [[ $CI_NODE == 0 ]]; then role=acceptor; else role=initiator; fi; python3 p2p/tests/test_nccl_host_memory.py --role \"$role\" --peer-ip \"$MASTER_ADDR\" --port \"$MASTER_PORT\"",
+      "setup": [
+        "p2p"
+      ]
     }
   ],
   "support": [
