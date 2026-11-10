@@ -80,6 +80,20 @@ dietgpu::FloatType to_dietgpu(FloatType t) {
   }
 }
 
+// ANS block size for one input of `bytes` bytes. Larger blocks shrink the
+// archive by ~1% (fewer per-block states and words) but give the decoder fewer
+// independent blocks; from 2^27 symbols (256 MiB of bf16) there are still
+// enough of them to keep a large GPU busy, so decoding is not slower.
+uint32_t dietgpu_block_size(dietgpu::FloatType ft, size_t bytes) {
+  constexpr size_t kLargeBlockMinSymbols = size_t(1) << 27;
+  size_t symbols = dietgpu::getElementCountFromBytes(ft, bytes);
+  if (dietgpu::isFloat8Type(ft)) {
+    symbols /= 2;  // two fp8 exponents per ANS symbol
+  }
+  return symbols >= kLargeBlockMinSymbols ? dietgpu::kANSLargeBlockSize
+                                          : dietgpu::kANSDefaultBlockSize;
+}
+
 FloatType from_dietgpu(dietgpu::FloatType t) {
   switch (t) {
     case dietgpu::FloatType::kFloat16:
@@ -496,6 +510,8 @@ uint32_t DietGPUCompressorBackend::compress_encode_one_batch(
   compressConfig.floatType = to_dietgpu(ctx->get_float_type());
   compressConfig.useChecksum = false;
   compressConfig.is16ByteAligned = true;
+  compressConfig.ansConfig.blockSize =
+      dietgpu_block_size(compressConfig.floatType, ctx->maxSize);
 
   dietgpu::floatCompressEncodeOneBatch(*res_, compressConfig, *ctx,
                                        dev_compressed_size_, stream_);

@@ -28,6 +28,9 @@
 namespace dietgpu {
 #define THRUST_DISABLE_EXEC_CHECK
 
+static_assert(kANSDefaultBlockSize == kDefaultBlockSize, "");
+static_assert(kANSLargeBlockSize == kLargeBlockSize, "");
+
 // maximum raw compressed data block size in bytes
 constexpr __host__ __device__ uint32_t
 getRawCompBlockMaxSize(uint32_t uncompressedBlockBytes) {
@@ -533,6 +536,7 @@ __device__ void ansEncodeCoalesce(
     const uint4* __restrict__ table,
     uint32_t probBits,
     bool useChecksum,
+    uint32_t blockSize,
     uint32_t numBlocks,
     uint32_t uncompressedWords,
     uint8_t* __restrict__ out,
@@ -563,6 +567,7 @@ __device__ void ansEncodeCoalesce(
 
       ANSCoalescedHeader header;
       header.setMagicAndVersion();
+      header.setBlockSize(blockSize);
       header.setNumBlocks(numBlocks);
       header.setTotalUncompressedWords(uncompressedWords);
       header.setTotalCompressedWords(totalCompressedWords);
@@ -608,11 +613,10 @@ __device__ void ansEncodeCoalesce(
   // Write out per-block word length
   for (auto i = blockIdx.x * Threads + tid; i < numBlocks;
        i += gridDim.x * Threads) {
-    uint32_t lastBlockWords = uncompressedWords % kDefaultBlockSize;
-    lastBlockWords = lastBlockWords == 0 ? kDefaultBlockSize : lastBlockWords;
+    uint32_t lastBlockWords = uncompressedWords % blockSize;
+    lastBlockWords = lastBlockWords == 0 ? blockSize : lastBlockWords;
 
-    uint32_t blockWords =
-        (i == numBlocks - 1) ? lastBlockWords : kDefaultBlockSize;
+    uint32_t blockWords = (i == numBlocks - 1) ? lastBlockWords : blockSize;
 
     blockWordsOut[i] = uint2{
         (blockWords << 16) | compressedWords[i], compressedWordsPrefix[i]};
@@ -650,13 +654,14 @@ __global__ void ansEncodeCoalesceBatch(
     const uint4* __restrict__ table,
     uint32_t probBits,
     bool useChecksum,
+    uint32_t blockSize,
     OutProvider outProvider,
     uint32_t* __restrict__ compressedBytes) {
   auto batch = blockIdx.y;
   auto uncompressedWords = sizeProvider.getBatchSize(batch);
 
   // Number of compressed blocks in this batch element
-  auto numBlocks = divUp(uncompressedWords, kDefaultBlockSize);
+  auto numBlocks = divUp(uncompressedWords, blockSize);
 
   // Advance all pointers to handle our specific batch member
   inUncoalescedBlocks +=
@@ -676,6 +681,7 @@ __global__ void ansEncodeCoalesceBatch(
       table,
       probBits,
       useChecksum,
+      blockSize,
       numBlocks,
       uncompressedWords,
       (uint8_t*)outProvider.getBatchStart(batch),
@@ -693,9 +699,12 @@ void ansEncodeBatchDevice(
     OutProvider outProvider,
     uint32_t* outSize_dev,
     cudaStream_t stream) {
+  uint32_t blockSize = config.blockSize;
+  UCCL_CHECK(blockSize == kDefaultBlockSize || blockSize == kLargeBlockSize)
+      << "unhandled block size " << blockSize;
+
   auto maxUncompressedWords = maxSize / sizeof(ANSDecodedT);
-  uint32_t maxNumCompressedBlocks =
-      divUp(maxUncompressedWords, kDefaultBlockSize);
+  uint32_t maxNumCompressedBlocks = divUp(maxUncompressedWords, blockSize);
 
   // 1. Compute symbol statistics
   auto table_dev = res.alloc<uint4>(stream, numInBatch * kNumSymbols);
@@ -733,8 +742,7 @@ void ansEncodeBatchDevice(
 
   // 3. Allocate memory for the per-warp results
   // How much space in bytes we need to reserve for each warp's output
-  uint32_t uncoalescedBlockStride =
-      getMaxBlockSizeUnCoalesced(kDefaultBlockSize);
+  uint32_t uncoalescedBlockStride = getMaxBlockSizeUnCoalesced(blockSize);
 
   auto compressedBlocks_dev = res.alloc<uint8_t>(
       stream, numInBatch * maxNumCompressedBlocks * uncoalescedBlockStride);
@@ -761,25 +769,34 @@ void ansEncodeBatchDevice(
     // in the batch
     auto gridPartial = dim3(1, numInBatch);
 
-#define RUN_ENCODE(BITS)                                       \
-  do {                                                         \
-    ansEncodeBatchFull<InProvider, BITS, kDefaultBlockSize>    \
-        <<<gridFull, kThreads, 0, stream>>>(                   \
-            inProvider,                                        \
-            maxNumCompressedBlocks,                            \
-            uncoalescedBlockStride,                            \
-            compressedBlocks_dev.data(),                       \
-            compressedWords_dev.data(),                        \
-            table_dev.data());                                 \
-                                                               \
-    ansEncodeBatchPartial<InProvider, BITS, kDefaultBlockSize> \
-        <<<gridPartial, kThreads, 0, stream>>>(                \
-            inProvider,                                        \
-            maxNumCompressedBlocks,                            \
-            uncoalescedBlockStride,                            \
-            compressedBlocks_dev.data(),                       \
-            compressedWords_dev.data(),                        \
-            table_dev.data());                                 \
+#define RUN_ENCODE_BS(BITS, BS)                    \
+  do {                                             \
+    ansEncodeBatchFull<InProvider, BITS, BS>       \
+        <<<gridFull, kThreads, 0, stream>>>(       \
+            inProvider,                            \
+            maxNumCompressedBlocks,                \
+            uncoalescedBlockStride,                \
+            compressedBlocks_dev.data(),           \
+            compressedWords_dev.data(),            \
+            table_dev.data());                     \
+                                                   \
+    ansEncodeBatchPartial<InProvider, BITS, BS>    \
+        <<<gridPartial, kThreads, 0, stream>>>(    \
+            inProvider,                            \
+            maxNumCompressedBlocks,                \
+            uncoalescedBlockStride,                \
+            compressedBlocks_dev.data(),           \
+            compressedWords_dev.data(),            \
+            table_dev.data());                     \
+  } while (false)
+
+#define RUN_ENCODE(BITS)                           \
+  do {                                             \
+    if (blockSize == kLargeBlockSize) {            \
+      RUN_ENCODE_BS(BITS, kLargeBlockSize);        \
+    } else {                                       \
+      RUN_ENCODE_BS(BITS, kDefaultBlockSize);      \
+    }                                              \
   } while (false)
 
     switch (config.probBits) {
@@ -797,6 +814,7 @@ void ansEncodeBatchDevice(
     }
 
 #undef RUN_ENCODE
+#undef RUN_ENCODE_BS
   }
 
   // Perform exclusive prefix sum of the number of compressed words per block,
@@ -852,6 +870,7 @@ void ansEncodeBatchDevice(
             table_dev.data(),
             config.probBits,
             config.useChecksum,
+            blockSize,
             outProvider,
             outSize_dev);
   }

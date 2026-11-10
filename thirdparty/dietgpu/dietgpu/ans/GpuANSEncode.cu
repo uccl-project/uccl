@@ -11,6 +11,9 @@
 namespace dietgpu {
 
 uint32_t getMaxCompressedSize(uint32_t uncompressedBytes) {
+  // Bound for kDefaultBlockSize, which is never smaller than the bound for
+  // kLargeBlockSize (more blocks, so more per-block overhead)
+  static_assert(kLargeBlockSize % kDefaultBlockSize == 0, "");
   uint32_t blocks = divUp(uncompressedBytes, kDefaultBlockSize);
 
   size_t rawSize = ANSCoalescedHeader::getCompressedOverhead(kDefaultBlockSize);
