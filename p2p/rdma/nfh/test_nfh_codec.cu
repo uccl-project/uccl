@@ -33,6 +33,11 @@
     }                                                            \
   } while (0)
 
+// Setup copies and memsets below run on the legacy default stream, which does
+// not order with the non-blocking streams the codec runs on (and a pageable
+// cudaMemcpy to the device may return before its DMA lands). Wait for them.
+static void setup_done() { CK(cudaDeviceSynchronize()); }
+
 static uint16_t to_bf16(float f) {
   uint32_t u;
   std::memcpy(&u, &f, 4);
@@ -66,6 +71,7 @@ static Result roundtrip(Ctx& c, char const* name,
   CK(cudaMalloc(&dc, 2 * n + 64));
   CK(cudaMemcpy(din + in_off, h.data(), n * 2, cudaMemcpyHostToDevice));
   CK(cudaMemset(dout, 0xA5, (n + 16) * 2));
+  setup_done();
   Result r;
   NK(nfh_split(c.enc, din + in_off, n, dc, c.s));
   NK(nfh_encode(c.enc, din + in_off, n, dc, c.s, &r.bytes));
@@ -109,6 +115,7 @@ static void corrupt_case(Ctx& c) {
   CK(cudaMalloc(&dout, n * 2));
   CK(cudaMalloc(&dc, 2 * n));
   CK(cudaMemcpy(din, h.data(), n * 2, cudaMemcpyHostToDevice));
+  setup_done();
   size_t bytes = 0;
   NK(nfh_split(c.enc, din, n, dc, c.s));
   NK(nfh_encode(c.enc, din, n, dc, c.s, &bytes));
@@ -122,6 +129,7 @@ static void corrupt_case(Ctx& c) {
   uint32_t bad = 0xdeadbeef, good;
   CK(cudaMemcpy(&good, dc + H, 4, cudaMemcpyDeviceToHost));
   CK(cudaMemcpy(dc + H, &bad, 4, cudaMemcpyHostToDevice));
+  setup_done();
   *c.status = 0;
   NK(nfh_decode(c.dec, dc, bytes, dout, n, c.s, c.status));
   CK(cudaStreamSynchronize(c.s));
@@ -131,11 +139,13 @@ static void corrupt_case(Ctx& c) {
   CK(cudaMemcpy(&l0, dc + H + 32, 1, cudaMemcpyDeviceToHost));
   uint8_t bl = 15;
   CK(cudaMemcpy(dc + H + 32, &bl, 1, cudaMemcpyHostToDevice));
+  setup_done();
   *c.status = 0;
   NK(nfh_decode(c.dec, dc, bytes, dout, n, c.s, c.status));
   CK(cudaStreamSynchronize(c.s));
   st[2] = *c.status;
   CK(cudaMemcpy(dc + H + 32, &l0, 1, cudaMemcpyHostToDevice));
+  setup_done();
   // A clean decode after the failures must still be exact (scheduler state
   // intact).
   *c.status = 0;
@@ -173,6 +183,7 @@ static void timing(Ctx& c, std::vector<uint16_t> const& all, size_t n,
   CK(cudaMalloc(&dc, 2 * n));
   CK(cudaMalloc(&flush, fb));
   CK(cudaMemcpy(din, all.data(), n * 2, cudaMemcpyHostToDevice));
+  setup_done();
   cudaEvent_t a, b;
   CK(cudaEventCreate(&a));
   CK(cudaEventCreate(&b));
