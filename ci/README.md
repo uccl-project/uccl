@@ -54,7 +54,7 @@ Target counts overlap. All 34 CPU suites run on GitHub. Seven protocol suites
 install pinned CUDA headers/runtime for compilation, without requiring a GPU or
 driver. No standalone build-tier entries are enabled.
 
-CPU dependency setup retries failed downloads through direct Ubuntu archives,
+CPU dependency setup retries failed downloads through kernel.org's Ubuntu mirror,
 with 90-second network deadlines and an eight-minute step limit. Setup output
 is included in the job log and the `ci-cpu` artifact as `cpu-setup.log`.
 
