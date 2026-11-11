@@ -20,5 +20,5 @@ repos:
         entry: black
         additional_dependencies: [black==26.5.1]
         types: [file]
-        files: ^(p2p|ep)/.*\.pyi?$
+        files: ^(p2p|ep|ci)/.*\.pyi?$
         exclude: thirdparty|docs|build

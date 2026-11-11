@@ -112,6 +112,9 @@ thirdparty/gdrcopy/
 worktrees/
 *.csv
 *.egg-info/
+!ci/config/*.json
+!ci/reports/*.csv
+ci-results/
 
 # Lightweight environment for formatting hooks
 /.venv-format/
