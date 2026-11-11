@@ -134,7 +134,8 @@ nightly or label trigger. Benchmarks do not run correctness suites first.
   activity skip the target; CPU-only work does not block it.
 - CI rechecks GPU activity during execution and stops its own work if another job
   starts. Only verified stale CI processes may be cleaned up.
-- Skips are reported, not counted as passes. SSH and test failures still fail CI.
+- Unreachable lab SSH skips the target with a reason; recorded test failures still
+  fail CI. Skips are reported, not counted as passes.
 - Require `CI status` and formatting in branch protection; remove retired checks.
 
 ## Server provisioning and credentials
@@ -202,17 +203,18 @@ Results include the selection plan, logs, JUnit, source/machine metadata and
 suite timings. Dependency locks live in `requirements/`; source pins are in
 `config/dependencies.json`.
 
-Both ranks must pass. Setup failures, timeouts, disconnects and all-skipped pytest
-suites fail CI. Workspaces are cleaned after collection; use `--keep-remote` to
-debug. Caches live in `/var/lib/uccl-ci/cache`.
+Both ranks must pass. Test/build failures, timeouts and all-skipped pytest suites
+fail CI. Unreachable SSH skips lab coverage. Workspaces are cleaned after collection;
+use `--keep-remote` to debug. Caches live in `/var/lib/uccl-ci/cache`.
 
 To find failure logs on a GitHub run page:
 
-1. Open the failed **host** or **hardware** job and expand its **Run ... suites** step.
-2. Under **Summary → Artifacts**, download `ci-host` or `ci-<target>` for full logs.
-3. Open `<suite-id>.log` under the target/node directory (hardware also groups by
-   host). Setup output is in `environment.log` and `build-*.log`; SSH output is in
-   `node-*.ssh.log`. `performance.json` lists gate warnings and failures.
+1. Open the **host** or **hardware** job → **Summarize results** for suite outcomes,
+   timings and skip reasons. The same table appears on the run **Summary** page.
+2. Expand **Show test logs**, then a suite's log group, for its last 200 lines.
+3. For complete files, download `ci-host` or `ci-<target>` under **Summary → Artifacts**.
+   `<suite-id>.log` holds test output; `environment.log` / `build-*.log` hold setup
+   output; `node-*.ssh.log` holds worker/SSH output. `performance.json` explains gates.
 
 ## Performance policy and current validation
 

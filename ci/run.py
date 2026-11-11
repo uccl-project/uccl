@@ -26,6 +26,12 @@ class TargetSkipped(Exception):
     pass
 
 
+class WorkerError(RuntimeError):
+    def __init__(self, message, results):
+        super().__init__(message)
+        self.results = list(results)
+
+
 def skip_results(names, definitions, target, reason):
     return [
         dict(
@@ -59,18 +65,63 @@ def remote_preflight(ssh, hosts, target, root):
                 ",".join(target["capabilities"]),
             ]
         )
-        result = subprocess.run(
-            [*ssh, host, command],
-            input=script,
-            text=True,
-            capture_output=True,
-            timeout=60,
-            check=True,
-        )
-        states[host] = json.loads(result.stdout)
+        try:
+            result = subprocess.run(
+                [*ssh, host, command],
+                input=script,
+                text=True,
+                capture_output=True,
+                timeout=60,
+            )
+            if result.returncode == 255:
+                states[host] = dict(
+                    state="unavailable",
+                    reason=f"SSH unavailable: {result.stderr.strip()}",
+                )
+            else:
+                result.check_returncode()
+                states[host] = json.loads(result.stdout)
+        except subprocess.TimeoutExpired:
+            states[host] = dict(
+                state="unavailable", reason="SSH admission probe timed out"
+            )
         if skip_reason(states[host]):
             break
     return states
+
+
+def unreachable_hosts(ssh, hosts):
+    """Distinguish lost SSH access from a worker/build/test error."""
+    unavailable = {}
+    for host in hosts:
+        try:
+            result = subprocess.run(
+                [*ssh, host, "true"], text=True, capture_output=True, timeout=20
+            )
+            if result.returncode == 255:
+                unavailable[host] = result.stderr.strip() or "SSH exited with code 255"
+        except subprocess.TimeoutExpired:
+            unavailable[host] = "SSH connection timed out"
+        except OSError:
+            continue  # A broken local SSH executable is not an offline lab node.
+    return unavailable
+
+
+def mark_skipped(results, selected, definitions, target, reason, unavailable=False):
+    # Lost artifacts cannot establish a pass. Preserve any already observed failure.
+    if unavailable:
+        for result in results:
+            if result["exit_code"] in {0, 125} and not result.get("not_participating"):
+                if result["exit_code"]:
+                    result["interrupted_exit_code"] = result["exit_code"]
+                result["exit_code"] = 0
+                result["skip_reason"] = reason
+    present = {(r["id"], r["node"]) for r in results}
+    results.extend(
+        r
+        for r in skip_results(selected, definitions, target, reason)
+        if (r["id"], r["node"]) not in present
+    )
 
 
 def receive_all(workers, event, timeout=2700):
@@ -187,14 +238,16 @@ def collect_results(workers, name, timeout):
     cancelled = False
     while pending:
         if time.monotonic() >= deadline:
-            raise TimeoutError(f"Workers did not finish {name}")
+            raise WorkerError(f"Workers did not finish {name}", results.values())
         for index in list(pending):
             try:
                 result = workers[index].events.get_nowait()
             except queue.Empty:
                 continue
             if result.get("event") != "result" or result.get("id") != name:
-                raise RuntimeError(f"Expected result for {name}, got {result}")
+                raise WorkerError(
+                    f"Expected result for {name}, got {result}", results.values()
+                )
             pending.remove(index)
             results[index] = result
             if (
@@ -355,12 +408,20 @@ def main():
     ssh = ["ssh", *ssh_options]
     remote = f"{args.root}/runs/{args.run_id}-{args.target}"
     workers, results, error, staged = [], [], None, []
+    unavailable, skipped = {}, None
     tmpdir = tempfile.TemporaryDirectory(prefix="uccl-ci-")
     local = None
     try:
         tmp = tmpdir.name
         admission = remote_preflight(ssh, hosts, target, args.root)
         (output / "admission.json").write_text(json.dumps(admission, indent=2))
+        unavailable.update(
+            {
+                h: s["reason"]
+                for h, s in admission.items()
+                if s["state"] == "unavailable"
+            }
+        )
         busy = [
             f"{host}: {skip_reason(state)}"
             for host, state in admission.items()
@@ -423,23 +484,34 @@ def main():
         for worker in workers:
             worker.receive("complete", timeout=30)
     except TargetSkipped as exc:
-        completed = {r["id"] for r in results}
-        results.extend(
-            skip_results(
-                [name for name in selected if name not in completed],
-                definitions,
-                args.target,
-                str(exc),
-            )
-        )
-        print(f"{args.target}: SKIPPED: {exc}", flush=True)
+        skipped = str(exc)
     except (Exception, KeyboardInterrupt) as exc:
-        error = str(exc) or type(exc).__name__
-        print(f"CI infrastructure error: {error}", file=sys.stderr)
+        results.extend(getattr(exc, "results", []))
+        if (
+            isinstance(exc, subprocess.CalledProcessError)
+            and exc.returncode == 255
+            and isinstance(exc.cmd, (list, tuple))
+            and exc.cmd[0] == "ssh"
+            and exc.cmd[-2] in hosts
+        ):
+            unavailable[exc.cmd[-2]] = "SSH command disconnected (exit 255)"
+        if not isinstance(exc, KeyboardInterrupt):
+            unavailable.update(
+                unreachable_hosts(ssh, [h for h in hosts if h not in unavailable])
+            )
+        if unavailable:
+            skipped = "; ".join(
+                f"{h}: SSH unavailable: {why}" for h, why in unavailable.items()
+            )
+        else:
+            error = str(exc) or type(exc).__name__
+            print(f"CI infrastructure error: {error}", file=sys.stderr)
     finally:
         for worker in workers:
             worker.close()
         for host in staged:
+            if host in unavailable:
+                continue  # Preserve the remote workspace for later recovery.
             destination = output / host
             destination.mkdir(exist_ok=True)
             result = subprocess.run(
@@ -452,18 +524,30 @@ def main():
                     str(destination),
                 ]
             )
-            if result.returncode and not error:
-                error = f"Could not collect results from {host}"
+            if result.returncode:
+                unavailable.update(unreachable_hosts(ssh, [host]))
+                if host in unavailable:
+                    skipped = f"{host}: SSH unavailable during artifact collection: {unavailable[host]}"
+                elif not error:
+                    error = f"Could not collect results from {host}"
             elif result.returncode == 0 and not args.keep_remote:
                 # Only delete the unique run directory we created and successfully archived.
                 cleanup = subprocess.run(
                     [*ssh, host, f"rm -rf -- {shlex.quote(remote)}"]
                 )
-                if cleanup.returncode and not error:
+                if cleanup.returncode == 255:
+                    unavailable[host] = "SSH unavailable during workspace cleanup"
+                    skipped = f"{host}: {unavailable[host]}"
+                elif cleanup.returncode and not error:
                     error = f"Could not clean the collected workspace on {host}"
         if local and (local.parent / "results").exists():
             shutil.copytree(local.parent / "results", output, dirs_exist_ok=True)
         tmpdir.cleanup()
+        if skipped:
+            mark_skipped(
+                results, selected, definitions, args.target, skipped, bool(unavailable)
+            )
+            print(f"{args.target}: SKIPPED: {skipped}", flush=True)
         write_summary(results, output, error)
     return int(bool(error) or any(r["exit_code"] for r in results))
 

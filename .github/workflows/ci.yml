@@ -88,7 +88,12 @@ jobs:
         run: python3 ci/run.py --local --target cpu --plan ci-plan.json
       - name: Summarize results
         if: always()
-        run: python3 ci/report.py results ci-results >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          set -o pipefail
+          python3 ci/report.py results ci-results | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Show test logs
+        if: always()
+        run: python3 ci/report.py logs ci-results
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -138,7 +143,12 @@ jobs:
         run: python3 ci/performance.py ci-results --candidate ci-results/baseline-candidate.json
       - name: Summarize results
         if: always()
-        run: python3 ci/report.py results ci-results >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          set -o pipefail
+          python3 ci/report.py results ci-results | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Show test logs
+        if: always()
+        run: python3 ci/report.py logs ci-results
       - uses: actions/upload-artifact@v4
         if: always()
         with:

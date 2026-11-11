@@ -1,8 +1,10 @@
 """Small Markdown summaries; detailed logs and JUnit stay in artifacts."""
 
 import argparse
+from collections import deque
 import json
 from pathlib import Path
+import uuid
 
 
 def report_plan(path):
@@ -90,9 +92,37 @@ def report_results(root):
             print(f"- FAILED: {failure}")
 
 
+def report_logs(root, tail=200):
+    """Make suite output readable in job logs; complete files stay in artifacts."""
+    paths = sorted(root.rglob("*.log"))
+    if not paths:
+        print(
+            "No test logs collected; check the result summary for skips or setup errors."
+        )
+    for path in paths:
+        print(f"::group::{path.relative_to(root)}")
+        lines = deque(maxlen=tail)
+        count = 0
+        with path.open(errors="replace") as stream:
+            for count, line in enumerate(stream, 1):
+                lines.append(line)
+        if count > tail:
+            print(
+                f"Showing last {tail} of {count} lines; download the artifact for the full log."
+            )
+        # Treat test output as text, not GitHub workflow commands.
+        token = uuid.uuid4().hex
+        print(f"::stop-commands::{token}")
+        print("".join(lines), end="\n")
+        print(f"::{token}::")
+        print("::endgroup::")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=["plan", "results"])
+    parser.add_argument("mode", choices=["plan", "results", "logs"])
     parser.add_argument("path", type=Path)
     args = parser.parse_args()
-    (report_plan if args.mode == "plan" else report_results)(args.path)
+    {"plan": report_plan, "results": report_results, "logs": report_logs}[args.mode](
+        args.path
+    )

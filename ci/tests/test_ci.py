@@ -22,7 +22,7 @@ import run as controller
 from performance import candidate_baselines, compare, evaluate, gate_policy
 from performance import main as performance_main
 from process import run
-from report import report_results
+from report import report_logs, report_results
 from run import Worker, collect_results, write_summary
 
 
@@ -251,6 +251,194 @@ class AdmissionTests(unittest.TestCase):
             self.assertEqual(len(payload["results"]), 2)
             self.assertTrue(
                 all(r["skip_reason"] == "b: real job" for r in payload["results"])
+            )
+
+    def test_unreachable_peer_skips_before_upload(self):
+        definition = dict(id="t", tier="performance", nodes=2)
+        target = dict(enabled=True, hosts=["a", "b"], gpus=1, capabilities=["cuda"])
+        failures = [
+            subprocess.CompletedProcess(
+                [], 255, stdout="", stderr="Connection refused"
+            ),
+            subprocess.TimeoutExpired("ssh", 60),
+        ]
+        for failure in failures:
+            with (
+                self.subTest(failure=failure),
+                tempfile.TemporaryDirectory() as tmp,
+                patch.object(
+                    sys, "argv", ["run.py", "--target", "gpu", "--output", tmp]
+                ),
+                patch(
+                    "run.read_catalog",
+                    return_value=({"tests": [definition]}, {"gpu": target}),
+                ),
+                patch("run.validate"),
+                patch("run.tracked_files", return_value=[]),
+                patch(
+                    "run.plan",
+                    return_value={"include": [{"target": "gpu", "tests": ["t"]}]},
+                ),
+                patch("run.subprocess.check_output", side_effect=["sha\n", b""]),
+                patch(
+                    "run.subprocess.run",
+                    side_effect=[
+                        subprocess.CompletedProcess(
+                            [], 0, stdout='{"state":"idle","reason":""}'
+                        ),
+                        failure,
+                    ],
+                ),
+                patch("run.archive_source") as archive,
+                patch("run.Worker") as worker,
+                redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(controller.main(), 0)
+                archive.assert_not_called()
+                worker.assert_not_called()
+                payload = json.loads((Path(tmp) / "gpu/results.json").read_text())
+                self.assertIsNone(payload["infrastructure_error"])
+                self.assertEqual(len(payload["results"]), 2)
+                self.assertTrue(
+                    all("b: SSH" in r["skip_reason"] for r in payload["results"])
+                )
+                admission = json.loads((Path(tmp) / "gpu/admission.json").read_text())
+                self.assertEqual(admission["b"]["state"], "unavailable")
+                self.assertFalse(evaluate(Path(tmp), {})["measurements"])
+                self.assertFalse(evaluate(Path(tmp), {})["failures"])
+
+    def test_remote_probe_errors_are_not_connection_skips(self):
+        target = dict(gpus=1, capabilities=["cuda"])
+        with patch(
+            "run.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                [], 1, stdout="", stderr="Python setup failed"
+            ),
+        ):
+            with self.assertRaises(subprocess.CalledProcessError):
+                controller.remote_preflight(["ssh"], ["a"], target, "/ci")
+            self.assertEqual(controller.unreachable_hosts(["ssh"], ["a"]), {})
+        with (
+            patch(
+                "run.subprocess.run",
+                return_value=subprocess.CompletedProcess(
+                    [], 0, stdout="not JSON", stderr=""
+                ),
+            ),
+            self.assertRaises(ValueError),
+        ):
+            controller.remote_preflight(["ssh"], ["a"], target, "/ci")
+
+    def test_connection_loss_preserves_observed_test_failure(self):
+        class Fake:
+            def __init__(self, message):
+                self.events = queue.Queue()
+                self.events.put(message)
+
+            def send(self, message):
+                pass
+
+        for code in [0, 1, 125]:
+            with self.subTest(code=code), tempfile.TemporaryDirectory() as tmp:
+                partial = dict(
+                    event="result",
+                    id="t",
+                    tier="performance",
+                    target="gpu",
+                    node=0,
+                    exit_code=code,
+                    seconds=1,
+                )
+                with self.assertRaises(controller.WorkerError) as caught:
+                    collect_results(
+                        [Fake(partial), Fake(dict(event="fatal", error="SSH lost"))],
+                        "t",
+                        1,
+                    )
+                results = caught.exception.results
+                controller.mark_skipped(
+                    results,
+                    ["t"],
+                    {"t": dict(tier="performance", nodes=2)},
+                    "gpu",
+                    "b: SSH unavailable",
+                    unavailable=True,
+                )
+                self.assertEqual(len(results), 2)
+                self.assertEqual(bool(results[0]["exit_code"]), code == 1)
+                self.assertEqual(results[1]["skip_reason"], "b: SSH unavailable")
+                write_summary(results, Path(tmp) / "gpu")
+                report = evaluate(Path(tmp), {})
+                self.assertEqual(bool(report["failures"]), code == 1)
+                self.assertEqual(report["measurements"], [])
+
+    def test_artifact_collection_ssh_loss_skips_target(self):
+        definition = dict(id="t", tier="performance", nodes=1)
+        target = dict(enabled=True, hosts=["a"], gpus=1, capabilities=["cuda"])
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.object(sys, "argv", ["run.py", "--target", "gpu", "--output", tmp]),
+            patch(
+                "run.read_catalog",
+                return_value=({"tests": [definition]}, {"gpu": target}),
+            ),
+            patch("run.validate"),
+            patch("run.tracked_files", return_value=[]),
+            patch(
+                "run.plan",
+                return_value={"include": [{"target": "gpu", "tests": ["t"]}]},
+            ),
+            patch("run.subprocess.check_output", side_effect=["sha\n", b""]),
+            patch(
+                "run.remote_preflight",
+                return_value={"a": dict(state="idle", reason="")},
+            ),
+            patch(
+                "run.archive_source",
+                side_effect=lambda path: path.write_bytes(b"archive"),
+            ),
+            patch("run.check"),
+            patch("run.Worker"),
+            patch(
+                "run.receive_all",
+                side_effect=[
+                    [dict(address="a")],
+                    [],
+                    [dict(id="t")],
+                    [dict(id="t", ok=True)],
+                ],
+            ),
+            patch(
+                "run.collect_results",
+                return_value=[
+                    dict(
+                        id="t",
+                        tier="performance",
+                        target="gpu",
+                        node=0,
+                        exit_code=0,
+                        seconds=1,
+                    )
+                ],
+            ),
+            patch(
+                "run.subprocess.run",
+                return_value=subprocess.CompletedProcess(
+                    [], 255, stderr="Connection closed"
+                ),
+            ),
+            patch("run.unreachable_hosts", return_value={"a": "Connection refused"}),
+            redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(controller.main(), 0)
+            payload = json.loads((Path(tmp) / "gpu/results.json").read_text())
+            self.assertIsNone(payload["infrastructure_error"])
+            self.assertIn(
+                "SSH unavailable during artifact collection",
+                payload["results"][0]["skip_reason"],
+            )
+            self.assertEqual(
+                evaluate(Path(tmp), {}), dict(measurements=[], failures=[], warnings=[])
             )
 
     @unittest.skipUnless(
@@ -608,6 +796,25 @@ class ProcessTests(unittest.TestCase):
 
 
 class PerformanceTests(unittest.TestCase):
+    def test_job_log_groups_show_tail_as_literal_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "cpu/node-0/example.log"
+            path.parent.mkdir(parents=True)
+            path.write_text(
+                "old line\nsecond line\n::error::literal test output\nlast line\n"
+            )
+            output = io.StringIO()
+            with redirect_stdout(output):
+                report_logs(root, tail=2)
+            text = output.getvalue()
+            self.assertIn("::group::cpu/node-0/example.log", text)
+            self.assertIn("Showing last 2 of 4 lines", text)
+            self.assertNotIn("old line", text)
+            self.assertIn("last line", text)
+            self.assertLess(text.index("::stop-commands::"), text.index("::error::"))
+            self.assertTrue(text.endswith("::endgroup::\n"))
+
     def test_hard_and_soft_gate_exit_status_and_summary(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
