@@ -45,7 +45,7 @@ function fixture(command = '/run-ci l4 p2p.*', permission = 'write') {
 
 function results(overrides = {}) {
   return Object.fromEntries(Object.entries({
-    'comment-start': 'success', plan: 'success', cpu: 'skipped', GPU: 'success', status: 'success', ...overrides,
+    'comment-start': 'success', plan: 'success', cpu: 'skipped', gpu: 'success', status: 'success', ...overrides,
   }).map(([id, result]) => [id, {result}]));
 }
 
@@ -138,11 +138,11 @@ test('queued, running and final status update one comment and preserve the origi
 
 test('final status covers setup/test failures, cancellation and skipped execution', async () => {
   for (const [changes, label] of [
-    [{plan: 'failure', cpu: 'skipped', GPU: 'skipped', status: 'failure'}, 'failed'],
-    [{GPU: 'failure', status: 'failure'}, 'failed'],
+    [{plan: 'failure', cpu: 'skipped', gpu: 'skipped', status: 'failure'}, 'failed'],
+    [{gpu: 'failure', status: 'failure'}, 'failed'],
     [{'comment-start': 'failure'}, 'failed'],
-    [{GPU: 'cancelled', status: 'failure'}, 'cancelled'],
-    [{cpu: 'skipped', GPU: 'skipped'}, 'skipped'],
+    [{gpu: 'cancelled', status: 'failure'}, 'cancelled'],
+    [{cpu: 'skipped', gpu: 'skipped'}, 'skipped'],
   ]) {
     const f = fixture();
     await dispatch(f); f.startRun();

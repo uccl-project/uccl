@@ -11,7 +11,7 @@ function bodyWithStatus(header, status, url, results) {
   const lines = [header, `**Status: ${status}**`, '', `[Workflow run and logs](${url})`];
   if (results) {
     lines.push('', '| Job | Result |', '|---|---|');
-    for (const [id, label] of [['plan', 'Plan'], ['cpu', 'CPU'], ['GPU', 'GPU'], ['status', 'CI status']]) {
+    for (const [id, label] of [['plan', 'Plan'], ['cpu', 'CPU'], ['gpu', 'GPU'], ['status', 'CI status']]) {
       lines.push(`| ${label} | ${results[id].result} |`);
     }
     lines.push('', 'Per-suite results, skips and timings are in the run summary and artifacts.');
@@ -20,13 +20,13 @@ function bodyWithStatus(header, status, url, results) {
 }
 
 function completionStatus(results) {
-  const states = ['plan', 'cpu', 'GPU', 'status'].map(id => results[id]?.result);
+  const states = ['plan', 'cpu', 'gpu', 'status'].map(id => results[id]?.result);
   if (states.some(state => !['success', 'failure', 'cancelled', 'skipped'].includes(state))) {
     throw new Error('Missing or invalid CI job results');
   }
   if (states.includes('cancelled')) return 'cancelled';
   if (states.includes('failure') || results['comment-start']?.result === 'failure') return 'failed';
-  if (results.cpu.result === 'skipped' && results.GPU.result === 'skipped') return 'skipped';
+  if (results.cpu.result === 'skipped' && results.gpu.result === 'skipped') return 'skipped';
   return 'completed successfully';
 }
 
