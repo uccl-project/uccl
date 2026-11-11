@@ -3,7 +3,6 @@
 #include "ep_utils.cuh"
 #include "exception.cuh"
 #include "layout.hpp"
-#include <cstring>
 
 namespace uccl {
 namespace layout {
@@ -61,11 +60,11 @@ __global__ void get_dispatch_layout_histogram(int64_t const* topk_idx,
       uint32_t mask = (rank_mask[first / 64] >> (first % 64)) & 0xffu;
       bool* dst = membership + first;
       if (first + 8 <= num_ranks &&
-          reinterpret_cast<uintptr_t>(dst) % alignof(uint2) == 0) {
-        uint2 packed =
-            make_uint2(expand_rank_nibble(mask), expand_rank_nibble(mask >> 4));
-        memcpy(__builtin_assume_aligned(dst, alignof(uint2)), &packed,
-               sizeof(packed));
+          reinterpret_cast<uintptr_t>(dst) % alignof(uint64_t) == 0) {
+        uint64_t packed = (uint64_t{expand_rank_nibble(mask >> 4)} << 32) |
+                          expand_rank_nibble(mask);
+        __builtin_memcpy(__builtin_assume_aligned(dst, alignof(uint64_t)),
+                         &packed, sizeof(packed));
       } else {
         for (int i = 0; i < min(8, num_ranks - first); ++i)
           dst[i] = (mask >> i) & 1;
