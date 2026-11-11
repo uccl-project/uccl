@@ -42,6 +42,7 @@ jobs:
             for (const command of ['/run-ci cpu ci.selftest', '/run-benchmark cpu']) {
               const request = {
                 ...context,
+                repo: context.repo,
                 payload: {
                   repository: {default_branch: context.ref.replace('refs/heads/', '')},
                   issue: {number: 1145, pull_request: {}},
