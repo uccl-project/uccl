@@ -2,8 +2,6 @@ name: CI Command Dispatcher
 on:
   issue_comment:
     types: [created]
-  push:
-    branches: [codex/ci-cpu-apt-recovery]
 permissions:
   contents: read
   actions: write
@@ -25,26 +23,3 @@ jobs:
         with:
           script: |
             await require('./ci/github_comments.js').dispatch({github, context, core});
-
-  # Temporary retry of the live CPU-only bot success case on PR #1145.
-  comment-smoke:
-    if: github.event_name == 'push' && github.repository == 'uccl-project/uccl' && github.ref == 'refs/heads/codex/ci-cpu-apt-recovery'
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/github-script@v7
-        with:
-          script: |
-            await require('./ci/github_comments.js').dispatch({github, core, context: {
-              ...context, repo: context.repo,
-              payload: {
-                repository: {default_branch: context.ref.replace('refs/heads/', '')},
-                issue: {number: 1145, pull_request: {}},
-                comment: {
-                  body: '/run-ci cpu ci.selftest', user: {login: context.actor},
-                  html_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
-                },
-              },
-            }});
