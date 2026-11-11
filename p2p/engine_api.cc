@@ -392,9 +392,15 @@ NB_MODULE(p2p, m) {
                   auto mhandle = self.get_mhandle(mr_id);
                   assert(mhandle != nullptr);
                   xfer_desc.mr_id = mr_id;
+                  // Transports without ibverbs MRs (NCCL, CXI) leave mr_array
+                  // empty; their descriptors carry no NIC keys.
                   for (size_t j = 0; j < kNICContextNumber; j++) {
                     auto mr = mhandle->mr_array.get_key_by_context_id(j);
-                    assert(mr != nullptr);
+                    if (mr == nullptr) {
+                      xfer_desc.lkeys.clear();
+                      xfer_desc.rkeys.clear();
+                      break;
+                    }
                     xfer_desc.lkeys.push_back(mr->lkey);
                     xfer_desc.rkeys.push_back(mr->rkey);
                   }

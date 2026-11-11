@@ -150,7 +150,7 @@ else
 endif
 
 # Include paths
-INCLUDES := -I../include -I../src -I../../include
+INCLUDES := -I../include -I../src -I../../include -I../../../include
 INCLUDES += -Iinclude -I$(CUDA_PATH)/include -I/usr/include
 INCLUDES += -I../thirdparty/DeepEP/csrc
 INCLUDES += $(EFA_CFLAGS) $(GH_CFLAGS)

@@ -40,6 +40,12 @@ def rccl_plugin_path():
     return os.path.join(lib_dir, "librccl-net-uccl.so")
 
 
+def mccl_plugin_path():
+    """Returns absolute path to the MCCL net plugin .so file"""
+    lib_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
+    return os.path.join(lib_dir, "libmccl-net-uccl.so")
+
+
 def efa_plugin_path():
     """Returns absolute path to the EFA plugin .so file"""
     lib_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
