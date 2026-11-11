@@ -126,16 +126,8 @@ def run_initiator(mode: str, peer_ip: str, rendezvous_port: int, gpu_idx: int) -
     rt = Rt()
     rt.set_device(gpu_idx)
 
-    deadline = time.monotonic() + 30
-    while True:
-        try:
-            sock = socket.create_connection((peer_ip, rendezvous_port), timeout=5)
-            sock.settimeout(None)
-            break
-        except (ConnectionRefusedError, TimeoutError):
-            if time.monotonic() >= deadline:
-                raise
-            time.sleep(0.1)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.connect((peer_ip, rendezvous_port))
 
     ep_meta = recv_blob(sock)
     ip, port, r_gpu = parse_endpoint_meta(ep_meta)

@@ -40,14 +40,6 @@ printf '%s\n' '2.35'
 EOF
 chmod +x "${FAKE_BIN}/python3"
 
-# Flag selection for CUDA and ROCm is independent of the test machine's ISA.
-# build.sh intentionally rejects ROCm on ARM, so model an x86 build host here.
-cat >"${FAKE_BIN}/uname" <<'EOF'
-#!/usr/bin/env bash
-printf '%s\n' 'x86_64'
-EOF
-chmod +x "${FAKE_BIN}/uname"
-
 run_target() {
   local target="$1"
   local expected_flag="$2"

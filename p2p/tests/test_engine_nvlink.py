@@ -61,12 +61,9 @@ def test_local_ipc():
     assert world_size == 2
 
     # each rank binds its own visible GPU
-    torch.cuda.set_device(rank)
+    torch.cuda.set_device(0)
 
     ep = p2p.Endpoint(local_gpu_idx=rank)
-    server_metadata = [ep.get_metadata() if rank == 0 else None]
-    dist.broadcast_object_list(server_metadata, src=0)
-    _, _, server_bdf = p2p.Endpoint.parse_metadata(server_metadata[0])
 
     # Rank 0: server
     if rank == 0:
@@ -98,14 +95,14 @@ def test_local_ipc():
     # Rank 1: client
     else:
         # connect to server
-        ok, conn_id = ep.connect_local(remote_gpu_bdf=server_bdf)
+        ok, conn_id = ep.connect_local(remote_gpu_idx=0)
         assert ok
         print(f"[client] connected successfully: conn_id={conn_id}")
 
         fifo_blob = _recv_bytes(src=0)
         print("[client] received fifo blob")
 
-        tensor = torch.ones(1024, dtype=torch.float32, device=f"cuda:{rank}")
+        tensor = torch.ones(1024, dtype=torch.float32, device="cuda:0")
         assert tensor.is_contiguous()
 
         ok = ep.write_ipc(
