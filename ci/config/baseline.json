@@ -14,7 +14,9 @@
         "sample_count": 3,
         "sample_min": 7.309,
         "sample_max": 8.243
-      }
+      },
+      "gate": "soft",
+      "reason": "Short GPU-CPU latency probe; unchanged-code verification reached 11.511 us against an 8.44 us threshold."
     },
     "gb10/ep.bench.batched_gpu_to_cpu_bench/throughput_mops": {
       "value": 13.7,
@@ -29,7 +31,8 @@
         "sample_count": 3,
         "sample_min": 13.6,
         "sample_max": 15.03
-      }
+      },
+      "gate": "hard"
     },
     "gb10/ep.bench.gpu_to_cpu_bench/latency_us": {
       "value": 1.105,
@@ -44,7 +47,9 @@
         "sample_count": 24,
         "sample_min": 1.08,
         "sample_max": 1.21
-      }
+      },
+      "gate": "soft",
+      "reason": "Microsecond GPU-CPU polling latency is sensitive to host scheduling; keep advisory until repeatable at the 10% margin."
     },
     "gb10/ep.bench.low_latency/dispatch_combine_us": {
       "value": 233.945,
@@ -59,7 +64,8 @@
         "sample_count": 6,
         "sample_min": 232.68,
         "sample_max": 235.77
-      }
+      },
+      "gate": "hard"
     },
     "gb10/ep.bench.pack_unpack/decode_triton_ms": {
       "value": 7.188,
@@ -74,7 +80,9 @@
         "sample_count": 3,
         "sample_min": 6.958,
         "sample_max": 7.199
-      }
+      },
+      "gate": "soft",
+      "reason": "Small decode workload; unchanged-code verification reached 8.006 ms against a 7.987 ms threshold."
     },
     "gb10/ep.bench.pack_unpack/prefill_triton_ms": {
       "value": 120.459,
@@ -89,7 +97,8 @@
         "sample_count": 3,
         "sample_min": 120.23,
         "sample_max": 120.768
-      }
+      },
+      "gate": "hard"
     },
     "gb10/ep.bench.pcie_bench/bandwidth_gb_s": {
       "value": 921.860571,
@@ -104,7 +113,8 @@
         "sample_count": 24,
         "sample_min": 896.253333,
         "sample_max": 1040.810323
-      }
+      },
+      "gate": "hard"
     },
     "gb10/p2p.bandwidth/bandwidth_gbps": {
       "value": 127.72,
@@ -119,7 +129,8 @@
         "sample_count": 3,
         "sample_min": 124.88,
         "sample_max": 128.01
-      }
+      },
+      "gate": "hard"
     },
     "l4/ep.bench.batched_gpu_to_cpu_bench/latency_us": {
       "value": 3.995,
@@ -134,7 +145,9 @@
         "sample_count": 3,
         "sample_min": 3.629,
         "sample_max": 18.365
-      }
+      },
+      "gate": "soft",
+      "reason": "Short GPU-CPU latency probe; calibration ranged from 3.629 to 18.365 us."
     },
     "l4/ep.bench.batched_gpu_to_cpu_bench/throughput_mops": {
       "value": 22.69,
@@ -149,7 +162,9 @@
         "sample_count": 3,
         "sample_min": 19.12,
         "sample_max": 22.92
-      }
+      },
+      "gate": "soft",
+      "reason": "Calibration ranged from 19.12 to 22.92 Mops/s and crossed the 20.421 Mops/s threshold."
     },
     "l4/ep.bench.gpu_to_cpu_bench/latency_us": {
       "value": 1.1,
@@ -164,7 +179,9 @@
         "sample_count": 24,
         "sample_min": 1.05,
         "sample_max": 1.42
-      }
+      },
+      "gate": "soft",
+      "reason": "Microsecond GPU-CPU polling latency is sensitive to host scheduling; keep advisory until repeatable at the 10% margin."
     },
     "l4/p2p.bandwidth/bandwidth_gbps": {
       "value": 380.44,
@@ -179,7 +196,8 @@
         "sample_count": 3,
         "sample_min": 368.79,
         "sample_max": 384.44
-      }
+      },
+      "gate": "hard"
     },
     "l4/p2p.bandwidth_gpu/bandwidth_gbps": {
       "value": 164.85,
@@ -194,7 +212,8 @@
         "sample_count": 3,
         "sample_min": 162.55,
         "sample_max": 164.98
-      }
+      },
+      "gate": "hard"
     },
     "l4/p2p.bench.nccl/bandwidth_gbps": {
       "value": 117.23,
@@ -209,7 +228,9 @@
         "sample_count": 3,
         "sample_min": 115.08,
         "sample_max": 120.37
-      }
+      },
+      "gate": "soft",
+      "reason": "Short 16-transfer NCCL run; unchanged-code verification measured 100.27 Gbps against a 105.507 Gbps threshold."
     },
     "l4/p2p.bench.ray_p2p/read_bandwidth_gbps": {
       "value": 117.94,
@@ -224,7 +245,8 @@
         "sample_count": 3,
         "sample_min": 117.76,
         "sample_max": 118.49
-      }
+      },
+      "gate": "hard"
     },
     "l4/p2p.bench.ray_p2p/write_bandwidth_gbps": {
       "value": 154.76,
@@ -239,7 +261,8 @@
         "sample_count": 3,
         "sample_min": 152.68,
         "sample_max": 156.28
-      }
+      },
+      "gate": "hard"
     },
     "l4/p2p.bench.uccl_compression/bandwidth_gbps": {
       "value": 157.86,
@@ -254,7 +277,8 @@
         "sample_count": 3,
         "sample_min": 156.61,
         "sample_max": 163.77
-      }
+      },
+      "gate": "hard"
     },
     "gh200/p2p.bandwidth_gpu/bandwidth_gbps": {
       "value": 274.75,
@@ -273,7 +297,9 @@
           "gh200_1",
           "gh200_0"
         ]
-      }
+      },
+      "gate": "soft",
+      "reason": "Calibration ranged from 169.00 to 281.48 Gbps and crossed the 247.275 Gbps threshold."
     },
     "gh200/p2p.bandwidth/bandwidth_gbps": {
       "value": 191.58,
@@ -292,7 +318,9 @@
           "gh200_1",
           "gh200_0"
         ]
-      }
+      },
+      "gate": "soft",
+      "reason": "Calibration ranged from 147.94 to 209.16 Gbps and crossed the 172.422 Gbps threshold."
     },
     "gh200/ep.bench.low_latency/dispatch_combine_us": {
       "value": 220.585,
@@ -311,7 +339,8 @@
           "gh200_1",
           "gh200_0"
         ]
-      }
+      },
+      "gate": "hard"
     },
     "gh200/ep.bench.gpu_to_cpu_bench/latency_us": {
       "value": 3.165,
@@ -329,7 +358,9 @@
         "hosts": [
           "gh200_1"
         ]
-      }
+      },
+      "gate": "soft",
+      "reason": "Microsecond GPU-CPU polling latency is sensitive to host scheduling; keep advisory until repeatable at the 10% margin."
     },
     "gh200/ep.bench.pack_unpack/decode_triton_ms": {
       "value": 2.942,
@@ -347,7 +378,8 @@
         "hosts": [
           "gh200_1"
         ]
-      }
+      },
+      "gate": "hard"
     },
     "gh200/ep.bench.pack_unpack/prefill_triton_ms": {
       "value": 23.219,
@@ -365,7 +397,8 @@
         "hosts": [
           "gh200_1"
         ]
-      }
+      },
+      "gate": "hard"
     },
     "gh200/ep.bench.pcie_bench/bandwidth_gb_s": {
       "value": 717.002667,
@@ -383,7 +416,8 @@
         "hosts": [
           "gh200_1"
         ]
-      }
+      },
+      "gate": "hard"
     },
     "gh200/p2p.bench.nccl/bandwidth_gbps": {
       "value": 79.71,
@@ -402,7 +436,9 @@
           "gh200_1",
           "gh200_0"
         ]
-      }
+      },
+      "gate": "soft",
+      "reason": "Short 16-transfer NCCL run; calibration ranged from 22.96 to 83.20 Gbps."
     },
     "gh200/p2p.bench.ray_p2p/read_bandwidth_gbps": {
       "value": 200.56,
@@ -421,7 +457,9 @@
           "gh200_1",
           "gh200_0"
         ]
-      }
+      },
+      "gate": "soft",
+      "reason": "Short 16-transfer Ray run; calibration ranged from 161.94 to 265.38 Gbps and crossed the 180.504 Gbps threshold."
     },
     "gh200/p2p.bench.ray_p2p/write_bandwidth_gbps": {
       "value": 266.2,
@@ -440,7 +478,9 @@
           "gh200_1",
           "gh200_0"
         ]
-      }
+      },
+      "gate": "soft",
+      "reason": "Short 16-transfer Ray run; calibration ranged from 172.61 to 277.62 Gbps and crossed the 239.58 Gbps threshold."
     },
     "gh200/p2p.bench.uccl_compression/bandwidth_gbps": {
       "value": 139.6,
@@ -459,7 +499,9 @@
           "gh200_1",
           "gh200_0"
         ]
-      }
+      },
+      "gate": "soft",
+      "reason": "Short 16-transfer compression run; calibration ranged from 77.51 to 248.91 Gbps."
     }
   }
 }

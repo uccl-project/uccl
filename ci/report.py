@@ -75,14 +75,17 @@ def report_results(root):
         print("\n### Performance\n")
         for metric in data["measurements"]:
             limit = metric.get("threshold")
+            label = "advisory" if metric.get("gate") == "soft" else "required"
             bar = (
                 ""
                 if limit is None
-                else f"; required {'>=' if metric['direction'] == 'higher' else '<='} {limit:.4g} {metric['unit']}"
+                else f"; {label} {'>=' if metric['direction'] == 'higher' else '<='} {limit:.4g} {metric['unit']}"
             )
             print(
                 f"- `{metric['key']}`: {metric['value']:.4g} {metric['unit']} ({metric['status']}{bar})"
             )
+        for warning in data.get("warnings", []):
+            print(f"- WARNING: {warning}")
         for failure in data["failures"]:
             print(f"- FAILED: {failure}")
 

@@ -62,7 +62,7 @@ Vendored tests are not automatically enrolled; experimental C++/CUDA formatting
 remains checked.
 
 Use `catalog.py list` for the inventory or `catalog.py plan --full` for the
-current default selection. See [validation.md](validation.md) for results.
+current default selection. [Latest results](reports/latest.csv) include suite timings and performance.
 
 ## Selection and explicit registration
 
@@ -129,26 +129,13 @@ Automatic PR jobs receive no lab credentials. Hardware checks on `main` happen
 after merging; use `/run-ci` for pre-merge hardware validation. There is no
 nightly or label trigger. Benchmarks do not run correctness suites first.
 
-CPU-only CI runs on GitHub's `ubuntu-24.04` runners. Lab nodes run GPU/RDMA
-hardware suites, including RDMA tests using host memory. Host and hardware jobs
-can run in parallel; hardware runs serialize per target and take a node-local
-lock. Before source upload, CI checks every required node for NVIDIA/AMD compute
-contexts and GPU activity. CPU-only jobs and Python/notebook sessions without
-GPU contexts do not block hardware CI. If any GPU is occupied, another CI run
-holds the lock, or GPU activity cannot be verified, the target is **skipped**.
-SSH connection failures remain failures.
-
-Workers recheck before setup and each suite, and every five seconds while running.
-If a real job starts, CI stops its own processes and skips the remaining target.
-This is cooperative protection, not a scheduler reservation. Only recorded,
-same-user stale CI process groups may be cleaned after acquiring the node lock
-and verifying PID identity. Unrecorded jobs are not automatically killed.
-Artifacts/JUnit show skip reasons, and skipped benchmarks produce no performance
-measurement or baseline candidate. Skips do not fail `CI status`; check the
-summary's skipped counts before treating hardware coverage as validated.
-
-Replace retired workflow checks in branch protection with `CI status`, retain
-formatting checks, and remove the GIN check.
+- CPU suites run on GitHub; GPU/RDMA suites run on lab nodes.
+- Hardware runs serialize per target. Busy GPUs, held locks or unverifiable GPU
+  activity skip the target; CPU-only work does not block it.
+- CI rechecks GPU activity during execution and stops its own work if another job
+  starts. Only verified stale CI processes may be cleaned up.
+- Skips are reported, not counted as passes. SSH and test failures still fail CI.
+- Require `CI status` and formatting in branch protection; remove retired checks.
 
 ## Server provisioning and credentials
 
@@ -211,17 +198,21 @@ python3 ci/run.py --target gh200 --ssh-config /path/to/config --tiers performanc
 python3 ci/performance.py ci-results/perf-run --candidate ci-results/perf-run/baseline-candidate.json
 ```
 
-Each run uses a fresh source workspace and output directory. Python dependency
-inputs and hashed locks live in `requirements/`; external source pins live in
-`config/dependencies.json`. Artifacts include the selection plan, results, JUnit,
-per-rank logs, source identity and machine/toolchain inventories.
+Results include the selection plan, logs, JUnit, source/machine metadata and
+suite timings. Dependency locks live in `requirements/`; source pins are in
+`config/dependencies.json`.
 
-Both ranks must succeed unless the target is skipped for node activity.
-Setup failures, timeouts, disconnects and all-skipped pytest suites fail the job;
-cancellation stops only owned processes. Workspaces
-are removed after artifact collection, even for failed tests. Use `--keep-remote`
-to debug; collection failures preserve the workspace automatically. Reusable
-caches live in `/var/lib/uccl-ci/cache`; avoid filling L4's limited disk.
+Both ranks must pass. Setup failures, timeouts, disconnects and all-skipped pytest
+suites fail CI. Workspaces are cleaned after collection; use `--keep-remote` to
+debug. Caches live in `/var/lib/uccl-ci/cache`.
+
+To find failure logs on a GitHub run page:
+
+1. Open the failed **host** or **hardware** job and expand its **Run ... suites** step.
+2. Under **Summary → Artifacts**, download `ci-host` or `ci-<target>` for full logs.
+3. Open `<suite-id>.log` under the target/node directory (hardware also groups by
+   host). Setup output is in `environment.log` and `build-*.log`; SSH output is in
+   `node-*.ssh.log`. `performance.json` lists gate warnings and failures.
 
 ## Performance policy and current validation
 
@@ -229,25 +220,23 @@ caches live in `/var/lib/uccl-ci/cache`; avoid filling L4's limited disk.
 `p2p.bandwidth` uses pinned host buffers; `p2p.bandwidth_gpu` uses GPU buffers on
 L4/GH200. Only performance registrations extract and compare metrics.
 
-`config/baselines.json` records measured baselines. A 0.1 tolerance requires 90%
-of baseline performance: throughput >= baseline × 0.9; latency <= baseline / 0.9.
-Missing, nonfinite or nonpositive measurements and threshold violations fail;
-absent baselines are reported as `unbaselined`.
-Benchmarks without configured metrics retain logs and exit status. Candidate
-baselines are artifacts and never replace active thresholds automatically.
-Workflow summaries show each suite's execution time, excluding shared setup.
+[`config/baseline.json`](config/baseline.json) stores 28 measured baselines,
+their provenance and per-metric `gate` policy:
 
-At `94f3dcd8`, all **34 GitHub host suites**, **37 CI harness tests**, formatting
-and `CI status` passed. Lab admission uses GPU occupancy only. Both GH200 nodes
-run CI; AMD remains unavailable.
+| Gate | Below the 90% performance bar |
+|---|---|
+| `hard` | Fails CI; used for stable metrics |
+| `soft` | Reports a warning; requires a reason for expected variability |
 
-[validation.md](validation.md) records hardware results, timings, baseline
-provenance and remaining failures. There are 28 calibrated metrics, including
-11 on GH200; independent checks passed 9/11, with Ray read/write below their floors. The November 8
-L4/GB10 checks passed 13/17
-metrics; four remain noisy. Targeted combined validation of #1135 passes; its runtime fixes must land
-before the hardware matrix is expected to pass. Enabled suites may fail; disabling one requires a registry
-reason. Historical example/experimental results are excluded from coverage.
+Throughput must be >= baseline × 0.9; latency must be <= baseline / 0.9.
+The 14 soft gates cover short/noisy probes and observed unstable calibrations;
+14 stable gates remain hard. Benchmark errors and missing/invalid measurements
+always fail, including for soft gates. Uncalibrated metrics are `unbaselined`.
+
+[Latest results](reports/latest.csv) contain targeted suite results and available
+metric measurements, with dates and run/source references. Candidates never replace
+active baselines automatically; new candidates start soft until reviewed.
+Benchmark workloads and baseline values are unchanged.
 
 Developer checks:
 

@@ -1,0 +1,70 @@
+kind,date,target,suite,metric,status,value,unit,direction,threshold,gate,seconds,run,source_sha,notes
+suite,2026-11-09,gb10,collective.rdma.transport,,PASS,,,,,,4.047,final-gb10,71369b9cbd19cb0f90faf66b274ac1ca683746fd,
+metric,2026-11-09,gb10,ep.bench.batched_gpu_to_cpu_bench,latency_us,pass,6.755,us,lower,8.44,soft,,r8-gb10,78379c153924934e4636a435808182fc1afba65b,Short GPU-CPU latency probe; unchanged-code verification reached 11.511 us against an 8.44 us threshold.
+metric,2026-11-09,gb10,ep.bench.batched_gpu_to_cpu_bench,throughput_mops,pass,15.03,Mops/s,higher,12.33,hard,,r8-gb10,78379c153924934e4636a435808182fc1afba65b,
+suite,2026-11-09,gb10,ep.bench.batched_gpu_to_cpu_bench,,PASS,,,,,,1.819,r8-gb10,78379c153924934e4636a435808182fc1afba65b,
+metric,2026-11-08,gb10,ep.bench.gpu_to_cpu_bench,latency_us,pass,1.0750000000000002,us,lower,1.227778,soft,,42525804181,a01fa8ae00ec0383dcda7e911fc24b9ac72817eb,Microsecond GPU-CPU polling latency is sensitive to host scheduling; keep advisory until repeatable at the 10% margin.
+metric,2026-11-08,gb10,ep.bench.low_latency,dispatch_combine_us,pass,232.76,us,lower,259.938889,hard,,42525804181,a01fa8ae00ec0383dcda7e911fc24b9ac72817eb,
+metric,2026-11-09,gb10,ep.bench.pack_unpack,decode_triton_ms,pass,7.389,ms,lower,7.986667,soft,,final-gb10,71369b9cbd19cb0f90faf66b274ac1ca683746fd,Small decode workload; unchanged-code verification reached 8.006 ms against a 7.987 ms threshold.
+metric,2026-11-09,gb10,ep.bench.pack_unpack,prefill_triton_ms,pass,120.456,ms,lower,133.843333,hard,,final-gb10,71369b9cbd19cb0f90faf66b274ac1ca683746fd,
+suite,2026-11-09,gb10,ep.bench.pack_unpack,,PASS,,,,,,24.563,final-gb10,71369b9cbd19cb0f90faf66b274ac1ca683746fd,
+metric,2026-11-09,gb10,ep.bench.pcie_bench,bandwidth_gb_s,pass,921.860571,GB/s,higher,829.674514,hard,,final-gb10,71369b9cbd19cb0f90faf66b274ac1ca683746fd,
+suite,2026-11-09,gb10,ep.bench.pcie_bench,,PASS,,,,,,3.222,final-gb10,71369b9cbd19cb0f90faf66b274ac1ca683746fd,
+suite,2026-11-09,gb10,ep.internode_simple,,PASS,,,,,,7.487,final-gb10,71369b9cbd19cb0f90faf66b274ac1ca683746fd,
+suite,2026-11-09,gb10,nixl.internode.nccl,,PASS,,,,,,5.571,final-gb10,71369b9cbd19cb0f90faf66b274ac1ca683746fd,
+metric,2026-11-08,gb10,p2p.bandwidth,bandwidth_gbps,pass,127.75,Gbps,higher,114.948,hard,,42525804181,a01fa8ae00ec0383dcda7e911fc24b9ac72817eb,
+suite,2026-11-09,gb10,p2p.compression_unit,,PASS,,,,,,3.644,final-gb10,71369b9cbd19cb0f90faf66b274ac1ca683746fd,
+suite,2026-11-09,gb10,p2p.nccl.host_memory,,PASS,,,,,,2.036,final-gb10,71369b9cbd19cb0f90faf66b274ac1ca683746fd,
+suite,2026-11-09,gh200,collective.rdma.transport,,PASS,,,,,,7.658,final-gh200-pair,78379c153924934e4636a435808182fc1afba65b,
+metric,2026-11-09,gh200,ep.bench.batched_gpu_to_cpu_bench,latency_us,unbaselined,23.805,us,lower,,unbaselined,,r4-gh200-zero,78379c153924934e4636a435808182fc1afba65b,
+metric,2026-11-09,gh200,ep.bench.batched_gpu_to_cpu_bench,throughput_mops,unbaselined,23.3,Mops/s,higher,,unbaselined,,r4-gh200-zero,78379c153924934e4636a435808182fc1afba65b,
+suite,2026-11-09,gh200,ep.bench.batched_gpu_to_cpu_bench,,PASS,,,,,,3.165,r4-gh200-zero,78379c153924934e4636a435808182fc1afba65b,
+suite,2026-11-09,gh200,ep.bench.fifo,,PASS,,,,,,57.038,r2-gh200-single,58095aa669c377a4b07f179314c13a284c6069d7,
+metric,2026-11-09,gh200,ep.bench.gpu_to_cpu_bench,latency_us,pass,3.1500000000000004,us,lower,3.516667,soft,,42719991618,7a80180c3aa7f8061ad168a242d4f9adcc3fb383,Microsecond GPU-CPU polling latency is sensitive to host scheduling; keep advisory until repeatable at the 10% margin.
+metric,2026-11-09,gh200,ep.bench.low_latency,dispatch_combine_us,pass,225.02499999999998,us,lower,245.094444,hard,,final-gh200-pair,78379c153924934e4636a435808182fc1afba65b,
+suite,2026-11-09,gh200,ep.bench.low_latency,,PASS,,,,,,15.848,final-gh200-pair,78379c153924934e4636a435808182fc1afba65b,
+metric,2026-11-09,gh200,ep.bench.pack_unpack,decode_triton_ms,pass,2.856,ms,lower,3.268889,hard,,r3-gh200-single,71369b9cbd19cb0f90faf66b274ac1ca683746fd,
+metric,2026-11-09,gh200,ep.bench.pack_unpack,prefill_triton_ms,pass,23.229,ms,lower,25.798889,hard,,r3-gh200-single,71369b9cbd19cb0f90faf66b274ac1ca683746fd,
+suite,2026-11-09,gh200,ep.bench.pack_unpack,,PASS,,,,,,7.869,r3-gh200-single,71369b9cbd19cb0f90faf66b274ac1ca683746fd,
+metric,2026-11-09,gh200,ep.bench.pcie_bench,bandwidth_gb_s,pass,717.002667,GB/s,higher,645.3024,hard,,r2-gh200-single,58095aa669c377a4b07f179314c13a284c6069d7,
+suite,2026-11-09,gh200,ep.bench.pcie_bench,,PASS,,,,,,4.159,r2-gh200-single,58095aa669c377a4b07f179314c13a284c6069d7,
+metric,2026-11-09,gh200,ep.bench.rdma_fifo,throughput_gbps,unbaselined,18.62,Gbps,higher,,unbaselined,,fifo-gh200,d37c0682c177e1536389ac6525ba30a7fdf7ec18,Diagnostic measurement; not registered as a gate.
+suite,2026-11-09,gh200,ep.bench.rdma_fifo,,PASS,,,,,,7.165,fifo-gh200,d37c0682c177e1536389ac6525ba30a7fdf7ec18,
+suite,2026-11-09,gh200,ep.internode_simple,,PASS,,,,,,10.14,final-gh200-pair,78379c153924934e4636a435808182fc1afba65b,
+metric,2026-11-09,gh200,ep.rb.cas,throughput_w128_p4_mops,unbaselined,2.9,Mops/s,higher,,unbaselined,,r2-gh200-single,58095aa669c377a4b07f179314c13a284c6069d7,
+suite,2026-11-09,gh200,ep.rb.cas,,PASS,,,,,,67.199,r2-gh200-single,58095aa669c377a4b07f179314c13a284c6069d7,
+metric,2026-11-09,gh200,ep.rb.fc,throughput_w128_p4_mops,unbaselined,1.79,Mops/s,higher,,unbaselined,,r3-gh200-single,71369b9cbd19cb0f90faf66b274ac1ca683746fd,
+suite,2026-11-09,gh200,ep.rb.fc,,PASS,,,,,,40.187,r3-gh200-single,71369b9cbd19cb0f90faf66b274ac1ca683746fd,
+metric,2026-11-09,gh200,ep.rb.lock,throughput_w128_p4_mops,unbaselined,1.44,Mops/s,higher,,unbaselined,,r2-gh200-single,58095aa669c377a4b07f179314c13a284c6069d7,
+suite,2026-11-09,gh200,ep.rb.lock,,PASS,,,,,,42.504,r2-gh200-single,58095aa669c377a4b07f179314c13a284c6069d7,
+metric,2026-11-09,gh200,ep.rb.multi_ring,throughput_w128_p4_mops,unbaselined,10.28,Mops/s,higher,,unbaselined,,r2-gh200-single,58095aa669c377a4b07f179314c13a284c6069d7,
+suite,2026-11-09,gh200,ep.rb.multi_ring,,PASS,,,,,,30.99,r2-gh200-single,58095aa669c377a4b07f179314c13a284c6069d7,
+suite,2026-11-09,gh200,nixl.internode.nccl,,PASS,,,,,,3.265,gpu-only-gh200,35e5d522a9eb347f9960f8af084abd6b95448c84,
+metric,2026-11-09,gh200,p2p.bandwidth,bandwidth_gbps,pass,274.72,Gbps,higher,172.422,soft,,gpu-only-gh200,35e5d522a9eb347f9960f8af084abd6b95448c84,Calibration ranged from 147.94 to 209.16 Gbps and crossed the 172.422 Gbps threshold.
+suite,2026-11-09,gh200,p2p.bandwidth,,PASS,,,,,,6.721,gpu-only-gh200,35e5d522a9eb347f9960f8af084abd6b95448c84,
+metric,2026-11-09,gh200,p2p.bandwidth_gpu,bandwidth_gbps,pass,283.59,Gbps,higher,247.275,soft,,gpu-only-gh200,35e5d522a9eb347f9960f8af084abd6b95448c84,Calibration ranged from 169.00 to 281.48 Gbps and crossed the 247.275 Gbps threshold.
+suite,2026-11-09,gh200,p2p.bandwidth_gpu,,PASS,,,,,,6.655,gpu-only-gh200,35e5d522a9eb347f9960f8af084abd6b95448c84,
+metric,2026-11-09,gh200,p2p.bench.nccl,bandwidth_gbps,warning,67.37,Gbps,higher,71.739,soft,,nccl-check-gh200,d37c0682c177e1536389ac6525ba30a7fdf7ec18,Short 16-transfer NCCL run; calibration ranged from 22.96 to 83.20 Gbps.
+suite,2026-11-09,gh200,p2p.bench.nccl,,PASS,,,,,,4.985,nccl-check-gh200,d37c0682c177e1536389ac6525ba30a7fdf7ec18,
+metric,2026-11-09,gh200,p2p.bench.ray_p2p,read_bandwidth_gbps,warning,166.9,Gbps,higher,180.504,soft,,42719991618,7a80180c3aa7f8061ad168a242d4f9adcc3fb383,Short 16-transfer Ray run; calibration ranged from 161.94 to 265.38 Gbps and crossed the 180.504 Gbps threshold.
+metric,2026-11-09,gh200,p2p.bench.ray_p2p,write_bandwidth_gbps,warning,145.1,Gbps,higher,239.58,soft,,42719991618,7a80180c3aa7f8061ad168a242d4f9adcc3fb383,Short 16-transfer Ray run; calibration ranged from 172.61 to 277.62 Gbps and crossed the 239.58 Gbps threshold.
+metric,2026-11-09,gh200,p2p.bench.uccl_compression,bandwidth_gbps,pass,214.78,Gbps,higher,125.64,soft,,42719991618,7a80180c3aa7f8061ad168a242d4f9adcc3fb383,Short 16-transfer compression run; calibration ranged from 77.51 to 248.91 Gbps.
+suite,2026-11-09,gh200,p2p.compression_unit,,PASS,,,,,,7.287,final-gh200-pair,78379c153924934e4636a435808182fc1afba65b,
+suite,2026-11-09,gh200,p2p.nccl.host_memory,,PASS,,,,,,2.262,gpu-only-gh200,35e5d522a9eb347f9960f8af084abd6b95448c84,
+suite,2026-11-09,l4,collective.rdma.transport,,PASS,,,,,,6.639,gpu-only-l4,35e5d522a9eb347f9960f8af084abd6b95448c84,
+metric,2026-11-09,l4,ep.bench.batched_gpu_to_cpu_bench,latency_us,pass,3.66,us,lower,4.438889,soft,,gpu-only-l4,35e5d522a9eb347f9960f8af084abd6b95448c84,Short GPU-CPU latency probe; calibration ranged from 3.629 to 18.365 us.
+metric,2026-11-09,l4,ep.bench.batched_gpu_to_cpu_bench,throughput_mops,pass,23.54,Mops/s,higher,20.421,soft,,gpu-only-l4,35e5d522a9eb347f9960f8af084abd6b95448c84,Calibration ranged from 19.12 to 22.92 Mops/s and crossed the 20.421 Mops/s threshold.
+suite,2026-11-09,l4,ep.bench.batched_gpu_to_cpu_bench,,PASS,,,,,,3.178,gpu-only-l4,35e5d522a9eb347f9960f8af084abd6b95448c84,
+metric,2026-11-08,l4,ep.bench.gpu_to_cpu_bench,latency_us,pass,1.0950000000000002,us,lower,1.222222,soft,,42525401610,56cebace206777958d98bee4d5ff11cd16724b96,Microsecond GPU-CPU polling latency is sensitive to host scheduling; keep advisory until repeatable at the 10% margin.
+metric,2026-11-09,l4,ep.bench.pcie_bench,bandwidth_gb_s,unbaselined,701.415652,GB/s,higher,,unbaselined,,gpu-only-l4,35e5d522a9eb347f9960f8af084abd6b95448c84,
+suite,2026-11-09,l4,ep.bench.pcie_bench,,PASS,,,,,,4.479,gpu-only-l4,35e5d522a9eb347f9960f8af084abd6b95448c84,
+suite,2026-11-09,l4,nixl.internode.nccl,,PASS,,,,,,3.08,gpu-only-l4,35e5d522a9eb347f9960f8af084abd6b95448c84,
+metric,2026-11-08,l4,p2p.bandwidth,bandwidth_gbps,pass,376.16,Gbps,higher,342.396,hard,,42525401610,56cebace206777958d98bee4d5ff11cd16724b96,
+metric,2026-11-08,l4,p2p.bandwidth_gpu,bandwidth_gbps,pass,164.7,Gbps,higher,148.365,hard,,42525401610,56cebace206777958d98bee4d5ff11cd16724b96,
+metric,2026-11-09,l4,p2p.bench.nccl,bandwidth_gbps,pass,118.75,Gbps,higher,105.507,soft,,gpu-only-l4,35e5d522a9eb347f9960f8af084abd6b95448c84,Short 16-transfer NCCL run; unchanged-code verification measured 100.27 Gbps against a 105.507 Gbps threshold.
+suite,2026-11-09,l4,p2p.bench.nccl,,PASS,,,,,,4.885,gpu-only-l4,35e5d522a9eb347f9960f8af084abd6b95448c84,
+metric,2026-11-08,l4,p2p.bench.ray_p2p,read_bandwidth_gbps,pass,118.21,Gbps,higher,106.146,hard,,42525401610,56cebace206777958d98bee4d5ff11cd16724b96,
+metric,2026-11-08,l4,p2p.bench.ray_p2p,write_bandwidth_gbps,pass,145.13,Gbps,higher,139.284,hard,,42525401610,56cebace206777958d98bee4d5ff11cd16724b96,
+metric,2026-11-08,l4,p2p.bench.uccl_compression,bandwidth_gbps,pass,163.95,Gbps,higher,142.074,hard,,42525401610,56cebace206777958d98bee4d5ff11cd16724b96,
+suite,2026-11-09,l4,p2p.compression_unit,,PASS,,,,,,4.38,gpu-only-l4,35e5d522a9eb347f9960f8af084abd6b95448c84,
+suite,2026-11-09,l4,p2p.nccl.host_memory,,PASS,,,,,,2.734,gpu-only-l4,35e5d522a9eb347f9960f8af084abd6b95448c84,

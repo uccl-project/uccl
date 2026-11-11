@@ -32,10 +32,23 @@ def compare(value, baseline):
     return value >= limit if baseline["direction"] == "higher" else value <= limit
 
 
+def gate_policy(baseline):
+    gate = baseline.get("gate", "hard")
+    if gate not in {"hard", "soft"}:
+        raise ValueError("Baseline gate must be hard or soft")
+    reason = baseline.get("reason")
+    if gate == "soft" and (not isinstance(reason, str) or not reason.strip()):
+        raise ValueError("Soft performance gates require a reason")
+    return gate
+
+
 def evaluate(results_dir, baselines):
     catalog, _ = read_catalog()
     definitions = {t["id"]: t for t in catalog["tests"]}
-    measurements, failures = [], []
+    for baseline in baselines.values():
+        gate_policy(baseline)
+        threshold(baseline)
+    measurements, failures, warnings = [], [], []
     for path in sorted(results_dir.glob("*/results.json")):
         target = path.parent.name
         payload = json.loads(path.read_text())
@@ -68,11 +81,14 @@ def evaluate(results_dir, baselines):
                     continue
                 value = statistics.median(samples)
                 baseline = baselines.get(key)
+                gate = gate_policy(baseline) if baseline else "unbaselined"
                 status = (
                     "unbaselined"
                     if baseline is None
                     else ("pass" if compare(value, baseline) else "regression")
                 )
+                if status == "regression" and gate == "soft":
+                    status = "warning"
                 measurements.append(
                     {
                         "key": key,
@@ -81,12 +97,39 @@ def evaluate(results_dir, baselines):
                         "unit": metric["unit"],
                         "direction": metric["direction"],
                         "status": status,
+                        "gate": gate,
                         "threshold": threshold(baseline) if baseline else None,
                     }
                 )
-                if status == "regression":
-                    failures.append(f"{key}: {value} violates baseline {baseline}")
-    return {"measurements": measurements, "failures": failures}
+                if status in {"regression", "warning"}:
+                    message = (
+                        f"{key}: {value} {metric['unit']} violates {gate} threshold "
+                        f"{threshold(baseline):.6g} {metric['unit']}"
+                    )
+                    if status == "warning":
+                        warnings.append(f"{message}; {baseline['reason']}")
+                    else:
+                        failures.append(message)
+    return {"measurements": measurements, "failures": failures, "warnings": warnings}
+
+
+def candidate_baselines(measurements, baselines):
+    candidate = {}
+    for metric in measurements:
+        reviewed = baselines.get(metric["key"], {})
+        entry = {
+            "value": metric["value"],
+            "direction": metric["direction"],
+            "unit": metric["unit"],
+            "tolerance": reviewed.get("tolerance", 0.1),
+            "gate": gate_policy(reviewed) if reviewed else "soft",
+        }
+        if entry["gate"] == "soft":
+            entry["reason"] = reviewed.get(
+                "reason", "New metric; pending repeatable calibration and gate review."
+            )
+        candidate[metric["key"]] = entry
+    return candidate
 
 
 def main():
@@ -95,7 +138,7 @@ def main():
     parser.add_argument(
         "--baselines",
         type=Path,
-        default=Path(__file__).parent / "config" / "baselines.json",
+        default=Path(__file__).parent / "config" / "baseline.json",
     )
     parser.add_argument(
         "--candidate",
@@ -107,15 +150,7 @@ def main():
     report = evaluate(args.results, baseline)
     (args.results / "performance.json").write_text(json.dumps(report, indent=2))
     if args.candidate:
-        candidate = {
-            m["key"]: {
-                "value": m["value"],
-                "direction": m["direction"],
-                "unit": m["unit"],
-                "tolerance": 0.1,
-            }
-            for m in report["measurements"]
-        }
+        candidate = candidate_baselines(report["measurements"], baseline)
         args.candidate.write_text(
             json.dumps({"schema": 1, "baselines": candidate}, indent=2) + "\n"
         )

@@ -19,7 +19,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import catalog
 import idle
 import run as controller
-from performance import compare, evaluate
+from performance import candidate_baselines, compare, evaluate, gate_policy
+from performance import main as performance_main
 from process import run
 from report import report_results
 from run import Worker, collect_results, write_summary
@@ -348,7 +349,8 @@ class AdmissionTests(unittest.TestCase):
                 "performance.read_catalog", return_value=({"tests": [{"id": "t"}]}, {})
             ):
                 self.assertEqual(
-                    evaluate(root, {}), {"measurements": [], "failures": []}
+                    evaluate(root, {}),
+                    {"measurements": [], "failures": [], "warnings": []},
                 )
             output = io.StringIO()
             with redirect_stdout(output):
@@ -606,6 +608,158 @@ class ProcessTests(unittest.TestCase):
 
 
 class PerformanceTests(unittest.TestCase):
+    def test_hard_and_soft_gate_exit_status_and_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "gh200"
+            target.mkdir()
+            name = "p2p.bench.nccl"
+            key = f"gh200/{name}/bandwidth_gbps"
+            (target / "results.json").write_text(
+                json.dumps(
+                    dict(
+                        results=[
+                            dict(id=name, tier="performance", exit_code=0, seconds=1)
+                        ]
+                    )
+                )
+            )
+            (target / f"{name}.log").write_text("[Client] 1 MiB : 67.37 Gbps\n")
+            baseline_file = root / "baseline.json"
+            candidate_file = root / "candidate.json"
+            for gate, code, status in [
+                ("hard", 1, "regression"),
+                ("soft", 0, "warning"),
+            ]:
+                with self.subTest(gate=gate):
+                    baseline = dict(
+                        value=79.71,
+                        direction="higher",
+                        tolerance=0.1,
+                        gate=gate,
+                        reason="Short, noisy calibration.",
+                    )
+                    baseline_file.write_text(
+                        json.dumps(dict(baselines={key: baseline}))
+                    )
+                    args = [
+                        "performance.py",
+                        str(root),
+                        "--baselines",
+                        str(baseline_file),
+                        "--candidate",
+                        str(candidate_file),
+                    ]
+                    with (
+                        patch.object(sys, "argv", args),
+                        redirect_stdout(io.StringIO()),
+                    ):
+                        self.assertEqual(performance_main(), code)
+                    result = json.loads((root / "performance.json").read_text())
+                    metric = result["measurements"][0]
+                    self.assertEqual(metric["status"], status)
+                    self.assertEqual(metric["gate"], gate)
+                    self.assertAlmostEqual(metric["threshold"], 71.739)
+                    self.assertEqual(bool(result["failures"]), gate == "hard")
+                    self.assertEqual(bool(result["warnings"]), gate == "soft")
+                    candidate = json.loads(candidate_file.read_text())["baselines"][key]
+                    self.assertEqual(candidate["gate"], gate)
+                    self.assertEqual(
+                        json.loads(baseline_file.read_text())["baselines"][key],
+                        baseline,
+                    )
+                    output = io.StringIO()
+                    with redirect_stdout(output):
+                        report_results(root)
+                    self.assertIn(
+                        "advisory" if gate == "soft" else "required", output.getvalue()
+                    )
+                    self.assertIn(
+                        "WARNING:" if gate == "soft" else "FAILED:", output.getvalue()
+                    )
+
+    def test_soft_latency_warns_only_above_limit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "gb10"
+            target.mkdir()
+            name = "ep.bench.gpu_to_cpu_bench"
+            (target / "results.json").write_text(
+                json.dumps(
+                    dict(results=[dict(id=name, tier="performance", exit_code=0)])
+                )
+            )
+            baselines = {
+                f"gb10/{name}/latency_us": dict(
+                    value=1,
+                    direction="lower",
+                    gate="soft",
+                    reason="Short latency probe.",
+                )
+            }
+            for value, status in [(1, "pass"), (2, "warning")]:
+                (target / f"{name}.log").write_text(
+                    f"Block 0: Average latency = {value} us over 1000 iterations\n"
+                )
+                result = evaluate(root, baselines)
+                self.assertEqual(result["measurements"][0]["status"], status)
+                self.assertFalse(result["failures"])
+                self.assertEqual(bool(result["warnings"]), status == "warning")
+
+    def test_soft_gate_does_not_hide_benchmark_or_measurement_failures(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "gh200"
+            target.mkdir()
+            name = "p2p.bench.nccl"
+            baselines = {
+                f"gh200/{name}/bandwidth_gbps": dict(
+                    value=100,
+                    direction="higher",
+                    gate="soft",
+                    reason="Short benchmark.",
+                )
+            }
+            cases = [
+                (0, None, ""),
+                (0, None, "0"),
+                (0, None, "nan"),
+                (0, None, "inf"),
+                (1, None, "80"),
+                (0, "SSH disconnected", "80"),
+            ]
+            for code, error, value in cases:
+                with self.subTest(code=code, error=error, value=value):
+                    (target / "results.json").write_text(
+                        json.dumps(
+                            dict(
+                                results=[
+                                    dict(id=name, tier="performance", exit_code=code)
+                                ],
+                                infrastructure_error=error,
+                            )
+                        )
+                    )
+                    (target / f"{name}.log").write_text(
+                        f"[Client] 1 MiB : {value} Gbps\n"
+                    )
+                    self.assertTrue(evaluate(root, baselines)["failures"])
+
+    def test_gate_validation_and_new_candidate_requires_review(self):
+        self.assertEqual(gate_policy({}), "hard")
+        for baseline in [
+            dict(gate="sof"),
+            dict(gate="soft"),
+            dict(gate="soft", reason=" "),
+            dict(gate="soft", reason=123),
+        ]:
+            with self.subTest(baseline=baseline), self.assertRaises(ValueError):
+                gate_policy(baseline)
+        metric = dict(key="gpu/new/bw", value=100, direction="higher", unit="Gbps")
+        candidate = candidate_baselines([metric], {})[metric["key"]]
+        self.assertEqual(candidate["gate"], "soft")
+        self.assertIn("review", candidate["reason"])
+
     def test_ring_benchmarks_compare_the_same_configuration(self):
         fixtures = {
             "ep.rb.cas": "Warps: 64, Rings: 4, Proxies: 4, Throughput: 99 Mops/sec\nWarps: 128, Rings: 4, Proxies: 4, Throughput: 1.2 Mops/sec\nWarps: 128, Rings: 8, Proxies: 8, Throughput: 99 Mops/sec\n",
