@@ -15,6 +15,11 @@ CPU tests and orchestrates GPU jobs over SSH as `uccl`, using local
 | `gb10` | `gb10_0`, `gb10_1` | 1 GB10/node, RoCE, CUDA 13.0 | Host-staged EP/P2P and NIXL |
 | `amd` | Offline | ROCm | Disabled; worker support needs validation |
 
+CPU setup adds kernel.org, when reachable, as the preferred entry in the runner's
+`/etc/apt/apt-mirrors.txt`, retaining its default fallback mirrors. APT uses
+bounded retries/timeouts and an eight-minute step limit. Setup output is saved
+in the job log and the `ci-cpu` artifact as `cpu-setup.log`.
+
 Both GH200 nodes are provisioned and reachable as of 2026-11-09; both RDMA ports
 report active 400G links. Single-node suites use `gh200_1`; two-node suites
 require both. Link rate is not application throughput. Per-host interfaces and
@@ -53,11 +58,6 @@ Full selection before changed-file filtering:
 Target counts overlap. All 34 CPU suites run on GitHub. Seven protocol suites
 install pinned CUDA headers/runtime for compilation, without requiring a GPU or
 driver. No standalone build-tier entries are enabled.
-
-CPU setup adds kernel.org, when reachable, as the preferred entry in the runner's
-`/etc/apt/apt-mirrors.txt`, retaining its default fallback mirrors. APT uses
-bounded retries/timeouts and an eight-minute step limit. Setup output is saved
-in the job log and the `ci-cpu` artifact as `cpu-setup.log`.
 
 All 62 entries under `examples/` and `experimental/` are disabled, including
 GIN fixtures built through the experimental tree. The remaining 33 exclusions
