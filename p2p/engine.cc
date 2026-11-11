@@ -11,6 +11,7 @@
 #include <arpa/inet.h>
 #include <cc/cc_state.h>
 #include <netinet/in.h>
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -1065,80 +1066,56 @@ bool Endpoint::run_raw_one_sided_pipeline(
     std::vector<P2PMhandle*> const& mhandle_v,
     std::vector<void*> const& local_addr_v, std::vector<size_t> const& size_v,
     std::vector<FifoItem> const& slot_item_v, size_t num_iovs) {
-  struct PendingRawWait {
-    SendConnection::RawBatchWait wait;
-    bool active = false;
-  };
-
-  std::array<PendingRawWait, kMaxInflightOps> pending_waits{};
+  std::array<SendConnection::RawBatchWait, kMaxInflightOps> pending_waits{};
   size_t const max_inflight_ops = max_one_sided_inflight_ops();
   size_t next_iov = 0;
-  size_t num_completed = 0;
   size_t num_inflight = 0;
+  size_t num_pending = 0;
+  bool post_ok = true;
 
-  auto post_raw_window = [&]() -> bool {
-    if (next_iov >= num_iovs || num_inflight >= max_inflight_ops) return true;
-
+  for (;;) {
     size_t const batch_iovs =
-        std::min<size_t>(max_inflight_ops - num_inflight, num_iovs - next_iov);
-    std::array<SendConnection::OneSidedBatchOp, kMaxInflightOps> ops{};
-    int64_t wr_ids[kMaxInflightOps] = {};
-    std::array<SendConnection::RawBatchWait, kMaxInflightOps> waits{};
-    size_t num_waits = 0;
-
-    for (size_t i = 0; i < batch_iovs; ++i) {
-      size_t const iov = next_iov + i;
-      ops[i].local_addr = local_addr_v[iov];
-      ops[i].size = size_v[iov];
-      ops[i].local_mr_array = &mhandle_v[iov]->mr_array;
-      ops[i].slot_item = &slot_item_v[iov];
-    }
-
-    if (!send_group->post_write_or_read_batch(send_type, ops.data(), batch_iovs,
-                                              wr_ids, waits.data(),
-                                              &num_waits)) {
-      return false;
-    }
-    if (unlikely(num_waits == 0)) return false;
-
-    for (size_t i = 0; i < num_waits; ++i) {
-      bool inserted = false;
-      for (auto& pending : pending_waits) {
-        if (pending.active) continue;
-        pending.wait = waits[i];
-        pending.active = true;
-        inserted = true;
-        break;
+        std::min(max_inflight_ops - num_inflight, num_iovs - next_iov);
+    if (post_ok && batch_iovs != 0) {
+      std::array<SendConnection::OneSidedBatchOp, kMaxInflightOps> ops{};
+      int64_t wr_ids[kMaxInflightOps];
+      for (size_t i = 0; i < batch_iovs; ++i) {
+        size_t const iov = next_iov + i;
+        ops[i].local_addr = local_addr_v[iov];
+        ops[i].size = size_v[iov];
+        ops[i].local_mr_array = &mhandle_v[iov]->mr_array;
+        ops[i].slot_item = &slot_item_v[iov];
       }
-      if (unlikely(!inserted)) return false;
+
+      // Each wait covers at least one IOV, so the tail can hold this window.
+      size_t num_waits = 0;
+      post_ok = send_group->post_write_or_read_batch(
+                    send_type, ops.data(), batch_iovs, wr_ids,
+                    pending_waits.data() + num_pending, &num_waits) &&
+                num_waits != 0;
+      if (post_ok) {
+        num_pending += num_waits;
+        next_iov += batch_iovs;
+        num_inflight += batch_iovs;
+      }
     }
 
-    next_iov += batch_iovs;
-    num_inflight += batch_iovs;
-    return true;
-  };
-
-  while (num_completed < num_iovs) {
-    while (next_iov < num_iovs && num_inflight < max_inflight_ops) {
-      if (!post_raw_window()) return false;
-    }
+    // A rejected window leaves earlier DMA in flight until its waits retire.
+    if (num_pending == 0) return post_ok;
 
     auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
     uccl_drive_send(ep_);
-
-    for (auto& pending : pending_waits) {
-      if (!pending.active) continue;
-      if (!uccl_check_wr_fast(send_group, pending.wait.wr_id)) continue;
-
-      pending.active = false;
-      num_completed += pending.wait.iov_count;
-      UCCL_DCHECK(num_inflight >= pending.wait.iov_count);
-      num_inflight -= pending.wait.iov_count;
-      pending.wait = {};
-    }
+    auto end = std::remove_if(pending_waits.begin(),
+                              pending_waits.begin() + num_pending,
+                              [&](SendConnection::RawBatchWait const& wait) {
+                                if (!uccl_check_wr_fast(send_group, wait.wr_id))
+                                  return false;
+                                UCCL_DCHECK(num_inflight >= wait.iov_count);
+                                num_inflight -= wait.iov_count;
+                                return true;
+                              });
+    num_pending = end - pending_waits.begin();
   }
-
-  return true;
 }
 
 bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
