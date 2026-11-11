@@ -54,7 +54,7 @@ Target counts overlap. All 34 CPU suites run on GitHub. Seven protocol suites
 install pinned CUDA headers/runtime for compilation, without requiring a GPU or
 driver. No standalone build-tier entries are enabled.
 
-CPU setup adds kernel.org as the preferred entry in the runner's
+CPU setup adds kernel.org, when reachable, as the preferred entry in the runner's
 `/etc/apt/apt-mirrors.txt`, retaining its default fallback mirrors. APT uses
 bounded retries/timeouts and an eight-minute step limit. Setup output is saved
 in the job log and the `ci-cpu` artifact as `cpu-setup.log`.

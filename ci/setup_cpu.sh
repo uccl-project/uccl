@@ -10,7 +10,12 @@ if ! grep -Fq 'mirror+file:/etc/apt/apt-mirrors.txt' /etc/apt/sources.list.d/ubu
 fi
 mirror=$'https://mirrors.edge.kernel.org/ubuntu/\tpriority:0'
 if ! grep -Fxq "$mirror" /etc/apt/apt-mirrors.txt; then
-  printf '%s\n' "$mirror" | sudo tee -a /etc/apt/apt-mirrors.txt
+  if curl --fail --silent --show-error --connect-timeout 5 --max-time 10 \
+      --output /dev/null https://mirrors.edge.kernel.org/ubuntu/dists/noble/InRelease; then
+    printf '%s\n' "$mirror" | sudo tee -a /etc/apt/apt-mirrors.txt
+  else
+    echo '::warning::Preferred Ubuntu mirror is unreachable; using the runner defaults.'
+  fi
 fi
 
 apt_options=(-o Acquire::Retries=1
