@@ -21,6 +21,12 @@ __global__ void clear_dispatch_layout_counts(int* num_tokens_per_expert,
     num_tokens_per_rdma_rank[index] = 0;
 }
 
+// Multiplying a nibble by 1 + 2^7 + 2^14 + 2^21 places bit i at bit
+// 8*i. Keep the low bit of each byte for the dense bool output.
+__device__ __forceinline__ uint32_t expand_rank_nibble(uint32_t bits) {
+  return ((bits & 0xfu) * 0x204081u) & 0x01010101u;
+}
+
 __global__ void get_dispatch_layout_histogram(int64_t const* topk_idx,
                                               int* num_tokens_per_expert,
                                               int* num_tokens_per_rank,
@@ -47,20 +53,27 @@ __global__ void get_dispatch_layout_histogram(int64_t const* topk_idx,
         rank_mask[rank_idx / 64] |= uint64_t{1} << (rank_idx % 64);
       }
     }
-    for (int rank_idx = 0; rank_idx < num_ranks; ++rank_idx) {
-      bool present = (rank_mask[rank_idx / 64] >> (rank_idx % 64)) & 1;
-      is_token_in_rank[token_idx * num_ranks + rank_idx] = present;
-      if (present) atomicAdd(partial_counts + num_experts + rank_idx, 1);
-    }
-    for (int rdma_rank_idx = 0; rdma_rank_idx < num_rdma_ranks;
-         ++rdma_rank_idx) {
-      bool present = false;
-      for (int peer = 0; peer < NUM_MAX_NVL_PEERS; ++peer) {
-        int rank_idx = rdma_rank_idx * NUM_MAX_NVL_PEERS + peer;
-        present |= (rank_mask[rank_idx / 64] >> (rank_idx % 64)) & 1;
+    bool* membership =
+        is_token_in_rank + static_cast<size_t>(token_idx) * num_ranks;
+    // Eight adjacent rank bits also describe one RDMA rank on this path.
+    for (int first = 0; first < num_ranks; first += 8) {
+      uint32_t mask = (rank_mask[first / 64] >> (first % 64)) & 0xffu;
+      bool* dst = membership + first;
+      if (first + 8 <= num_ranks &&
+          reinterpret_cast<uintptr_t>(dst) % alignof(uint64_t) == 0) {
+        uint64_t packed = (uint64_t{expand_rank_nibble(mask >> 4)} << 32) |
+                          expand_rank_nibble(mask);
+        __builtin_memcpy(__builtin_assume_aligned(dst, alignof(uint64_t)),
+                         &packed, sizeof(packed));
+      } else {
+        for (int i = 0; i < min(8, num_ranks - first); ++i)
+          dst[i] = (mask >> i) & 1;
       }
-      if (present)
-        atomicAdd(partial_counts + num_experts + num_ranks + rdma_rank_idx, 1);
+
+      if (num_rdma_ranks && mask)
+        atomicAdd(partial_counts + num_experts + num_ranks + first / 8, 1);
+      for (; mask; mask &= mask - 1)
+        atomicAdd(partial_counts + num_experts + first + (__ffs(mask) - 1), 1);
     }
   }
   __syncthreads();
