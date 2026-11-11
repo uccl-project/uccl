@@ -14,15 +14,18 @@ Run on the "acceptor" machine (owns the buffer being written to / read from):
 Run on the "initiator" machine, pointing at the acceptor's rendezvous IP:
     python3 test_cross_node_rdma_native.py --role initiator --peer-ip <acceptor_ip> --mode write
     python3 test_cross_node_rdma_native.py --role initiator --peer-ip <acceptor_ip> --mode read
+
+Run the same script revision on both peers. Use --mode readv-reject with the
+RDMA or EFA transport to check a rejected second window.
 """
 
 from __future__ import annotations
 import argparse
 import ctypes
+import os
 import socket
 import struct
 import sys
-import time
 from typing import Tuple
 
 try:
@@ -34,6 +37,7 @@ except ImportError as e:
 DEFAULT_RENDEZVOUS_PORT = 29500
 NUM_FLOATS = 1024
 NBYTES = NUM_FLOATS * 4
+READV_WINDOW = 8
 
 
 from native_runtime import Rt as NativeRuntime
@@ -105,7 +109,8 @@ def run_acceptor(mode: str, rendezvous_port: int, gpu_idx: int) -> None:
     send_blob(conn, bytes(fifo_blob))
     print(f"[Acceptor] buffer exposed for RDMA {mode.upper()}, waiting for completion")
 
-    time.sleep(5)
+    if recv_exact(conn, 1) != b"D":
+        raise RuntimeError("Expected transfer completion from the initiator")
     values = rt.read_first8(dev_ptr)
     print("buffer[:8]:", values)
     if mode == "write":
@@ -116,6 +121,8 @@ def run_acceptor(mode: str, rendezvous_port: int, gpu_idx: int) -> None:
             "✓ Acceptor buffer exposed for remote RDMA-READ (no local mutation expected)"
         )
 
+    if not ep.dereg(mr_id):
+        raise RuntimeError("Failed to deregister the transfer buffer")
     rt.free(dev_ptr)
     conn.close()
     lsock.close()
@@ -153,6 +160,19 @@ def run_initiator(mode: str, peer_ip: str, rendezvous_port: int, gpu_idx: int) -
         ok = ep.write(conn_id, mr_id, dev_ptr.value, NBYTES, fifo_meta)
         assert ok, "write failed"
         print("✓ Initiator RDMA-WRITE completed")
+    elif mode == "readv-reject":
+        word = ctypes.sizeof(ctypes.c_float)
+        ptrs = [dev_ptr.value + i * word for i in range(READV_WINDOW)] + [0]
+        count = len(ptrs)
+        if ep.readv(
+            conn_id, [mr_id] * count, ptrs, [word] * count, [fifo_meta] * count, count
+        ):
+            raise RuntimeError("readv accepted a null destination in the second window")
+        values = rt.read_first8(dev_ptr)
+        if values != [1.0] * READV_WINDOW:
+            raise RuntimeError(
+                f"readv returned before its first window completed: {values}"
+            )
     else:
         ok = ep.read(conn_id, mr_id, dev_ptr.value, NBYTES, fifo_meta)
         assert ok, "read failed"
@@ -161,7 +181,9 @@ def run_initiator(mode: str, peer_ip: str, rendezvous_port: int, gpu_idx: int) -
         assert all(abs(v - 1.0) < 1e-5 for v in values), values
         print("✓ Initiator RDMA-READ completed and data verified")
 
-    time.sleep(2)
+    sock.sendall(b"D")
+    if not ep.dereg(mr_id):
+        raise RuntimeError("Failed to deregister the transfer buffer")
     rt.free(dev_ptr)
     sock.close()
 
@@ -171,7 +193,9 @@ def main() -> None:
         description="Cross-node UCCL P2P RDMA test (torch-free)"
     )
     parser.add_argument("--role", choices=["acceptor", "initiator"], required=True)
-    parser.add_argument("--mode", choices=["write", "read"], required=True)
+    parser.add_argument(
+        "--mode", choices=["write", "read", "readv-reject"], required=True
+    )
     parser.add_argument("--peer-ip", default=None, help="Required for --role initiator")
     parser.add_argument("--rendezvous-port", type=int, default=DEFAULT_RENDEZVOUS_PORT)
     parser.add_argument("--gpu", type=int, default=0, help="Local GPU index to use")
@@ -179,6 +203,12 @@ def main() -> None:
 
     if args.role == "initiator" and not args.peer_ip:
         parser.error("--peer-ip is required when --role initiator")
+
+    if args.mode == "readv-reject":
+        if os.environ.get("UCCL_P2P_TRANSPORT", "rdma") not in {"rdma", "ib", "efa"}:
+            parser.error("readv-reject requires the RDMA or EFA transport")
+        os.environ["UCCL_P2P_RDMA_CC"] = "none"
+        os.environ["UCCL_P2P_MAX_INFLIGHT_OPS"] = str(READV_WINDOW)
 
     if args.role == "acceptor":
         run_acceptor(args.mode, args.rendezvous_port, args.gpu)
