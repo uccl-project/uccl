@@ -28,7 +28,7 @@ jobs:
               owner, repo, workflow_id: 'ci.yml', ref: context.payload.repository.default_branch,
               inputs: {
                 targets: match[2] === 'all' ? '' : match[2], tests: match[3] || '',
-                tiers: match[1] === 'run-benchmark' ? 'performance' : 'host,build,integration',
+                tiers: match[1] === 'run-benchmark' ? 'performance' : 'cpu,build,integration',
                 sha: pr.head.sha, head_repo: pr.head.repo.full_name,
               },
             });

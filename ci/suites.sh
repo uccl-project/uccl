@@ -2,14 +2,14 @@
 set -euo pipefail
 suite=${1:?suite required}
 name=${2:-}
-if [[ $CI_TARGET == cpu && ( $suite == scalar-host || $suite == sack-host ) ]]; then
-  sdk="$CI_DEPS/host-cuda-12.8/nvidia"
+if [[ $CI_TARGET == cpu && ( $suite == scalar-cpu || $suite == sack-cpu ) ]]; then
+  sdk="$CI_DEPS/cpu-cuda-12.8/nvidia"
   export CUDA_HOME="$sdk/cuda_runtime"
   export CPATH="$sdk/cuda_nvcc/include:$sdk/cuda_cccl/include${CPATH:+:$CPATH}"
   export LD_LIBRARY_PATH="$CUDA_HOME/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 fi
 case $suite in
-  sack-host)
+  sack-cpu)
     make -C collective/tests -j"$CI_JOBS" CUDA_HOME="$CUDA_HOME" test
     ;;
   rdma-test)
@@ -47,7 +47,7 @@ case $suite in
     esac
     exec python3 "tests/elastic/test_${name}.py" "${args[@]}"
     ;;
-  scalar-host)
+  scalar-cpu)
     family=${name%%.*}; binary=${name#*.}
     extra=()
     [[ $binary != util_lrpc ]] || extra=("collective/$family/util_lrpc.cc")

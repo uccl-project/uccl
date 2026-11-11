@@ -4,7 +4,7 @@
     {
       "id": "ci.selftest",
       "enabled": true,
-      "tier": "host",
+      "tier": "cpu",
       "sources": [
         "ci/tests/test_ci.py"
       ],
@@ -24,11 +24,11 @@
       "command": "python3 -m unittest discover -s ci/tests -v"
     },
     {
-      "id": "p2p.host.backend_build",
+      "id": "p2p.cpu.backend_build",
       "sources": [
         "p2p/tests/test_backend_build.py"
       ],
-      "tier": "host",
+      "tier": "cpu",
       "enabled": true,
       "targets": [
         "cpu"
@@ -45,11 +45,11 @@
       "command": "python3 -m pytest -q p2p/tests/test_backend_build.py --junitxml=\"$CI_TEST_JUNIT\""
     },
     {
-      "id": "p2p.host.backend_config",
+      "id": "p2p.cpu.backend_config",
       "sources": [
         "p2p/tests/test_backend_config.py"
       ],
-      "tier": "host",
+      "tier": "cpu",
       "enabled": true,
       "targets": [
         "cpu"
@@ -66,11 +66,11 @@
       "command": "python3 -m pytest -q p2p/tests/test_backend_config.py --junitxml=\"$CI_TEST_JUNIT\""
     },
     {
-      "id": "p2p.host.cnrt_staging",
+      "id": "p2p.cpu.cnrt_staging",
       "sources": [
         "p2p/tests/test_cnrt_staging.py"
       ],
-      "tier": "host",
+      "tier": "cpu",
       "enabled": true,
       "targets": [
         "cpu"
@@ -87,11 +87,11 @@
       "command": "python3 -m pytest -q p2p/tests/test_cnrt_staging.py --junitxml=\"$CI_TEST_JUNIT\""
     },
     {
-      "id": "p2p.host.dmabuf_export",
+      "id": "p2p.cpu.dmabuf_export",
       "sources": [
         "p2p/tests/test_dmabuf_export.py"
       ],
-      "tier": "host",
+      "tier": "cpu",
       "enabled": true,
       "targets": [
         "cpu"
@@ -108,11 +108,11 @@
       "command": "python3 -m pytest -q p2p/tests/test_dmabuf_export.py --junitxml=\"$CI_TEST_JUNIT\""
     },
     {
-      "id": "p2p.host.endpoint_wrapper",
+      "id": "p2p.cpu.endpoint_wrapper",
       "sources": [
         "p2p/tests/test_endpoint_wrapper.py"
       ],
-      "tier": "host",
+      "tier": "cpu",
       "enabled": true,
       "targets": [
         "cpu"
@@ -129,11 +129,11 @@
       "command": "python3 -m pytest -q p2p/tests/test_endpoint_wrapper.py --junitxml=\"$CI_TEST_JUNIT\""
     },
     {
-      "id": "p2p.host.gpu_ipc_export",
+      "id": "p2p.cpu.gpu_ipc_export",
       "sources": [
         "p2p/tests/test_gpu_ipc_export.py"
       ],
-      "tier": "host",
+      "tier": "cpu",
       "enabled": true,
       "targets": [
         "cpu"
@@ -150,11 +150,11 @@
       "command": "python3 -m pytest -q p2p/tests/test_gpu_ipc_export.py --junitxml=\"$CI_TEST_JUNIT\""
     },
     {
-      "id": "p2p.host.musa_backend",
+      "id": "p2p.cpu.musa_backend",
       "sources": [
         "p2p/tests/test_musa_backend.py"
       ],
-      "tier": "host",
+      "tier": "cpu",
       "enabled": true,
       "targets": [
         "cpu"
@@ -171,11 +171,11 @@
       "command": "python3 -m pytest -q p2p/tests/test_musa_backend.py --junitxml=\"$CI_TEST_JUNIT\""
     },
     {
-      "id": "p2p.host.native_runtime",
+      "id": "p2p.cpu.native_runtime",
       "sources": [
         "p2p/tests/test_native_runtime.py"
       ],
-      "tier": "host",
+      "tier": "cpu",
       "enabled": true,
       "targets": [
         "cpu"
@@ -192,11 +192,11 @@
       "command": "python3 -m pytest -q p2p/tests/test_native_runtime.py --junitxml=\"$CI_TEST_JUNIT\""
     },
     {
-      "id": "p2p.host.nccl_completion",
+      "id": "p2p.cpu.nccl_completion",
       "sources": [
         "p2p/tests/test_nccl_completion.py"
       ],
-      "tier": "host",
+      "tier": "cpu",
       "enabled": true,
       "targets": [
         "cpu"
@@ -213,11 +213,11 @@
       "command": "python3 -m pytest -q p2p/tests/test_nccl_completion.py --junitxml=\"$CI_TEST_JUNIT\""
     },
     {
-      "id": "p2p.host.p800_device_transfer_control",
+      "id": "p2p.cpu.p800_device_transfer_control",
       "sources": [
         "p2p/tests/test_p800_device_transfer_control.py"
       ],
-      "tier": "host",
+      "tier": "cpu",
       "enabled": true,
       "targets": [
         "cpu"
@@ -234,11 +234,11 @@
       "command": "python3 -m pytest -q p2p/tests/test_p800_device_transfer_control.py --junitxml=\"$CI_TEST_JUNIT\""
     },
     {
-      "id": "p2p.host.python_signals",
+      "id": "p2p.cpu.python_signals",
       "sources": [
         "p2p/tests/test_python_signals.py"
       ],
-      "tier": "host",
+      "tier": "cpu",
       "enabled": true,
       "targets": [
         "cpu"
@@ -255,11 +255,11 @@
       "command": "python3 -m pytest -q p2p/tests/test_python_signals.py --junitxml=\"$CI_TEST_JUNIT\""
     },
     {
-      "id": "p2p.host.transport_factory",
+      "id": "p2p.cpu.transport_factory",
       "sources": [
         "p2p/tests/test_transport_factory.py"
       ],
-      "tier": "host",
+      "tier": "cpu",
       "enabled": true,
       "targets": [
         "cpu"
@@ -276,11 +276,11 @@
       "command": "python3 -m pytest -q p2p/tests/test_transport_factory.py --junitxml=\"$CI_TEST_JUNIT\""
     },
     {
-      "id": "p2p.host.util_interval_tree",
+      "id": "p2p.cpu.util_interval_tree",
       "sources": [
         "p2p/tests/test_util_interval_tree.py"
       ],
-      "tier": "host",
+      "tier": "cpu",
       "enabled": true,
       "targets": [
         "cpu"
@@ -297,11 +297,11 @@
       "command": "python3 -m pytest -q p2p/tests/test_util_interval_tree.py --junitxml=\"$CI_TEST_JUNIT\""
     },
     {
-      "id": "ep.host.runtime_config",
+      "id": "ep.cpu.runtime_config",
       "sources": [
         "ep/tests/test_runtime_config.py"
       ],
-      "tier": "host",
+      "tier": "cpu",
       "enabled": true,
       "targets": [
         "cpu"
@@ -318,11 +318,11 @@
       "command": "python3 -m pytest -q ep/tests/test_runtime_config.py --junitxml=\"$CI_TEST_JUNIT\""
     },
     {
-      "id": "ep.host.buffer_compatibility",
+      "id": "ep.cpu.buffer_compatibility",
       "sources": [
         "ep/deep_ep_wrapper/tests/test_buffer_compatibility.py"
       ],
-      "tier": "host",
+      "tier": "cpu",
       "enabled": true,
       "targets": [
         "cpu"
@@ -339,11 +339,11 @@
       "command": "python3 -m pytest -q ep/deep_ep_wrapper/tests/test_buffer_compatibility.py --junitxml=\"$CI_TEST_JUNIT\""
     },
     {
-      "id": "ep.host.event_handle",
+      "id": "ep.cpu.event_handle",
       "sources": [
         "ep/deep_ep_wrapper/tests/test_event_handle.py"
       ],
-      "tier": "host",
+      "tier": "cpu",
       "enabled": true,
       "targets": [
         "cpu"
@@ -360,11 +360,11 @@
       "command": "python3 -m pytest -q ep/deep_ep_wrapper/tests/test_event_handle.py -k records_on_current_stream --junitxml=\"$CI_TEST_JUNIT\""
     },
     {
-      "id": "mccl.host.mccl_abi",
+      "id": "mccl.cpu.mccl_abi",
       "sources": [
         "collective/mccl/test_mccl_abi.py"
       ],
-      "tier": "host",
+      "tier": "cpu",
       "enabled": true,
       "targets": [
         "cpu"
@@ -381,11 +381,11 @@
       "command": "python3 collective/mccl/test_mccl_abi.py"
     },
     {
-      "id": "mccl.host.mccl_collectives",
+      "id": "mccl.cpu.mccl_collectives",
       "sources": [
         "collective/mccl/test_mccl_collectives.py"
       ],
-      "tier": "host",
+      "tier": "cpu",
       "enabled": true,
       "targets": [
         "cpu"
@@ -402,11 +402,11 @@
       "command": "python3 collective/mccl/test_mccl_collectives.py"
     },
     {
-      "id": "mccl.host.mccl_plugin_behavior",
+      "id": "mccl.cpu.mccl_plugin_behavior",
       "sources": [
         "collective/mccl/test_mccl_plugin_behavior.py"
       ],
-      "tier": "host",
+      "tier": "cpu",
       "enabled": true,
       "targets": [
         "cpu"
@@ -423,11 +423,11 @@
       "command": "python3 collective/mccl/test_mccl_plugin_behavior.py"
     },
     {
-      "id": "mccl.host.mccl_plugin_contract",
+      "id": "mccl.cpu.mccl_plugin_contract",
       "sources": [
         "collective/mccl/test_mccl_plugin_contract.py"
       ],
-      "tier": "host",
+      "tier": "cpu",
       "enabled": true,
       "targets": [
         "cpu"
@@ -448,7 +448,7 @@
       "sources": [
         "scripts/test_build_apptainer_gpu_flags.sh"
       ],
-      "tier": "host",
+      "tier": "cpu",
       "enabled": true,
       "targets": [
         "cpu"
@@ -469,7 +469,7 @@
       "sources": [
         "include/util/gpu_topology_test.cc"
       ],
-      "tier": "host",
+      "tier": "cpu",
       "enabled": true,
       "targets": [
         "cpu"
@@ -486,11 +486,11 @@
       "command": "make -C p2p test_gpu_topology PYTHON=/nonexistent/ci-python && ./p2p/test_gpu_topology"
     },
     {
-      "id": "ep.host.rdma_addressing",
+      "id": "ep.cpu.rdma_addressing",
       "sources": [
         "ep/tests/rdma_addressing_test.cpp"
       ],
-      "tier": "host",
+      "tier": "cpu",
       "enabled": true,
       "targets": [
         "cpu"
@@ -507,11 +507,11 @@
       "command": "make -C ep/tests test HOST_TEST_INCLUDES=-I../include"
     },
     {
-      "id": "p2p.host.notify_serde",
+      "id": "p2p.cpu.notify_serde",
       "sources": [
         "p2p/tests/test_notify_serde.cc"
       ],
-      "tier": "host",
+      "tier": "cpu",
       "enabled": true,
       "targets": [
         "cpu"
@@ -528,11 +528,11 @@
       "command": "g++ -std=c++17 -O2 -pthread -Ip2p -Ip2p/util -Iinclude p2p/tests/test_notify_serde.cc -o \"$CI_ARTIFACTS/notify_serde\" && \"$CI_ARTIFACTS/notify_serde\""
     },
     {
-      "id": "p2p.host.epoll_client",
+      "id": "p2p.cpu.epoll_client",
       "sources": [
         "p2p/tests/test_epoll_client.cc"
       ],
-      "tier": "host",
+      "tier": "cpu",
       "enabled": true,
       "targets": [
         "cpu"
@@ -549,11 +549,11 @@
       "command": "g++ -std=c++17 -O2 -pthread -Ip2p -Ip2p/util -Iinclude p2p/tests/test_epoll_client.cc p2p/util/epoll_client.cc -o \"$CI_ARTIFACTS/epoll_client\" && \"$CI_ARTIFACTS/epoll_client\""
     },
     {
-      "id": "p2p.host.epoll_server",
+      "id": "p2p.cpu.epoll_server",
       "sources": [
         "p2p/tests/test_epoll_server.cc"
       ],
-      "tier": "host",
+      "tier": "cpu",
       "enabled": true,
       "targets": [
         "cpu"
@@ -1428,7 +1428,7 @@
       "sources": [
         "collective/tests/sack_bitmap_test.cc"
       ],
-      "tier": "host",
+      "tier": "cpu",
       "enabled": true,
       "targets": [
         "cpu"
@@ -1442,9 +1442,9 @@
       "nodes": 1,
       "gpus": 0,
       "timeout": 180,
-      "command": "bash ci/suites.sh sack-host",
+      "command": "bash ci/suites.sh sack-cpu",
       "setup": [
-        "host-cuda-headers"
+        "cpu-cuda-headers"
       ]
     },
     {
@@ -2634,7 +2634,7 @@
       "sources": [
         "collective/afxdp/timely_test.cc"
       ],
-      "tier": "host",
+      "tier": "cpu",
       "enabled": true,
       "targets": [
         "cpu"
@@ -2648,9 +2648,9 @@
       "nodes": 1,
       "gpus": 0,
       "timeout": 300,
-      "command": "bash ci/suites.sh scalar-host afxdp.timely",
+      "command": "bash ci/suites.sh scalar-cpu afxdp.timely",
       "setup": [
-        "host-cuda-headers"
+        "cpu-cuda-headers"
       ]
     },
     {
@@ -2658,7 +2658,7 @@
       "sources": [
         "collective/afxdp/timing_wheel_test.cc"
       ],
-      "tier": "host",
+      "tier": "cpu",
       "enabled": true,
       "targets": [
         "cpu"
@@ -2672,9 +2672,9 @@
       "nodes": 1,
       "gpus": 0,
       "timeout": 300,
-      "command": "bash ci/suites.sh scalar-host afxdp.timing_wheel",
+      "command": "bash ci/suites.sh scalar-cpu afxdp.timing_wheel",
       "setup": [
-        "host-cuda-headers"
+        "cpu-cuda-headers"
       ]
     },
     {
@@ -2720,7 +2720,7 @@
       "sources": [
         "collective/afxdp/util_lrpc_test.cc"
       ],
-      "tier": "host",
+      "tier": "cpu",
       "enabled": true,
       "targets": [
         "cpu"
@@ -2734,9 +2734,9 @@
       "nodes": 1,
       "gpus": 0,
       "timeout": 300,
-      "command": "bash ci/suites.sh scalar-host afxdp.util_lrpc",
+      "command": "bash ci/suites.sh scalar-cpu afxdp.util_lrpc",
       "setup": [
-        "host-cuda-headers"
+        "cpu-cuda-headers"
       ]
     },
     {
@@ -2794,7 +2794,7 @@
       "nodes": 1,
       "gpus": 1,
       "timeout": 180,
-      "reason": "Requires EFA hardware and its provider; available CI machines have ConnectX IB/RoCE NICs."
+      "reason": "Requires EFA devices and its provider; available CI machines have ConnectX IB/RoCE NICs."
     },
     {
       "id": "disabled.collective.efa.run-nccl-test-single-proc.sh",
@@ -2813,7 +2813,7 @@
       "nodes": 1,
       "gpus": 1,
       "timeout": 180,
-      "reason": "Requires EFA hardware and its provider; available CI machines have ConnectX IB/RoCE NICs."
+      "reason": "Requires EFA devices and its provider; available CI machines have ConnectX IB/RoCE NICs."
     },
     {
       "id": "collective.efa.scattered_memcpy",
@@ -2842,7 +2842,7 @@
       "sources": [
         "collective/efa/timely_test.cc"
       ],
-      "tier": "host",
+      "tier": "cpu",
       "enabled": true,
       "targets": [
         "cpu"
@@ -2856,9 +2856,9 @@
       "nodes": 1,
       "gpus": 0,
       "timeout": 300,
-      "command": "bash ci/suites.sh scalar-host efa.timely",
+      "command": "bash ci/suites.sh scalar-cpu efa.timely",
       "setup": [
-        "host-cuda-headers"
+        "cpu-cuda-headers"
       ]
     },
     {
@@ -2866,7 +2866,7 @@
       "sources": [
         "collective/efa/timing_wheel_test.cc"
       ],
-      "tier": "host",
+      "tier": "cpu",
       "enabled": true,
       "targets": [
         "cpu"
@@ -2880,9 +2880,9 @@
       "nodes": 1,
       "gpus": 0,
       "timeout": 300,
-      "command": "bash ci/suites.sh scalar-host efa.timing_wheel",
+      "command": "bash ci/suites.sh scalar-cpu efa.timing_wheel",
       "setup": [
-        "host-cuda-headers"
+        "cpu-cuda-headers"
       ]
     },
     {
@@ -2902,7 +2902,7 @@
       "nodes": 1,
       "gpus": 1,
       "timeout": 180,
-      "reason": "Requires EFA hardware and its provider; available CI machines have ConnectX IB/RoCE NICs."
+      "reason": "Requires EFA devices and its provider; available CI machines have ConnectX IB/RoCE NICs."
     },
     {
       "id": "disabled.collective.efa.util-efa-device-name-list-test.cc",
@@ -2921,7 +2921,7 @@
       "nodes": 1,
       "gpus": 1,
       "timeout": 180,
-      "reason": "Requires EFA hardware and its provider; available CI machines have ConnectX IB/RoCE NICs."
+      "reason": "Requires EFA devices and its provider; available CI machines have ConnectX IB/RoCE NICs."
     },
     {
       "id": "disabled.collective.efa.util-efa-test.cc",
@@ -2940,14 +2940,14 @@
       "nodes": 1,
       "gpus": 1,
       "timeout": 180,
-      "reason": "Requires EFA hardware and its provider; available CI machines have ConnectX IB/RoCE NICs."
+      "reason": "Requires EFA devices and its provider; available CI machines have ConnectX IB/RoCE NICs."
     },
     {
       "id": "collective.efa.util_lrpc",
       "sources": [
         "collective/efa/util_lrpc_test.cc"
       ],
-      "tier": "host",
+      "tier": "cpu",
       "enabled": true,
       "targets": [
         "cpu"
@@ -2961,9 +2961,9 @@
       "nodes": 1,
       "gpus": 0,
       "timeout": 300,
-      "command": "bash ci/suites.sh scalar-host efa.util_lrpc",
+      "command": "bash ci/suites.sh scalar-cpu efa.util_lrpc",
       "setup": [
-        "host-cuda-headers"
+        "cpu-cuda-headers"
       ]
     },
     {
@@ -2983,7 +2983,7 @@
       "nodes": 1,
       "gpus": 1,
       "timeout": 180,
-      "reason": "Requires a MUSA GPU and SDK; no available CI machine has MUSA hardware."
+      "reason": "Requires a MUSA GPU and SDK; no available CI machine has MUSA GPUs."
     },
     {
       "id": "disabled.collective.mccl.tests.flush-test.cc",
@@ -3002,7 +3002,7 @@
       "nodes": 1,
       "gpus": 1,
       "timeout": 180,
-      "reason": "Requires a MUSA GPU and SDK; no available CI machine has MUSA hardware."
+      "reason": "Requires a MUSA GPU and SDK; no available CI machine has MUSA GPUs."
     },
     {
       "id": "disabled.collective.rdma.run-nccl-test.sh",
@@ -3059,7 +3059,7 @@
       "nodes": 1,
       "gpus": 1,
       "timeout": 180,
-      "reason": "Requires AMD/Hygon hardware; the AMD CI servers are offline."
+      "reason": "Requires AMD/Hygon GPUs; the AMD CI servers are offline."
     },
     {
       "id": "disabled.collective.rdma.run-rccl-test-hpcfund.sh",
@@ -3078,7 +3078,7 @@
       "nodes": 1,
       "gpus": 1,
       "timeout": 180,
-      "reason": "Requires AMD/Hygon hardware; the AMD CI servers are offline."
+      "reason": "Requires AMD/Hygon GPUs; the AMD CI servers are offline."
     },
     {
       "id": "disabled.ep.bench.alltoall.test-alltoall.cpp",
@@ -3097,7 +3097,7 @@
       "nodes": 1,
       "gpus": 1,
       "timeout": 180,
-      "reason": "Requires EFA hardware and its provider; available CI machines have ConnectX IB/RoCE NICs."
+      "reason": "Requires EFA devices and its provider; available CI machines have ConnectX IB/RoCE NICs."
     },
     {
       "id": "disabled.ep.bench.alltoall.test-alltoall-rail.cpp",
@@ -3116,7 +3116,7 @@
       "nodes": 1,
       "gpus": 1,
       "timeout": 180,
-      "reason": "Requires EFA hardware and its provider; available CI machines have ConnectX IB/RoCE NICs."
+      "reason": "Requires EFA devices and its provider; available CI machines have ConnectX IB/RoCE NICs."
     },
     {
       "id": "ep.triton_pack_unpack",
@@ -3493,7 +3493,7 @@
       "nodes": 1,
       "gpus": 1,
       "timeout": 180,
-      "reason": "Requires AMD/Hygon hardware; the AMD CI servers are offline."
+      "reason": "Requires AMD/Hygon GPUs; the AMD CI servers are offline."
     },
     {
       "id": "disabled.p2p.tests.test-musa-runtime-probe.cc",
@@ -3512,7 +3512,7 @@
       "nodes": 1,
       "gpus": 1,
       "timeout": 180,
-      "reason": "Requires a MUSA GPU and SDK; no available CI machine has MUSA hardware."
+      "reason": "Requires a MUSA GPU and SDK; no available CI machine has MUSA GPUs."
     },
     {
       "id": "p2p.notifications",
@@ -4266,7 +4266,7 @@
       ],
       "enabled": false,
       "tier": "performance",
-      "reason": "EFA all-to-all benchmark requires unavailable EFA hardware.",
+      "reason": "EFA all-to-all benchmark requires unavailable EFA devices.",
       "targets": [],
       "requires": []
     },
@@ -4463,7 +4463,7 @@
       "sources": [
         "p2p/tests/scenario_ipc_import_device.cc"
       ],
-      "reason": "C++ fixture compiled by p2p.host.gpu_ipc_export and p2p.host.dmabuf_export."
+      "reason": "C++ fixture compiled by p2p.cpu.gpu_ipc_export and p2p.cpu.dmabuf_export."
     },
     {
       "sources": [

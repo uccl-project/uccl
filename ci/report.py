@@ -17,7 +17,7 @@ def report_plan(path):
         print("No affected enabled suites.")
     print(
         "\nThe plan artifact records the reason for every selection and exclusion. "
-        "PR hardware execution requires a maintainer dispatch."
+        "PR GPU execution requires a maintainer dispatch."
     )
 
 

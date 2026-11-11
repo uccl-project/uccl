@@ -324,7 +324,7 @@ def main():
     parser.add_argument("--plan")
     parser.add_argument("--tests", default="")
     parser.add_argument("--exclude", default="")
-    parser.add_argument("--tiers", default="host,build,integration")
+    parser.add_argument("--tiers", default="cpu,build,integration")
     parser.add_argument("--ssh-config")
     parser.add_argument("--local", action="store_true")
     parser.add_argument(

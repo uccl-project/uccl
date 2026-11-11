@@ -9,7 +9,7 @@ import re
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
-TIERS = {"host", "build", "integration", "performance"}
+TIERS = {"cpu", "build", "integration", "performance"}
 GLOBAL = [
     "ci/**",
     ".github/workflows/**",
@@ -72,7 +72,7 @@ def compatible(test, target):
 
 
 def target_interface(target, host):
-    """Resolve by SSH alias, not rank: --hosts may reorder a hardware pool."""
+    """Resolve by SSH alias, not rank: --hosts may reorder a GPU pool."""
     if "interfaces" in target:
         if host not in target["interfaces"]:
             raise ValueError(f"No network interface configured for host {host!r}")
@@ -116,8 +116,8 @@ def validate(catalog, targets, files=None):
         if not test.get("enabled") and not test.get("reason"):
             errors.append(f"{name}: disabled test needs a reason")
         if test.get("enabled"):
-            if test.get("tier") == "host" and test.get("targets") != ["cpu"]:
-                errors.append(f"{name}: host suites must use only the cpu target")
+            if test.get("tier") == "cpu" and test.get("targets") != ["cpu"]:
+                errors.append(f"{name}: CPU suites must use only the cpu target")
             if (
                 not test.get("command")
                 or not test.get("paths")
@@ -179,7 +179,7 @@ def plan(
     exclude=None,
     target_names=None,
 ):
-    tiers = set(tiers or ["host", "build", "integration"])
+    tiers = set(tiers or ["cpu", "build", "integration"])
     if not tiers <= TIERS:
         raise ValueError(f"Unknown tiers: {tiers - TIERS}")
     names = {t["id"] for t in catalog["tests"]}
@@ -258,7 +258,7 @@ def main():
     parser.add_argument("--base")
     parser.add_argument("--head", default="HEAD")
     parser.add_argument("--full", action="store_true")
-    parser.add_argument("--tiers", default="host,build,integration")
+    parser.add_argument("--tiers", default="cpu,build,integration")
     parser.add_argument("--tests", default="")
     parser.add_argument("--exclude", default="")
     parser.add_argument("--targets", default="")
@@ -296,9 +296,9 @@ def main():
         with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
             stream.write("matrix=" + json.dumps({"include": result["include"]}) + "\n")
             stream.write(f"has_jobs={str(bool(result['include'])).lower()}\n")
-            hardware = [job for job in result["include"] if job["target"] != "cpu"]
-            stream.write("hardware=" + json.dumps({"include": hardware}) + "\n")
-            stream.write(f"has_hardware={str(bool(hardware)).lower()}\n")
+            gpu = [job for job in result["include"] if job["target"] != "cpu"]
+            stream.write("gpu=" + json.dumps({"include": gpu}) + "\n")
+            stream.write(f"has_gpu={str(bool(gpu)).lower()}\n")
             stream.write(
                 f"has_cpu={str(any(j['target'] == 'cpu' for j in result['include'])).lower()}\n"
             )

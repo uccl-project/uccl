@@ -16,7 +16,7 @@ import xml.etree.ElementTree as ET
 
 from catalog import ROOT, read_catalog, target_interface
 from process import run
-from idle import probe, skip_reason
+from idle import GPU_LOCK_FILE, probe, skip_reason
 
 
 def emit(event, **values):
@@ -50,7 +50,7 @@ def main():
     ci_root.mkdir(parents=True, exist_ok=True)
     artifacts = ROOT.parent / "results" / f"node-{args.node}"
     artifacts.mkdir(parents=True, exist_ok=True)
-    lock = open(ci_root / "hardware.lock", "a")
+    lock = open(ci_root / GPU_LOCK_FILE, "a")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
@@ -146,7 +146,7 @@ def main():
     else:
         address = "127.0.0.1"
     lock_name = (
-        "host" if not target["gpus"] else ("cu128" if args.target == "l4" else "cu130")
+        "cpu" if not target["gpus"] else ("cu128" if args.target == "l4" else "cu130")
     )
     lockfile = ROOT / f"ci/requirements/{lock_name}.lock"
     fingerprint = hashlib.sha256(

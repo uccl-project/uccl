@@ -205,7 +205,7 @@ class AdmissionTests(unittest.TestCase):
                     [(50, signal.SIGTERM), (50, signal.SIGKILL)],
                 )
 
-    def test_host_suite_on_gpu_node_still_checks_gpu_activity(self):
+    def test_cpu_suite_on_gpu_node_still_checks_gpu_activity(self):
         with (
             patch("idle.shutil.which", return_value="/usr/bin/nvidia-smi"),
             patch("idle.query", return_value=self.xml(50)),
@@ -456,7 +456,7 @@ class AdmissionTests(unittest.TestCase):
                 record = idle.record_process(
                     stale.pid, {"CI_ROOT": str(root), "CI_REPO": str(work)}
                 )
-                with open(root / "hardware.lock", "a") as lease:
+                with open(root / idle.GPU_LOCK_FILE, "a") as lease:
                     idle.fcntl.flock(lease, idle.fcntl.LOCK_EX | idle.fcntl.LOCK_NB)
                     self.assertEqual(idle.cleanup_stale(root), [stale.pid])
                 stale.wait(timeout=5)
@@ -563,10 +563,10 @@ class SelectionTests(unittest.TestCase):
         self.catalog = {
             "tests": [
                 dict(
-                    id="host",
+                    id="cpu",
                     enabled=True,
-                    tier="host",
-                    sources=["p2p/tests/test_host.py"],
+                    tier="cpu",
+                    sources=["p2p/tests/test_cpu.py"],
                     paths=["p2p/**"],
                     targets=["cpu"],
                     requires=["cpu"],
@@ -589,7 +589,7 @@ class SelectionTests(unittest.TestCase):
                     enabled=False,
                     tier="integration",
                     sources=["off/test_missing.cc"],
-                    reason="no hardware",
+                    reason="no GPU",
                 ),
             ]
         }
@@ -652,17 +652,17 @@ class SelectionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "gpus must be a nonnegative"):
             catalog.validate(self.catalog, self.targets)
 
-    def test_host_suites_cannot_be_assigned_to_lab_targets(self):
+    def test_cpu_suites_cannot_be_assigned_to_lab_targets(self):
         self.catalog["tests"][0]["targets"] = ["gpu"]
         self.catalog["tests"][0]["requires"] = []
-        with self.assertRaisesRegex(ValueError, "host suites must use only the cpu"):
+        with self.assertRaisesRegex(ValueError, "CPU suites must use only the cpu"):
             catalog.validate(self.catalog, self.targets)
         registered, _ = catalog.read_catalog()
-        host_suites = [
-            t for t in registered["tests"] if t["enabled"] and t["tier"] == "host"
+        cpu_suites = [
+            t for t in registered["tests"] if t["enabled"] and t["tier"] == "cpu"
         ]
-        self.assertTrue(host_suites)
-        self.assertTrue(all(t["targets"] == ["cpu"] for t in host_suites))
+        self.assertTrue(cpu_suites)
+        self.assertTrue(all(t["targets"] == ["cpu"] for t in cpu_suites))
 
     def test_host_interfaces_follow_alias_when_ranks_are_reordered(self):
         target = self.targets["gpu"]

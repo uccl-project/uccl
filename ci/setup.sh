@@ -19,10 +19,10 @@ if [[ $component == environment ]]; then
   exit 0
 fi
 case $component in
-  host-cuda-headers)
-    sdk="$CI_DEPS/host-cuda-12.8"
+  cpu-cuda-headers)
+    sdk="$CI_DEPS/cpu-cuda-12.8"
     if [[ ! -f $sdk/.complete ]]; then
-      python3 -m pip install --require-hashes --no-deps --target "$sdk" -r ci/requirements/host-cuda.lock
+      python3 -m pip install --require-hashes --no-deps --target "$sdk" -r ci/requirements/cpu-cuda.lock
       ln -sfn lib "$sdk/nvidia/cuda_runtime/lib64"
       ln -sfn libcudart.so.12 "$sdk/nvidia/cuda_runtime/lib/libcudart.so"
       touch "$sdk/.complete"

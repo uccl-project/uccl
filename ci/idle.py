@@ -12,6 +12,9 @@ import subprocess
 import time
 import xml.etree.ElementTree as ET
 
+# Keep the on-disk name shared with already-running workers during the rename.
+GPU_LOCK_FILE = "hardware.lock"
+
 
 def processes(proc=Path("/proc")):
     result = {}
@@ -61,7 +64,7 @@ def query(command):
 
 def gpu_jobs(target, own, settle=True):
     if not target.get("gpus"):
-        # A host-only suite may be directed to a lab GPU node with --hosts.
+        # A CPU-only suite may be directed to a lab GPU node with --hosts.
         if shutil.which("nvidia-smi"):
             target = dict(gpus=1, capabilities=["cuda"])
         elif shutil.which("rocm-smi"):
@@ -187,7 +190,7 @@ def probe(target, root, lease=True, cleanup=False):
     cleaned = []
     try:
         if lease:
-            lock = open(root / "hardware.lock", "a")
+            lock = open(root / GPU_LOCK_FILE, "a")
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:

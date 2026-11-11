@@ -16,8 +16,8 @@ on:
         description: 'Test IDs/globs to exclude'
         default: ''
       tiers:
-        description: 'host,build,integration,performance'
-        default: 'host,build,integration'
+        description: 'cpu,build,integration,performance'
+        default: 'cpu,build,integration'
       sha:
         description: 'Exact source SHA (maintainer-approved PR testing)'
         default: ''
@@ -32,8 +32,8 @@ jobs:
   plan:
     runs-on: ubuntu-24.04
     outputs:
-      hardware: ${{ steps.plan.outputs.hardware }}
-      has_hardware: ${{ steps.plan.outputs.has_hardware }}
+      gpu: ${{ steps.plan.outputs.gpu }}
+      has_gpu: ${{ steps.plan.outputs.has_gpu }}
       has_cpu: ${{ steps.plan.outputs.has_cpu }}
     steps:
       - uses: actions/checkout@v4
@@ -51,7 +51,7 @@ jobs:
           TARGETS: ${{ inputs.targets }}
           TESTS: ${{ inputs.tests }}
           EXCLUDE: ${{ inputs.exclude }}
-          TIERS: ${{ inputs.tiers || 'host,build,integration' }}
+          TIERS: ${{ inputs.tiers || 'cpu,build,integration' }}
         run: |
           args=(--full)
           if [[ $EVENT == pull_request ]]; then
@@ -68,7 +68,8 @@ jobs:
           name: ci-plan
           path: ci-plan.json
 
-  host:
+  cpu:
+    name: CPU
     needs: plan
     if: needs.plan.outputs.has_cpu == 'true'
     runs-on: ubuntu-24.04
@@ -82,9 +83,9 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: ci-plan
-      - name: Install host compiler and Python venv support
+      - name: Install CPU compiler and Python venv support
         run: sudo apt-get update -qq && sudo apt-get install -y build-essential python3-venv libgtest-dev libibverbs-dev libgflags-dev zlib1g-dev libelf-dev
-      - name: Run host suites
+      - name: Run CPU suites
         run: python3 ci/run.py --local --target cpu --plan ci-plan.json
       - name: Summarize results
         if: always()
@@ -97,21 +98,22 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: ci-host
+          name: ci-cpu
           path: ci-results/
           if-no-files-found: error
 
-  hardware:
+  gpu:
+    name: GPU (${{ matrix.target }})
     needs: plan
     # PR code reaches lab machines only through a maintainer's workflow dispatch.
-    if: github.event_name != 'pull_request' && needs.plan.outputs.has_hardware == 'true'
+    if: github.event_name != 'pull_request' && needs.plan.outputs.has_gpu == 'true'
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.plan.outputs.hardware) }}
+      matrix: ${{ fromJSON(needs.plan.outputs.gpu) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     concurrency:
-      group: uccl-hardware-${{ matrix.target }}
+      group: uccl-gpu-${{ matrix.target }}
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
@@ -134,7 +136,7 @@ jobs:
           printf '%s\n' "$CI_KEY" > ~/.ssh/uccl-ci
           printf '%s\n' "$CI_CONFIG" > ~/.ssh/config
           printf '%s\n' "$CI_KNOWN_HOSTS" > ~/.ssh/known_hosts
-      - name: Run selected hardware suites
+      - name: Run selected GPU suites
         env:
           TARGET: ${{ matrix.target }}
         run: python3 ci/run.py --target "$TARGET" --plan ci-plan.json --ssh-config ~/.ssh/config --run-id "gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
@@ -152,7 +154,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: ci-${{ matrix.target }}
+          name: ci-gpu-${{ matrix.target }}
           path: ci-results/
           if-no-files-found: error
       - name: Remove runner credentials
@@ -161,15 +163,15 @@ jobs:
 
   status:
     name: CI status
-    needs: [plan, host, hardware]
+    needs: [plan, cpu, gpu]
     if: always()
     runs-on: ubuntu-24.04
     steps:
       - env:
           PLAN: ${{ needs.plan.result }}
-          HOST: ${{ needs.host.result }}
-          HARDWARE: ${{ needs.hardware.result }}
+          CPU_RESULT: ${{ needs.cpu.result }}
+          GPU_RESULT: ${{ needs.gpu.result }}
         run: |
           [[ $PLAN == success ]]
-          [[ $HOST == success || $HOST == skipped ]]
-          [[ $HARDWARE == success || $HARDWARE == skipped ]]
+          [[ $CPU_RESULT == success || $CPU_RESULT == skipped ]]
+          [[ $GPU_RESULT == success || $GPU_RESULT == skipped ]]

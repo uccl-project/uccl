@@ -2,14 +2,14 @@
 
 `config/tests.json` registers suites, `config/targets.json` defines machines,
 `catalog.py` selects tests, and `run.py` executes them. GitHub-hosted Ubuntu runs
-host tests and orchestrates GPU jobs over SSH as `uccl`, using local
+CPU tests and orchestrates GPU jobs over SSH as `uccl`, using local
 `/var/lib/uccl-ci` storage on each server.
 
 ## Where jobs run
 
-| Target | Machines | Hardware | Role |
+| Target | Machines | Resources | Role |
 |---|---|---|---|
-| `cpu` | GitHub `ubuntu-24.04` | CPU | Python/C++ host tests and CI self-tests |
+| `cpu` | GitHub `ubuntu-24.04` | CPU | Python/C++ CPU tests and CI self-tests |
 | `l4` | `l40`, `l41` | 4 L4 GPUs/node, IB, CUDA 12.9 | P2P, IPC, compression, GPU RDMA, NIXL |
 | `gh200` | `gh200_1`, `gh200_0` | 1 GH200/node, 400G InfiniBand, CUDA 13.2 | EP, GPU RDMA, NIXL, EP/P2P benchmarks |
 | `gb10` | `gb10_0`, `gb10_1` | 1 GB10/node, RoCE, CUDA 13.0 | Host-staged EP/P2P and NIXL |
@@ -20,7 +20,7 @@ report active 400G links. Single-node suites use `gh200_1`; two-node suites
 require both. Link rate is not application throughput. Per-host interfaces and
 RDMA devices are defined in `config/targets.json`.
 
-Hardware limits: GB10 native GPU-buffer registration fails; L4 lacks native
+GPU limits: GB10 native GPU-buffer registration fails; L4 lacks native
 peer atomics/NVLink; no available node has `/dev/gdrdrv`. Affected tests are
 excluded explicitly. Host-staged GB10 EP/NIXL remains enabled.
 
@@ -33,9 +33,9 @@ counts, not individual test cases; enabled does not mean passing.
 | Enabled family | Entries | What it checks |
 |---|---:|---|
 | `ci.*` | 1 | Selection, inventory, process cleanup and performance comparisons |
-| `p2p.*` | 42 | Host APIs, registration, IPC, RDMA, compression, notifications and benchmarks |
+| `p2p.*` | 42 | CPU APIs, registration, IPC, RDMA, compression, notifications and benchmarks |
 | `ep.*` | 22 | Compatibility, synchronization, communication, Triton packing and benchmarks |
-| `mccl.host.*` | 4 | MUSA plugin host fixtures; no GPU execution |
+| `mccl.cpu.*` | 4 | MUSA plugin CPU fixtures; no GPU execution |
 | `collective.*` | 14 | Protocols, congestion control, RDMA transport and CUDA utilities |
 | `nixl.*` | 4 | Local IPC and two-node RDMA/NCCL transfers |
 | `build.apptainer_flags` | 1 | GPU-option handling with mocks |
@@ -43,20 +43,20 @@ counts, not individual test cases; enabled does not mean passing.
 
 Full selection before changed-file filtering:
 
-| Target | Default (`host,build,integration`) | Opt-in `performance` |
+| Target | Default (`cpu,build,integration`) | Opt-in `performance` |
 |---|---:|---:|
 | `cpu` | 34 | 0 |
 | `l4` | 32 | 8 |
 | `gh200` | 32 | 16 |
 | `gb10` | 21 | 6 |
 
-Target counts overlap. All 34 host suites run on GitHub. Seven protocol suites
+Target counts overlap. All 34 CPU suites run on GitHub. Seven protocol suites
 install pinned CUDA headers/runtime for compilation, without requiring a GPU or
 driver. No standalone build-tier entries are enabled.
 
 All 62 entries under `examples/` and `experimental/` are disabled, including
 GIN fixtures built through the experimental tree. The remaining 33 exclusions
-cover unavailable hardware, unsupported configurations and opted-out fixtures.
+cover unavailable devices, unsupported configurations and opted-out fixtures.
 Every exclusion has a reason. Disabled tests cannot be forced with `--tests`.
 Vendored tests are not automatically enrolled; experimental C++/CUDA formatting
 remains checked.
@@ -101,12 +101,12 @@ Five workflows remain in `.github/workflows`; six unused helpers were removed:
 | `build-docker-images.yml` | Publish build images for releases, Dockerfile updates or manual runs |
 | `release.yml` | Build wheels/source archives and publish packages |
 
-| Trigger | Host tests | Hardware tests | Performance benchmarks |
+| Trigger | CPU tests | GPU tests | Performance benchmarks |
 |---|---|---|---|
 | PR opened, updated or reopened | Affected CPU suites | Skipped | Skipped |
 | Merge or push to `main` | Affected CPU suites | Affected suites | Skipped |
 | `/run-ci all` on a PR | All CPU suites | All eligible default-tier suites | Skipped |
-| `/run-ci <target> [IDs/globs]` | If target is `cpu` | Selected hardware target | Skipped |
+| `/run-ci <target> [IDs/globs]` | If target is `cpu` | Selected GPU target | Skipped |
 | `/run-benchmark <target> [IDs/globs]` | None registered | Selected benchmarks | Enabled |
 
 Manual runs ignore changed-file filtering. Comment commands require `write`,
@@ -125,12 +125,12 @@ Use `/run-benchmark` (singular). Actions UI inputs are `targets`, `tests`,
 tier. Results and logs appear in workflow summaries/artifacts. Comment commands
 use the default-branch workflow, so changes take effect after merge.
 
-Automatic PR jobs receive no lab credentials. Hardware checks on `main` happen
-after merging; use `/run-ci` for pre-merge hardware validation. There is no
+Automatic PR jobs receive no lab credentials. GPU checks on `main` happen
+after merging; use `/run-ci` for pre-merge GPU validation. There is no
 nightly or label trigger. Benchmarks do not run correctness suites first.
 
 - CPU suites run on GitHub; GPU/RDMA suites run on lab nodes.
-- Hardware runs serialize per target. Busy GPUs, held locks or unverifiable GPU
+- GPU runs serialize per target. Busy GPUs, held locks or unverifiable GPU
   activity skip the target; CPU-only work does not block it.
 - CI rechecks GPU activity during execution and stops its own work if another job
   starts. Only verified stale CI processes may be cleaned up.
@@ -190,10 +190,10 @@ workflow is active.
 Controllers need Python 3.12+ and SSH/rsync on macOS/Linux. Local CPU execution
 requires Linux and Ubuntu packages `build-essential`, `python3-venv`,
 `libgtest-dev`, `libibverbs-dev`, `libgflags-dev`, `zlib1g-dev` and `libelf-dev`.
-SSH aliases for hardware execution must log in as `uccl`.
+SSH aliases for GPU execution must log in as `uccl`.
 
 ```bash
-python3 ci/run.py --local --target cpu --output ci-results/host-run
+python3 ci/run.py --local --target cpu --output ci-results/cpu-run
 python3 ci/run.py --target l4 --ssh-config /path/to/config --tests 'p2p.rdma_native.*' --output ci-results/rdma-run
 python3 ci/run.py --target gh200 --ssh-config /path/to/config --tiers performance --tests p2p.bandwidth --output ci-results/perf-run
 python3 ci/performance.py ci-results/perf-run --candidate ci-results/perf-run/baseline-candidate.json
@@ -209,10 +209,10 @@ use `--keep-remote` to debug. Caches live in `/var/lib/uccl-ci/cache`.
 
 To find failure logs on a GitHub run page:
 
-1. Open the **host** or **hardware** job → **Summarize results** for suite outcomes,
+1. Open the **CPU** or **GPU** job → **Summarize results** for suite outcomes,
    timings and skip reasons. The same table appears on the run **Summary** page.
 2. Expand **Show test logs**, then a suite's log group, for its last 200 lines.
-3. For complete files, download `ci-host` or `ci-<target>` under **Summary → Artifacts**.
+3. For complete files, download `ci-cpu` or `ci-gpu-<target>` under **Summary → Artifacts**.
    `<suite-id>.log` holds test output; `environment.log` / `build-*.log` hold setup
    output; `node-*.ssh.log` holds worker/SSH output. `performance.json` explains gates.
 

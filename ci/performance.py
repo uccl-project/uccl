@@ -1,4 +1,4 @@
-"""Extract benchmark samples and compare explicitly reviewed hardware baselines."""
+"""Extract benchmark samples and compare explicitly reviewed GPU baselines."""
 
 import argparse
 import json

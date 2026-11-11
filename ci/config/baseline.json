@@ -49,7 +49,7 @@
         "sample_max": 1.21
       },
       "gate": "soft",
-      "reason": "Microsecond GPU-CPU polling latency is sensitive to host scheduling; keep advisory until repeatable at the 10% margin."
+      "reason": "Microsecond GPU-CPU polling latency is sensitive to CPU scheduling; keep advisory until repeatable at the 10% margin."
     },
     "gb10/ep.bench.low_latency/dispatch_combine_us": {
       "value": 233.945,
@@ -181,7 +181,7 @@
         "sample_max": 1.42
       },
       "gate": "soft",
-      "reason": "Microsecond GPU-CPU polling latency is sensitive to host scheduling; keep advisory until repeatable at the 10% margin."
+      "reason": "Microsecond GPU-CPU polling latency is sensitive to CPU scheduling; keep advisory until repeatable at the 10% margin."
     },
     "l4/p2p.bandwidth/bandwidth_gbps": {
       "value": 380.44,
@@ -360,7 +360,7 @@
         ]
       },
       "gate": "soft",
-      "reason": "Microsecond GPU-CPU polling latency is sensitive to host scheduling; keep advisory until repeatable at the 10% margin."
+      "reason": "Microsecond GPU-CPU polling latency is sensitive to CPU scheduling; keep advisory until repeatable at the 10% margin."
     },
     "gh200/ep.bench.pack_unpack/decode_triton_ms": {
       "value": 2.942,

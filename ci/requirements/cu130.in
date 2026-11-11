@@ -1,2 +1,2 @@
--r host.in
+-r cpu.in
 torch==2.9.1+cu130
