@@ -229,10 +229,20 @@ size_t Endpoint::max_one_sided_inflight_ops() {
 }
 
 // ShmChannel helper function
+// The effective uid is part of the name so that rings of different accounts on
+// a shared host cannot clash.
 static inline std::string shm_ring_name(std::string const& from_bdf,
                                         std::string const& to_bdf) {
-  return "/uccl_gpu_jring_" + uccl::sanitize_bdf(from_bdf) + "_" +
-         uccl::sanitize_bdf(to_bdf);
+  return "/uccl_gpu_jring_u" + std::to_string(geteuid()) + "_" +
+         uccl::sanitize_bdf(from_bdf) + "_" + uccl::sanitize_bdf(to_bdf);
+}
+
+// A null inbox ring is skipped while polling, so say which sender is cut off.
+static inline void warn_missing_inbox_ring(std::string const& name,
+                                           std::string const& sender_bdf) {
+  std::cerr << "[UCCL P2P] cannot create or attach local inbox ring " << name
+            << "; local connections from GPU " << sender_bdf
+            << " will not reach this endpoint" << std::endl;
 }
 
 static inline void shm_ring_send(jring_t* ring, ShmMsg const& msg) {
@@ -338,6 +348,7 @@ Endpoint::Endpoint(uint32_t const gpu_idx) : passive_accept_(false) {
     handle.ring =
         uccl::create_shared_ring(name.c_str(), elem_sz, elem_cnt, handle.shm_fd,
                                  handle.shm_size, &is_creator);
+    if (handle.ring == nullptr) warn_missing_inbox_ring(name, sender_bdf);
     inbox_rings_[sender_bdf] = handle;
     inbox_creators_[sender_bdf] = is_creator;
   }
@@ -1484,21 +1495,33 @@ bool Endpoint::connect_local(std::string const& remote_gpu_bdf,
     conn->remote_inbox_.shm_name = shm_ring_name(gpu_bus_id_, remote_gpu_bdf);
 
     jring_t* ring = nullptr;
-    for (int attempt = 0; attempt < kMaxRetry; attempt++) {
+    int attempts = 0;
+    int attach_errno = 0;
+    while (attempts < kMaxRetry) {
+      errno = 0;
       ring = uccl::attach_shared_ring(conn->remote_inbox_.shm_name.c_str(),
                                       conn->remote_inbox_.shm_fd,
                                       conn->remote_inbox_.shm_size);
+      attempts++;
       if (ring != nullptr) {
         break;
       }
-      // retry
+      attach_errno = errno;
+      // A permission error does not go away; only retry while the peer may
+      // still be creating its ring.
+      if (attach_errno == EACCES) {
+        break;
+      }
       std::this_thread::sleep_for(std::chrono::milliseconds(kRetrySleepMs));
     }
 
     if (ring == nullptr) {
       std::cout << "connect_local failed: cannot attach remote inbox ring "
-                << conn->remote_inbox_.shm_name << " after " << kMaxRetry
-                << " retries" << std::endl;
+                << conn->remote_inbox_.shm_name << " after " << attempts
+                << (attempts == 1 ? " attempt: " : " attempts: ")
+                << (attach_errno != 0 ? strerror(attach_errno)
+                                      : "ring not ready")
+                << std::endl;
       delete conn;
       return false;
     }
@@ -2521,6 +2544,7 @@ void Endpoint::initialize_engine() {
     handle.ring =
         uccl::create_shared_ring(name.c_str(), elem_sz, elem_cnt, handle.shm_fd,
                                  handle.shm_size, &is_creator);
+    if (handle.ring == nullptr) warn_missing_inbox_ring(name, sender_bdf);
     inbox_rings_[sender_bdf] = handle;
     inbox_creators_[sender_bdf] = is_creator;
   }
