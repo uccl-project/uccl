@@ -1,159 +1,36 @@
-name: Benchmark Command Dispatcher
-
+name: CI Command Dispatcher
 on:
   issue_comment:
     types: [created]
-
 permissions:
-  actions: write
   contents: read
-  issues: write
-  pull-requests: write
-
+  actions: write
 jobs:
-  dispatch-benchmark:
-    if: github.event.issue.pull_request && startsWith(github.event.comment.body, '/run-benchmark')
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-      contents: read
-      issues: write
-      pull-requests: write
-
+  dispatch:
+    if: github.event.issue.pull_request && (startsWith(github.event.comment.body, '/run-benchmark') || startsWith(github.event.comment.body, '/run-ci'))
+    runs-on: ubuntu-24.04
     steps:
-      - name: Checkout workflow helpers
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-
-      - name: Resolve benchmark request
-        id: request
-        uses: actions/github-script@v7
+      - uses: actions/github-script@v7
         with:
           script: |
-            const { owner, repo } = context.repo;
-            const commenter = context.payload.comment.user.login;
-            const body = context.payload.comment.body.trim().toLowerCase();
-            const match = body.match(/^\/run-benchmark\s+(l4|amd|amd-zip|gb10|gh200)$/);
-
-            if (!match) {
-              core.setFailed('Usage: /run-benchmark <l4|amd|amd-zip|gb10|gh200>');
-              return;
-            }
-
-            const { data: permission } = await github.rest.repos.getCollaboratorPermissionLevel({
-              owner,
-              repo,
-              username: commenter,
+            const {owner, repo} = context.repo;
+            const match = context.payload.comment.body.trim().match(/^\/(run-ci|run-benchmark)\s+(all|cpu|l4|gb10|gh200)(?:\s+([a-z0-9_.*,-]+))?$/);
+            if (!match) throw new Error('Usage: /run-ci|/run-benchmark <all|cpu|l4|gb10|gh200> [test IDs/globs]');
+            const {data: permission} = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner, repo, username: context.payload.comment.user.login,
             });
-
             if (!['write', 'maintain', 'admin'].includes(permission.permission)) {
-              core.setFailed(`${commenter} does not have permission to run benchmarks`);
-              return;
+              throw new Error('Only maintainers may authorize lab execution of a PR');
             }
-
-            const pull_number = context.payload.issue.number;
-            const { data: pr } = await github.rest.pulls.get({
-              owner,
-              repo,
-              pull_number,
+            const {data: pr} = await github.rest.pulls.get({owner, repo, pull_number: context.payload.issue.number});
+            if (pr.state !== 'open' || !pr.head.repo) throw new Error('PR must be open with an accessible source repository');
+            await github.rest.actions.createWorkflowDispatch({
+              owner, repo, workflow_id: 'ci.yml', ref: context.payload.repository.default_branch,
+              inputs: {
+                targets: match[2] === 'all' ? '' : match[2], tests: match[3] || '',
+                tiers: match[1] === 'run-benchmark' ? 'performance' : 'cpu,build,integration',
+                sha: pr.head.sha, head_repo: pr.head.repo.full_name,
+              },
             });
-
-            const workflows = {
-              l4: 'uccl-build-l4.yml',
-              amd: 'uccl-build-test-amd.yml',
-              'amd-zip': 'uccl-build-test-amd-zip.yml',
-              gb10: 'uccl-build-test-gb10.yml',
-              gh200: 'uccl-build-test-gh200.yml',
-            };
-            const target = match[1];
-
-            core.setOutput('benchmark', target);
-            core.setOutput('workflow', workflows[target]);
-            core.setOutput('pr', String(pull_number));
-            core.setOutput('sha', pr.head.sha);
-            core.setOutput('head_repo', pr.head.repo.full_name);
-            core.setOutput('requester', commenter);
-
-      - name: Create queued benchmark comment
-        id: benchmark-comment
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BENCHMARK_PR: ${{ steps.request.outputs.pr }}
-          BENCHMARK_SHA: ${{ steps.request.outputs.sha }}
-          BENCHMARK_NAME: ${{ steps.request.outputs.benchmark }}
-          BENCHMARK_REQUESTER: ${{ steps.request.outputs.requester }}
-          BENCHMARK_WORKFLOW: ${{ steps.request.outputs.workflow }}
-        run: |
-          python3 .github/workflows/benchmark_comment.py \
-            --mode create \
-            --pr "$BENCHMARK_PR" \
-            --sha "$BENCHMARK_SHA" \
-            --benchmark "$BENCHMARK_NAME" \
-            --status queued \
-            --requester "$BENCHMARK_REQUESTER" \
-            --workflow "$BENCHMARK_WORKFLOW"
-
-      - name: Dispatch requested benchmark
-        id: dispatch
-        uses: actions/github-script@v7
-        continue-on-error: true
-        env:
-          BENCHMARK_WORKFLOW: ${{ steps.request.outputs.workflow }}
-          BENCHMARK_PR: ${{ steps.request.outputs.pr }}
-          BENCHMARK_SHA: ${{ steps.request.outputs.sha }}
-          BENCHMARK_HEAD_REPO: ${{ steps.request.outputs.head_repo }}
-          BENCHMARK_NAME: ${{ steps.request.outputs.benchmark }}
-          REPLY_COMMENT_ID: ${{ steps.benchmark-comment.outputs.comment_id }}
-          REPLY_MARKER: ${{ steps.benchmark-comment.outputs.reply_marker }}
-        with:
-          script: |
-            const { owner, repo } = context.repo;
-            try {
-              await github.rest.actions.createWorkflowDispatch({
-                owner,
-                repo,
-                workflow_id: process.env.BENCHMARK_WORKFLOW,
-                ref: context.payload.repository.default_branch,
-                inputs: {
-                  pr: process.env.BENCHMARK_PR,
-                  sha: process.env.BENCHMARK_SHA,
-                  head_repo: process.env.BENCHMARK_HEAD_REPO,
-                  benchmark: process.env.BENCHMARK_NAME,
-                  reply_comment_id: process.env.REPLY_COMMENT_ID,
-                  reply_marker: process.env.REPLY_MARKER,
-                },
-              });
-            } catch (error) {
-              core.setOutput('error', error.message);
-              core.setFailed(error.message);
-            }
-
-            core.info(`Dispatched ${process.env.BENCHMARK_NAME} benchmark for PR #${process.env.BENCHMARK_PR} at ${process.env.BENCHMARK_SHA}; reply comment ${process.env.REPLY_COMMENT_ID}`);
-
-      - name: Mark dispatch failed
-        if: steps.dispatch.outcome == 'failure'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPLY_COMMENT_ID: ${{ steps.benchmark-comment.outputs.comment_id }}
-          REPLY_MARKER: ${{ steps.benchmark-comment.outputs.reply_marker }}
-          BENCHMARK_PR: ${{ steps.request.outputs.pr }}
-          BENCHMARK_SHA: ${{ steps.request.outputs.sha }}
-          BENCHMARK_NAME: ${{ steps.request.outputs.benchmark }}
-          BENCHMARK_REQUESTER: ${{ steps.request.outputs.requester }}
-          DISPATCH_ERROR: ${{ steps.dispatch.outputs.error }}
-        run: |
-          python3 .github/workflows/benchmark_comment.py \
-            --mode update \
-            --comment-id "$REPLY_COMMENT_ID" \
-            --marker "$REPLY_MARKER" \
-            --pr "$BENCHMARK_PR" \
-            --sha "$BENCHMARK_SHA" \
-            --benchmark "$BENCHMARK_NAME" \
-            --status dispatch-failed \
-            --requester "$BENCHMARK_REQUESTER" \
-            --error "$DISPATCH_ERROR"
-
-      - name: Fail dispatcher after dispatch error
-        if: steps.dispatch.outcome == 'failure'
-        run: exit 1
+            core.summary.addRaw(`Dispatched ${match[1]} for PR #${pr.number}, exact SHA ${pr.head.sha}, target ${match[2]}. See the UCCL CI workflow run and its artifacts.`);
+            await core.summary.write();

@@ -5,12 +5,14 @@
 #include <rdma/fi_atomic.h>
 #endif
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <string>
 #include <sys/uio.h>
+#include <unistd.h>
 
 CxiTransport::~CxiTransport() { destroy(); }
 
@@ -142,11 +144,7 @@ fi_info* select_cxi_info(fi_info* infos, int local_rank) {
                            "; available domains: " + available);
 }
 
-}  // namespace
-
-void CxiTransport::init(ProxyCtx& ctx) {
-  ctx_ = &ctx;
-
+fi_info* get_cxi_info() {
   fi_info* hints = fi_allocinfo();
   if (!hints) throw std::runtime_error("fi_allocinfo failed");
 
@@ -160,16 +158,53 @@ void CxiTransport::init(ProxyCtx& ctx) {
   hints->domain_attr->threading = FI_THREAD_DOMAIN;
 
   fi_info* info = nullptr;
-  std::unique_lock<std::mutex> setup_lock(g_cxi_setup_mu);
   int rc = fi_getinfo(FI_VERSION(1, 15), nullptr, nullptr, 0, hints, &info);
   fi_freeinfo(hints);
   check_fi(rc, "fi_getinfo(cxi)");
+  return info;
+}
+
+// UCCL_CXI_DOMAIN_RETRIES: fi_domain retries with a fresh fi_info (default 3,
+// 50 ms apart; 0 = a single attempt). A service id picked wrongly during
+// fi_getinfo stays in that fi_info, so a retry has to fetch a new one.
+int cxi_domain_retries() {
+  static int const retries = [] {
+    char const* e = std::getenv("UCCL_CXI_DOMAIN_RETRIES");
+    return e ? std::atoi(e) : 3;
+  }();
+  return retries;
+}
+
+}  // namespace
+
+void CxiTransport::init(ProxyCtx& ctx) {
+  ctx_ = &ctx;
+
+  std::unique_lock<std::mutex> setup_lock(g_cxi_setup_mu);
+  fi_info* info = get_cxi_info();
 
   try {
     fi_info* selected = select_cxi_info(info, ctx.local_rank);
 
     check_fi(fi_fabric(selected->fabric_attr, &fabric_, nullptr), "fi_fabric");
-    check_fi(fi_domain(fabric_, selected, &domain_, nullptr), "fi_domain");
+    int rc = fi_domain(fabric_, selected, &domain_, nullptr);
+    for (int attempt = 1; rc && attempt <= cxi_domain_retries(); ++attempt) {
+      std::fprintf(stderr,
+                   "[CXI] fi_domain(%s) failed: %s; retrying with a fresh "
+                   "fi_info (%d)\n",
+                   selected->domain_attr->name, fi_strerror(-rc), attempt);
+      fi_close(&fabric_->fid);
+      fabric_ = nullptr;
+      fi_freeinfo(info);
+      info = nullptr;
+      usleep(50000);
+      info = get_cxi_info();
+      selected = select_cxi_info(info, ctx.local_rank);
+      check_fi(fi_fabric(selected->fabric_attr, &fabric_, nullptr),
+               "fi_fabric");
+      rc = fi_domain(fabric_, selected, &domain_, nullptr);
+    }
+    check_fi(rc, "fi_domain");
     setup_lock.unlock();
 
     fi_cq_attr cq_attr = {};
@@ -271,6 +306,21 @@ void CxiTransport::connect_peer(int peer, RemoteConnInfo const& remote) {
   peer_infos_[peer] = remote;
 }
 
+// -FI_EAGAIN from a post means the endpoint's TX queue is full: more
+// operations are in flight than its depth (FI_CXI_DEFAULT_TX_SIZE). That is
+// back-pressure, not an error. Reading the CQ frees queue space; keep what it
+// returns for the next poll() and retry the post.
+template <typename Post>
+void CxiTransport::post_with_backpressure(Post&& post, char const* what) {
+  std::vector<fi_cq_data_entry> entries(64);
+  ssize_t rc;
+  while ((rc = post()) == -FI_EAGAIN) {
+    ssize_t n = read_cq(entries.data(), entries.size());
+    cq_stash_.insert(cq_stash_.end(), entries.begin(), entries.begin() + n);
+  }
+  check_fi(static_cast<int>(rc), what);
+}
+
 void CxiTransport::post_write(int dst_rank, uint64_t wr_id,
                               uint64_t local_offset, uint64_t remote_offset,
                               uint32_t bytes, bool) {
@@ -291,10 +341,13 @@ void CxiTransport::post_write(int dst_rank, uint64_t wr_id,
   op.is_write = true;
 
   auto* local = static_cast<char*>(main_buffer_) + local_offset;
-  ssize_t rc = fi_write(ep_, local, bytes, fi_mr_desc(main_mr_),
+  post_with_backpressure(
+      [&] {
+        return fi_write(ep_, local, bytes, fi_mr_desc(main_mr_),
                         peer_addrs_[dst_rank], remote_offset,
                         peer_infos_[dst_rank].cxi_main_mr_key, &op.context);
-  check_fi(static_cast<int>(rc), "fi_write");
+      },
+      "fi_write");
 }
 
 void CxiTransport::post_atomic_add(int dst_rank, uint64_t wr_id,
@@ -349,8 +402,9 @@ void CxiTransport::post_atomic_add(int dst_rank, uint64_t wr_id,
   msg.op = FI_SUM;
   msg.context = &op.context;
 
-  ssize_t rc = fi_atomicmsg(ep_, &msg, fence ? FI_FENCE : 0);
-  check_fi(static_cast<int>(rc), "fi_atomicmsg");
+  post_with_backpressure(
+      [&] { return fi_atomicmsg(ep_, &msg, fence ? FI_FENCE : 0); },
+      "fi_atomicmsg");
 }
 
 void CxiTransport::post_barrier_atomic_add(int dst_rank, uint64_t wr_id,
@@ -404,8 +458,8 @@ void CxiTransport::post_barrier_atomic_add(int dst_rank, uint64_t wr_id,
   msg.op = FI_SUM;
   msg.context = &op.context;
 
-  ssize_t rc = fi_atomicmsg(ep_, &msg, FI_FENCE);
-  check_fi(static_cast<int>(rc), "fi_atomicmsg(barrier)");
+  post_with_backpressure([&] { return fi_atomicmsg(ep_, &msg, FI_FENCE); },
+                         "fi_atomicmsg(barrier)");
 }
 
 uint64_t CxiTransport::load_barrier_word(size_t slot) const {
@@ -415,11 +469,8 @@ uint64_t CxiTransport::load_barrier_word(size_t slot) const {
   return __atomic_load_n(&barrier_words_[slot], __ATOMIC_ACQUIRE);
 }
 
-int CxiTransport::poll(TransportCompletion* out, int max) {
-  if (!cq_ || max <= 0) return 0;
-
-  std::vector<fi_cq_data_entry> entries(max);
-  ssize_t rc = fi_cq_read(cq_, entries.data(), max);
+ssize_t CxiTransport::read_cq(fi_cq_data_entry* entries, size_t max) {
+  ssize_t rc = fi_cq_read(cq_, entries, max);
   if (rc == -FI_EAGAIN) return 0;
   if (rc < 0) {
     fi_cq_err_entry err = {};
@@ -430,6 +481,22 @@ int CxiTransport::poll(TransportCompletion* out, int max) {
           fi_cq_strerror(cq_, err.prov_errno, err.err_data, nullptr, 0));
     }
     check_fi(static_cast<int>(rc), "fi_cq_read");
+  }
+  return rc;
+}
+
+int CxiTransport::poll(TransportCompletion* out, int max) {
+  if (!cq_ || max <= 0) return 0;
+
+  std::vector<fi_cq_data_entry> entries;
+  ssize_t rc;
+  if (!cq_stash_.empty()) {
+    rc = std::min<ssize_t>(max, cq_stash_.size());
+    entries.assign(cq_stash_.begin(), cq_stash_.begin() + rc);
+    cq_stash_.erase(cq_stash_.begin(), cq_stash_.begin() + rc);
+  } else {
+    entries.resize(max);
+    rc = read_cq(entries.data(), max);
   }
 
   for (ssize_t i = 0; i < rc; ++i) {

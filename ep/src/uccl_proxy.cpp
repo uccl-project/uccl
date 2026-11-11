@@ -5,6 +5,7 @@
 #include "ring_buffer.cuh"
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <exception>
 #include <iostream>
 #include <set>
@@ -221,16 +222,9 @@ FifoProxy::FifoProxy(int thread_idx, uintptr_t gpu_buffer_addr,
       rank_(rank),
       node_idx_(node_idx),
       local_rank_(local_rank),
-      is_intranode_(is_intranode) {}
-
-FifoProxy::~FifoProxy() { stop(); }
-
-void FifoProxy::set_fifo(mscclpp::Fifo* fifo) { fifo_ = fifo; }
-
-void FifoProxy::set_peers_meta(std::vector<PeerMeta> const& meta) {
-  // Create Proxy::Config
-  // Note: we don't pass ring_buffers since we're using FIFO
-  Proxy::Config cfg;
+      is_intranode_(is_intranode) {
+  // The listen socket must exist before exchanging peer metadata.
+  Proxy::Config cfg{};
   cfg.thread_idx = thread_idx;
   cfg.gpu_buffer = reinterpret_cast<void*>(gpu_buffer_addr_);
   cfg.total_size = total_size_;
@@ -239,20 +233,34 @@ void FifoProxy::set_peers_meta(std::vector<PeerMeta> const& meta) {
   cfg.local_rank = local_rank_;
   cfg.is_intranode = is_intranode_;
   cfg.pin_thread = true;
-
-  // Set RDMA parameters (for 2-node benchmarking)
   cfg.num_experts = 0;
   cfg.num_ranks = 2;
   cfg.num_nodes = 2;
-
-  // Create the underlying Proxy
   proxy_ = std::make_unique<Proxy>(cfg);
+  // RDMA connection setup requires an atomic MR even for write-only commands.
+  GPU_RT_CHECK(cudaHostAlloc(&atomic_buffer_ptr_, kAtomicBufferSize,
+                             cudaHostAllocMapped));
+  std::memset(atomic_buffer_ptr_, 0, kAtomicBufferSize);
+  proxy_->set_atomic_buffer_ptr(atomic_buffer_ptr_);
+}
+
+FifoProxy::~FifoProxy() {
+  stop();
+  if (proxy_->listen_fd_ >= 0) close(proxy_->listen_fd_);
+  if (atomic_buffer_ptr_) cudaFreeHost(atomic_buffer_ptr_);
+}
+
+void FifoProxy::set_fifo(mscclpp::Fifo* fifo) { fifo_ = fifo; }
+
+void FifoProxy::set_peers_meta(std::vector<PeerMeta> const& meta) {
+  if (thread_) throw std::runtime_error("Cannot replace peers while running");
   proxy_->set_peers_meta(meta);
 }
 
 void FifoProxy::start_sender() {
-  if (!fifo_ || !proxy_) {
-    throw std::runtime_error("FIFO or Proxy not set before starting");
+  if (!fifo_ || proxy_->peers_.size() != 2 || thread_) {
+    throw std::runtime_error(
+        "FIFO and two peers must be set before starting an idle proxy");
   }
   stop_flag_.store(false, std::memory_order_release);
   proxy_->set_progress_run(true);
@@ -260,8 +268,9 @@ void FifoProxy::start_sender() {
 }
 
 void FifoProxy::start_remote() {
-  if (!fifo_ || !proxy_) {
-    throw std::runtime_error("FIFO or Proxy not set before starting");
+  if (!fifo_ || proxy_->peers_.size() != 2 || thread_) {
+    throw std::runtime_error(
+        "FIFO and two peers must be set before starting an idle proxy");
   }
   stop_flag_.store(false, std::memory_order_release);
   proxy_->set_progress_run(true);
@@ -269,6 +278,7 @@ void FifoProxy::start_remote() {
 }
 
 void FifoProxy::stop() {
+  if (!thread_) return;
   stop_flag_.store(true, std::memory_order_release);
   if (proxy_) {
     proxy_->set_progress_run(false);
@@ -277,6 +287,8 @@ void FifoProxy::stop() {
     thread_->join();
   }
   thread_.reset();
+  // Python owns the scratch tensor; only release the transport resources.
+  proxy_->destroy(false);
 }
 
 void FifoProxy::run_sender() {
@@ -317,8 +329,9 @@ void FifoProxy::run_sender() {
       proxy_->acked_wrs_.erase(fifo_tail_acked);
 
       // Pop from FIFO
-      fifo_->pop();
       fifo_tail_acked++;
+      processed_count_.store(fifo_tail_acked, std::memory_order_release);
+      fifo_->pop();
     }
 
     if (fifo_head_seen - fifo_tail_acked > 128) {
@@ -328,7 +341,9 @@ void FifoProxy::run_sender() {
     }
 
     // Poll FIFO for next command
-    mscclpp::ProxyTrigger trigger = fifo_->poll();
+    // Do not repost the oldest unacknowledged trigger while its WR is pending.
+    mscclpp::ProxyTrigger trigger =
+        fifo_->poll(fifo_head_seen - fifo_tail_acked);
 
     // If fst is 0, FIFO is empty - continue polling
     if (trigger.fst == 0) {
@@ -337,7 +352,7 @@ void FifoProxy::run_sender() {
     }
 
     // Convert trigger to TransferCmd
-    TransferCmd cmd;
+    TransferCmd cmd{};
     cmd.cmd_type = make_cmd_type(CmdType::WRITE, false, 0);
     cmd.dst_rank = 1;
     cmd.bytes = kObjectSize;
@@ -381,8 +396,9 @@ void FifoProxy::run_sender() {
 #endif
 
       proxy_->acked_wrs_.erase(fifo_tail_acked);
-      fifo_->pop();
       fifo_tail_acked++;
+      processed_count_.store(fifo_tail_acked, std::memory_order_release);
+      fifo_->pop();
     }
   }
 
@@ -425,8 +441,5 @@ double FifoProxy::avg_wr_latency_us() const {
 }
 
 uint64_t FifoProxy::processed_count() const {
-  if (proxy_) {
-    return proxy_->completed_wr();
-  }
-  return 0;
+  return processed_count_.load(std::memory_order_acquire);
 }

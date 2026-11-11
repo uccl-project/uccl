@@ -33,8 +33,8 @@ def test_register_memory_basic():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4)
-    print("Created Endpoint on GPU 4")
+    ep = p2p.Endpoint(torch.cuda.current_device())
+    print("Created Endpoint on the current GPU")
 
     # Create a single tensor
     tensor = torch.ones(1024, dtype=torch.float32, device="cuda:0")
@@ -98,8 +98,8 @@ def test_register_memory_multiple():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4)
-    print("Created Endpoint on GPU 4")
+    ep = p2p.Endpoint(torch.cuda.current_device())
+    print("Created Endpoint on the current GPU")
 
     # Create multiple tensors with different sizes
     tensors = [
@@ -159,8 +159,8 @@ def test_register_memory_empty_list():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4)
-    print("Created Endpoint on GPU 4")
+    ep = p2p.Endpoint(torch.cuda.current_device())
+    print("Created Endpoint on the current GPU")
 
     # Register empty list
     descriptors = ep.register_memory([])
@@ -186,8 +186,8 @@ def test_register_memory_invalid_input():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4)
-    print("Created Endpoint on GPU 4")
+    ep = p2p.Endpoint(torch.cuda.current_device())
+    print("Created Endpoint on the current GPU")
 
     # Try to register a non-tensor object
     try:
@@ -215,8 +215,8 @@ def test_register_memory_mixed_valid_invalid():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4)
-    print("Created Endpoint on GPU 4")
+    ep = p2p.Endpoint(torch.cuda.current_device())
+    print("Created Endpoint on the current GPU")
 
     # Create valid tensor
     tensor = torch.ones(1024, dtype=torch.float32, device="cuda:0")
@@ -245,8 +245,8 @@ def test_register_memory_different_dtypes():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4)
-    print("Created Endpoint on GPU 4")
+    ep = p2p.Endpoint(torch.cuda.current_device())
+    print("Created Endpoint on the current GPU")
 
     # Create tensors with different dtypes
     tensors = [
@@ -293,8 +293,8 @@ def test_get_serialized_descs():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4)
-    print("Created Endpoint on GPU 4")
+    ep = p2p.Endpoint(torch.cuda.current_device())
+    print("Created Endpoint on the current GPU")
 
     # Create tensors
     tensors = [
@@ -329,8 +329,8 @@ def test_deserialize_descs():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4)
-    print("Created Endpoint on GPU 4")
+    ep = p2p.Endpoint(torch.cuda.current_device())
+    print("Created Endpoint on the current GPU")
 
     # Create tensors
     tensors = [
@@ -392,8 +392,8 @@ def test_serialize_deserialize_roundtrip():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4)
-    print("Created Endpoint on GPU 4")
+    ep = p2p.Endpoint(torch.cuda.current_device())
+    print("Created Endpoint on the current GPU")
 
     # Create tensors with different sizes and dtypes
     # Note: Use ones/zeros instead of randn for integer types (randn doesn't support int types)
@@ -484,7 +484,7 @@ def test_transfer():
     if rank == 0:
         # Client side
         print("[Client] Creating endpoint...")
-        ep = p2p.Endpoint(4)
+        ep = p2p.Endpoint(torch.cuda.current_device())
 
         # Get local metadata
         local_metadata = ep.get_metadata()
@@ -531,15 +531,16 @@ def test_transfer():
         print(f"[Client] Deserialized {len(remote_descs)} remote descriptor(s)")
 
         # Start transfer (WRITE operation)
-        xfer_handle = ep.transfer(conn_id, "WRITE", local_descs, remote_descs)
-        assert xfer_handle is not None, "Failed to start transfer"
+        ok, transfer_id = ep.transfer(conn_id, "write", local_descs, remote_descs)
+        assert ok, "Failed to start transfer"
         print(f"[Client] Started WRITE transfer")
 
         # Check transfer state until complete
         max_wait = 100
         wait_count = 0
         while wait_count < max_wait:
-            is_done = ep.check_xfer_state(xfer_handle)
+            ok, is_done = ep.poll_async(transfer_id)
+            assert ok, "Transfer polling failed"
             if is_done:
                 print(f"[Client] Transfer completed")
                 break
@@ -554,7 +555,7 @@ def test_transfer():
     elif rank == 1:
         # Server side
         print("[Server] Creating endpoint...")
-        ep = p2p.Endpoint(4)
+        ep = p2p.Endpoint(torch.cuda.current_device())
         ep.start_passive_accept()
 
         # Get local metadata
