@@ -10,85 +10,29 @@ on:
 
 jobs:
   clang-format-check:
-    # Ubuntu 26.04 no longer packages the formatter version used by this repo.
     runs-on: ubuntu-24.04
-
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-
-    - name: Set up Python for the pinned formatter
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.10'
-
-    - name: Install clang-format 14
-      run: python -m pip install clang-format==14.0.6
-
-    - name: Show clang-format version
-      run: clang-format --version
-
-    - name: Check C++ formatting
-      run: |
-        set -e
-
-        DIRECTORIES=("collective" "ep" "experimental" "p2p" "include")
-        EXTENSIONS=("cpp" "cxx" "cc" "h" "hpp" "cu" "cuh")
-        EXCLUDE=("collective/afxdp/lib" "experimental/lite/lite-collective/thirdparty")
-
-        EXCLUDE_ARGS=()
-        for EXC in "${EXCLUDE[@]}"; do
-            EXCLUDE_ARGS+=( -path "$EXC" -prune -o )
-        done
-
-        FILES=()
-
-        for DIR in "${DIRECTORIES[@]}"; do
-          if [ -d "$DIR" ]; then
-            for EXT in "${EXTENSIONS[@]}"; do
-              while IFS= read -r -d '' FILE; do
-                FILES+=("$FILE")
-              done < <(find "$DIR" "${EXCLUDE_ARGS[@]}" -type f -name "*.${EXT}" -print0)
-            done
-          fi
-        done
-
-        if [ ${#FILES[@]} -eq 0 ]; then
-          echo "No files found to check."
-          exit 0
-        fi
-
-        echo "Checking formatting on files:"
-        for FILE in "${FILES[@]}"; do
-          echo "$FILE"
-        done
-
-        clang-format --dry-run --Werror "${FILES[@]}"
-
-  python-format-check:
-    runs-on: ubuntu-24.04
-
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.12'
+    - name: Install pre-commit
+      run: python -m pip install -r scripts/requirements-format.txt
+    - name: Check C++ and CUDA formatting
+      run: pre-commit run clang-format --all-files --show-diff-on-failure
 
-    - name: Install black
-      run: |
-        pip install black==26.5.1
-
+  python-format-check:
+    runs-on: ubuntu-24.04
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: Install pre-commit
+      run: python -m pip install -r scripts/requirements-format.txt
     - name: Check Python formatting
-      run: |
-        PYTHON_DIRS=("p2p" "ep" "ci")
-        EXCLUDES="thirdparty|docs|build"
-
-        for DIR in "${PYTHON_DIRS[@]}"; do
-          if [ -d "$DIR" ]; then
-            echo "Checking Python formatting in $DIR..."
-            black "$DIR" --exclude "$EXCLUDES" --check
-          fi
-        done
+      run: pre-commit run black --all-files --show-diff-on-failure

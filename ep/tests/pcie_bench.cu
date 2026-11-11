@@ -272,6 +272,7 @@ class iovMultiFifo {
 
   int num_fifo_;
   volatile struct IovFifo* fifo_vec_[kMaxFifos];
+  struct IovFifo** device_fifo_vec_ = nullptr;
   uint64_t fifo_slot_idx_[kMaxFifos];  // monotonic increasing index
 
  public:
@@ -280,6 +281,10 @@ class iovMultiFifo {
       GPU_RT_CHECK(gpuHostAlloc(&fifo_vec_[i], sizeof(struct IovFifo),
                                 gpuHostAllocMapped));
     }
+    // The pointer array itself must be device-accessible on discrete GPUs.
+    GPU_RT_CHECK(gpuMalloc(&device_fifo_vec_, num_fifo * sizeof(IovFifo*)));
+    GPU_RT_CHECK(gpuMemcpy(device_fifo_vec_, fifo_vec_,
+                           num_fifo * sizeof(IovFifo*), gpuMemcpyHostToDevice));
     init();
   }
 
@@ -300,13 +305,14 @@ class iovMultiFifo {
   }
 
   ~iovMultiFifo() {
+    GPU_RT_CHECK(gpuFree(device_fifo_vec_));
     for (int i = 0; i < num_fifo_; i++) {
       GPU_RT_CHECK(gpuFreeHost((void*)fifo_vec_[i]));
     }
   }
 
   struct IovFifo** get_fifo_vec() {
-    return (struct IovFifo**)fifo_vec_;
+    return device_fifo_vec_;
   }
 
   std::tuple<uint64_t, volatile struct Iov*> reserve_fifo_slot(int fifo_idx) {
@@ -464,5 +470,12 @@ int main() {
   printf("Kernel abort time: %ld us\n", elapsed_us.count());
 
   delete fifo;
+  for (int i = 0; i < kTestIovs; i++) {
+    GPU_RT_CHECK(gpuFree(cpu_iov->srcs[i]));
+    GPU_RT_CHECK(gpuFree(cpu_iov->dsts[i]));
+  }
+  free(cpu_iov);
+  GPU_RT_CHECK(gpuStreamDestroy(stream1));
+  GPU_RT_CHECK(gpuStreamDestroy(stream2));
   return 0;
 }

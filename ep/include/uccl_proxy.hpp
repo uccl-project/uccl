@@ -139,6 +139,8 @@ class FifoProxy {
   std::unique_ptr<Proxy> proxy_;  // Underlying Proxy for RDMA operations
   std::unique_ptr<std::thread> thread_;
   std::atomic<bool> stop_flag_;
+  std::atomic<uint64_t> processed_count_{0};
+  void* atomic_buffer_ptr_ = nullptr;
 
   uintptr_t gpu_buffer_addr_;
   size_t total_size_;
