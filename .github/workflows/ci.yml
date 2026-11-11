@@ -24,11 +24,41 @@ on:
       head_repo:
         description: 'Source owner/repo (empty = this repository)'
         default: ''
+      pr:
+        description: 'PR number for command status comments (set by dispatcher)'
+        default: ''
+      reply_comment_id:
+        description: 'Bot comment to update (set by dispatcher)'
+        default: ''
+      reply_marker:
+        description: 'Bot comment request marker (set by dispatcher)'
+        default: ''
 
 permissions:
   contents: read
 
 jobs:
+  comment-start:
+    name: Start command status
+    if: github.event_name == 'workflow_dispatch' && inputs.reply_comment_id != ''
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout trusted comment helper
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Mark command running
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await require('./ci/github_comments.js').update({github, context, status: 'running'});
+
   plan:
     runs-on: ubuntu-24.04
     outputs:
@@ -179,3 +209,28 @@ jobs:
           [[ $PLAN == success ]]
           [[ $CPU_RESULT == success || $CPU_RESULT == skipped ]]
           [[ $GPU_RESULT == success || $GPU_RESULT == skipped ]]
+
+  comment-result:
+    name: Finish command status
+    needs: [comment-start, plan, cpu, GPU, status]
+    if: always() && github.event_name == 'workflow_dispatch' && inputs.reply_comment_id != ''
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout trusted comment helper
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Post command result
+        uses: actions/github-script@v7
+        env:
+          CI_JOB_RESULTS: ${{ toJSON(needs) }}
+        with:
+          script: |
+            const results = JSON.parse(process.env.CI_JOB_RESULTS);
+            await require('./ci/github_comments.js').update({github, context, status: 'complete', results});

@@ -118,6 +118,11 @@ Manual runs ignore changed-file filtering. Comment commands require `write`,
 `maintain` or `admin` permission and run the PR's exact head SHA at dispatch.
 Supported targets: `all`, `cpu`, `l4`, `gb10`, `gh200`.
 
+Each authorized command creates one bot comment, updated from queued to running
+and then completed, failed, cancelled or skipped, with a run/log link. Forked
+PRs use the same permission check and exact commit; only separate jobs running
+trusted workflow code can update comments. Dispatch failures update the reply too.
+
 ```text
 /run-ci all
 /run-ci l4 p2p.*
