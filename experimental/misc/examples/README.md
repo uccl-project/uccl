@@ -43,7 +43,7 @@ bash build.sh [cu12|cu13|roc7|roc6] all --install
 ### Single-Node Training
 
 ```bash
-cd examples
+cd experimental/misc/examples
 
 # Auto-detect platform and use all GPUs
 ./ddp_run.sh
@@ -146,5 +146,5 @@ This test creates four overlapping process groups and drives concurrent collecti
 ## References
 
 - [UCCL Project](https://github.com/uccl-project/uccl)
-- [UCCL Collective RDMA README](../collective/rdma/README.md)
+- [UCCL Collective RDMA README](../../../collective/rdma/README.md)
 - [PyTorch Distributed](https://pytorch.org/docs/stable/distributed.html)
