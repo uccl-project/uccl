@@ -39,7 +39,7 @@ jobs:
         with:
           script: |
             const {dispatch} = require('./ci/github_comments.js');
-            for (const command of ['/run-ci cpu ci.selftest', '/run-benchmark cpu']) {
+            for (const command of ['/run-benchmark cpu ci.selftest']) {
               const request = {
                 ...context,
                 repo: context.repo,
@@ -57,13 +57,19 @@ jobs:
             }
 
   matrix-name-smoke:
-    name: GPU label check
+    name: GPU queue check
     if: github.event_name == 'push' && github.repository == 'uccl-project/uccl' && github.ref == 'refs/heads/codex/ci-cpu-apt-recovery'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
     strategy:
       matrix:
-        target: [l4, gb10]
+        target: [l4, gb10, gh200]
+    concurrency:
+      group: uccl-queue-smoke-${{ github.run_id }}
+      queue: max
+      cancel-in-progress: false
     steps:
-      - run: echo 'Checking the GitHub matrix display label only'
+      - run: |
+          echo 'Checking the GitHub queue with three jobs and no lab access'
+          sleep 20

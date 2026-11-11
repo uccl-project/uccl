@@ -148,6 +148,8 @@ jobs:
     timeout-minutes: 180
     concurrency:
       group: uccl-gpu-${{ matrix.target }}
+      # Preserve waiting merge/manual runs instead of replacing the pending job.
+      queue: max
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
@@ -201,14 +203,31 @@ jobs:
     if: always()
     runs-on: ubuntu-24.04
     steps:
-      - env:
+      - name: Report aggregate CI status
+        env:
           PLAN: ${{ needs.plan.result }}
           CPU_RESULT: ${{ needs.cpu.result }}
           GPU_RESULT: ${{ needs.gpu.result }}
         run: |
-          [[ $PLAN == success ]]
-          [[ $CPU_RESULT == success || $CPU_RESULT == skipped ]]
-          [[ $GPU_RESULT == success || $GPU_RESULT == skipped ]]
+          printf '| Job | Result |\n|---|---|\n| Plan | %s |\n| CPU | %s |\n| GPU | %s |\n' \
+            "$PLAN" "$CPU_RESULT" "$GPU_RESULT" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [[ $PLAN != success ]]; then
+            echo "::error::CI planning did not succeed: $PLAN"
+            exit 1
+          fi
+          failed=0
+          for entry in "CPU:$CPU_RESULT" "GPU:$GPU_RESULT"; do
+            case ${entry#*:} in
+              success|skipped) ;;
+              cancelled)
+                echo "::error::${entry%%:*} jobs were cancelled before completion; check their scheduling/cancellation annotations."
+                failed=1 ;;
+              *)
+                echo "::error::${entry%%:*} jobs did not succeed: ${entry#*:}"
+                failed=1 ;;
+            esac
+          done
+          exit "$failed"
 
   comment-result:
     name: Finish command status
