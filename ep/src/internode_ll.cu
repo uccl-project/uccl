@@ -121,6 +121,12 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
   // initialize barrier
   amd::barrier_init(1);
+  // `barrier_init` is a plain shared-memory store executed by every thread.
+  // Without a block-wide synchronization a late thread can reset the counter
+  // after other warps have already arrived, so those warps wait for a
+  // generation flip that can no longer happen and the block deadlocks before
+  // sending any token.
+  __syncthreads();
 #endif
 
   // Sending phase
