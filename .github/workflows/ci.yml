@@ -106,8 +106,8 @@ jobs:
           path: ci-results/
           if-no-files-found: error
 
-  gpu:
-    name: GPU (${{ matrix.target }})
+  # Default matrix names remain readable when GitHub skips matrix expansion.
+  GPU:
     needs: plan
     # PR code reaches lab machines only through a maintainer's workflow dispatch.
     if: github.event_name != 'pull_request' && needs.plan.outputs.has_gpu == 'true'
@@ -167,14 +167,14 @@ jobs:
 
   status:
     name: CI status
-    needs: [plan, cpu, gpu]
+    needs: [plan, cpu, GPU]
     if: always()
     runs-on: ubuntu-24.04
     steps:
       - env:
           PLAN: ${{ needs.plan.result }}
           CPU_RESULT: ${{ needs.cpu.result }}
-          GPU_RESULT: ${{ needs.gpu.result }}
+          GPU_RESULT: ${{ needs.GPU.result }}
         run: |
           [[ $PLAN == success ]]
           [[ $CPU_RESULT == success || $CPU_RESULT == skipped ]]
