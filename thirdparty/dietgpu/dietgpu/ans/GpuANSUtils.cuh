@@ -33,8 +33,12 @@ struct __align__(4) ANSDecodedTx4 {
 constexpr uint32_t kNumSymbols = 1 << (sizeof(ANSDecodedT) * 8);
 static_assert(kNumSymbols > 1, "");
 
-// Default block size for compression (in bytes)
+// Default block size for compression (in ANS symbols)
 constexpr uint32_t kDefaultBlockSize = 4096;
+
+// Larger block size for large inputs: fewer per-block warp states and block
+// words in the archive. Only archives that use it carry kANSVersionBlockSize.
+constexpr uint32_t kLargeBlockSize = 16384;
 
 // limit state to 2^31 - 1, so as to prevent addition overflow in the integer
 // division via mul and shift by constants
@@ -53,6 +57,10 @@ constexpr uint32_t kANSMagic = 0xd00d;
 
 // current DietGPU version number
 constexpr uint32_t kANSVersion = 0x0001;
+
+// Archive version that stores a non-default block size in the header options.
+// Archives with kDefaultBlockSize keep kANSVersion and are unchanged.
+constexpr uint32_t kANSVersionBlockSize = 0x0002;
 
 // Each block of compressed data (either coalesced or uncoalesced) is aligned to
 // this number of bytes and has a valid (if not all used) segment with this
@@ -109,9 +117,35 @@ struct __align__(16) ANSCoalescedHeader {
     magicAndVersion = (kANSMagic << 16) | kANSVersion;
   }
 
+  __host__ __device__ uint32_t getVersion() const {
+    return magicAndVersion & 0xffffU;
+  }
+
   __host__ __device__ void checkMagicAndVersion() const {
     assert((magicAndVersion >> 16) == kANSMagic);
-    assert((magicAndVersion & 0xffffU) == kANSVersion);
+    assert(getVersion() == kANSVersion || getVersion() == kANSVersionBlockSize);
+  }
+
+  // Number of symbols per compressed block (the last block may be shorter)
+  __host__ __device__ uint32_t getBlockSize() const {
+    return getVersion() == kANSVersion
+        ? kDefaultBlockSize
+        : kDefaultBlockSize << ((options >> 5) & 0xf);
+  }
+
+  // Call after setMagicAndVersion(). A non-default size switches the archive
+  // to kANSVersionBlockSize, which older decoders reject.
+  __host__ __device__ void setBlockSize(uint32_t blockSize) {
+    if (blockSize == kDefaultBlockSize) {
+      return;
+    }
+    uint32_t shift = 0;
+    while ((kDefaultBlockSize << shift) < blockSize) {
+      ++shift;
+    }
+    assert((kDefaultBlockSize << shift) == blockSize && shift <= 0xf);
+    magicAndVersion = (kANSMagic << 16) | kANSVersionBlockSize;
+    options = (options & ~(0xfU << 5)) | (shift << 5);
   }
 
   __host__ __device__ uint32_t getTotalUncompressedWords() const {
@@ -205,7 +239,8 @@ struct __align__(16) ANSCoalescedHeader {
   uint32_t totalUncompressedWords;
   uint32_t totalCompressedWords;
 
-  // (27: unused)(1: use checksum)(4: probBits)
+  // (23: unused)(4: log2(blockSize / kDefaultBlockSize), version 2 only)
+  // (1: use checksum)(4: probBits)
   uint32_t options;
   uint32_t checksum;
   uint32_t unused0;
