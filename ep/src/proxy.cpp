@@ -866,6 +866,14 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
   size_t thread_pending = 0;
   for (auto const& pend : fifo_pending_) thread_pending += pend.size();
 #endif
+  // A CXI QUIET read in pass k is acked at the end of pass k+1 (or later) if
+  // that pass read every sibling ring until empty; a ring that stops early
+  // keeps it pending. Assumes no other producer pushes to these rings while
+  // the QUIET is pending.
+  bool const check_cxi_quiet = cxi_quiet_pending_;
+  size_t const cxi_quiet_rb_idx =
+      check_cxi_quiet ? static_cast<size_t>(cxi_quiet_wr_ >> 32) : SIZE_MAX;
+  bool cxi_siblings_drained = true;
   // Multi-ring buffer processing: collect commands from all ring buffers
   // Process each ring buffer (similar to test_multi_ring_throughput.cu)
   for (size_t rb_idx = 0; rb_idx < cfg_.d2h_queues.size(); rb_idx++) {
@@ -889,13 +897,17 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
 
     // Pop commands from the FIFO until the budget is reached or the max
     // inflight bytes is reached.
+    bool ring_drained = false;
     for (size_t take = 0; take < budget; ++take) {
       if (current_inflight_bytes.load(std::memory_order_acquire) >=
           max_inflight_bytes) {
         break;
       }
       auto trig = fifo->poll();
-      if (trig.fst == 0) break;
+      if (trig.fst == 0) {
+        ring_drained = true;
+        break;
+      }
       adaptive_sleeper_.update_timer();
       TransferCmd cmd = d2hq::decode_from_trigger(trig);
 
@@ -949,6 +961,11 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
         fifo->pop();
       }
     }
+
+    if (!ring_drained && rb_idx != cxi_quiet_rb_idx) {
+      cxi_siblings_drained = false;
+    }
+
 #else
     uint64_t& ring_tail = ring_tails_[rb_idx];
     size_t& ring_seen = ring_seen_[rb_idx];
@@ -973,10 +990,16 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
       CmdType cmd = h->volatile_load_cmd_type(i);
       // NOTE(MaoZiming): Non-blocking. prevent local and remote both while
       // loop.
-      if (cmd == CmdType::EMPTY) break;
+      if (cmd == CmdType::EMPTY) {
+        if (rb_idx != cxi_quiet_rb_idx) cxi_siblings_drained = false;
+        break;
+      }
 
       TransferCmd& cmd_entry = h->load_cmd_entry(i);
-      if (cmd_entry.cmd_type == CmdType::EMPTY) break;
+      if (cmd_entry.cmd_type == CmdType::EMPTY) {
+        if (rb_idx != cxi_quiet_rb_idx) cxi_siblings_drained = false;
+        break;
+      }
 
       if (get_base_cmd(cmd_entry.cmd_type) == CmdType::WRITE ||
           get_base_cmd(cmd_entry.cmd_type) == CmdType::ATOMIC) {
@@ -1027,6 +1050,8 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
         std::chrono::duration_cast<std::chrono::microseconds>(end - start);
 #endif
   }
+
+  if (check_cxi_quiet && cxi_siblings_drained) complete_cxi_quiet();
 
   // This does not deallocate the memory, saving malloc overhead.
   wrs_to_post.clear();
@@ -1183,6 +1208,15 @@ void Proxy::poll_cxi_completions() {
   if (ne > 0) adaptive_sleeper_.update_timer();
 }
 
+void Proxy::complete_cxi_quiet() {
+  while (cxi_outstanding_ops_ > 0) {
+    poll_cxi_completions();
+    if (cxi_outstanding_ops_ > 0) cpu_relax();
+  }
+  acked_wrs_.insert(cxi_quiet_wr_);
+  cxi_quiet_pending_ = false;
+}
+
 void Proxy::post_cxi_commands(std::vector<uint64_t> const& wrs_to_post,
                               std::vector<TransferCmd> const& cmds_to_post) {
   if (!cxi_transport_) {
@@ -1237,11 +1271,14 @@ void Proxy::post_cxi_commands(std::vector<uint64_t> const& wrs_to_post,
         break;
       }
       case CmdType::QUIET:
-        while (cxi_outstanding_ops_ > 0) {
-          poll_cxi_completions();
-          if (cxi_outstanding_ops_ > 0) cpu_relax();
+        // Do not drain here: commands of sibling rings that this batch holds
+        // after the QUIET, or that are not read yet, would not be covered.
+        // post_gpu_command() completes the QUIET after a full pass.
+        if (cxi_quiet_pending_) {
+          throw std::runtime_error("CXI QUIET posted while one is pending");
         }
-        acked_wrs_.insert(wrs_to_post[i]);
+        cxi_quiet_pending_ = true;
+        cxi_quiet_wr_ = wrs_to_post[i];
         break;
       case CmdType::BARRIER:
         send_barrier(wrs_to_post[i]);

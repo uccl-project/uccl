@@ -51,6 +51,21 @@ namespace nb = nanobind;
 
 static std::mutex g_proxies_mu;
 
+// Stops and drops every registered proxy. The registry holds Python objects,
+// so this must run while the interpreter is still alive.
+static void stop_and_clear_registered_proxies() {
+  std::lock_guard<std::mutex> lk(g_proxies_mu);
+  for (auto& kv : uccl::g_proxies_by_dev) {
+    for (auto& proxy : kv.second) {
+      try {
+        proxy.attr("stop")();
+      } catch (...) {
+      }
+    }
+  }
+  uccl::g_proxies_by_dev.clear();
+}
+
 struct EventOverlap {};
 struct Ctx {
   long num_tokens{0};
@@ -2172,18 +2187,12 @@ NB_MODULE(ep, m) {
         return false;
       },
       nb::arg("device_index"));
-  m.def("stop_all_registered_proxies", []() {
-    std::lock_guard<std::mutex> lk(g_proxies_mu);
-    for (auto& kv : uccl::g_proxies_by_dev) {
-      for (auto& proxy : kv.second) {
-        try {
-          proxy.attr("stop")();
-        } catch (...) {
-        }
-      }
-    }
-    uccl::g_proxies_by_dev.clear();
-  });
+  m.def("stop_all_registered_proxies", &stop_and_clear_registered_proxies);
+  // The registry is a C++ static, destroyed after Python has finalized. A
+  // script that exits without destroy_uccl(), e.g. on an exception, would then
+  // crash in Py_DECREF. Release the proxies from an atexit hook instead.
+  nb::module_::import_("atexit").attr("register")(
+      nb::cpp_function(&stop_and_clear_registered_proxies));
 
   m.def("get_oob_ip", &uccl::get_oob_ip, "Get the OOB IP address");
   m.def(
