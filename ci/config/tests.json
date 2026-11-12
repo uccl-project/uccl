@@ -3447,6 +3447,29 @@
       ]
     },
     {
+      "id": "p2p.nfh_codec",
+      "sources": [
+        "p2p/rdma/nfh/test_nfh_codec.cu"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gh200",
+        "gb10"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 300,
+      "command": "make -C p2p/rdma/nfh test GPU_ARCH=\"sm_$SM\""
+    },
+    {
       "id": "p2p.compression_arena",
       "sources": [
         "p2p/tests/scenario_compressed_write_arena.py"
