@@ -467,6 +467,10 @@ Endpoint::~Endpoint() {
   {
     std::shared_lock<std::shared_mutex> lock(mr_mu_);
     for (auto& [mr_id, mr] : mr_id_to_mr_) {
+      // Deregister MRs the caller did not destroy: an MR left open keeps the
+      // transport's domain busy, so it could not be closed at teardown.
+      mr->mhandle_->compress_ctx.reset();
+      uccl_deregmr(ep_, mr->mhandle_);
       delete mr->mhandle_;
       delete mr;
     }
