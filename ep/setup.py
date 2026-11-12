@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import subprocess
 import sysconfig
@@ -17,6 +18,19 @@ try:
     import nanobind
 except ImportError:
     raise RuntimeError("nanobind not found. Install it with: pip install nanobind")
+
+
+def _cuda_arch_versions(arch_list):
+    """[8.9, 12.0] for a TORCH_CUDA_ARCH_LIST such as "8.9;12.0+PTX" or
+    "9.0a 10.0". None if an entry is not numeric (a name such as "Ada")."""
+    versions = []
+    for entry in re.split(r"[;,\s]+", arch_list.strip()):
+        match = re.match(r"\d+\.\d+", entry)
+        if entry and match is None:
+            return None
+        if entry:
+            versions.append(float(match.group()))
+    return versions
 
 
 def _is_freethreaded():
@@ -296,9 +310,28 @@ if __name__ == "__main__":
             # Fallback to 9.0 if detection failed
             default_arch = "9.0"
 
-        if int(os.getenv("DISABLE_SM90_FEATURES", 0)):
+        # Targets before sm_90 (A100, L4, RTX 4090) lack TMA and the other SM90
+        # features, and ptxas rejects intranode.cu when they are compiled in.
+        # build.sh always passes DISABLE_SM90_FEATURES, as 0 by default.
+        disable_sm90 = int(os.getenv("DISABLE_SM90_FEATURES", 0))
+        target_versions = _cuda_arch_versions(
+            os.getenv("TORCH_CUDA_ARCH_LIST") or default_arch
+        )
+        pre_sm90 = [v for v in target_versions or [] if v < 9.0]
+        auto_disable_sm90 = bool(pre_sm90) and not disable_sm90
+        if auto_disable_sm90 and len(pre_sm90) < len(target_versions):
+            sys.exit(
+                "TORCH_CUDA_ARCH_LIST mixes targets below sm_90 with sm_90 or "
+                "newer. Build them separately, or set DISABLE_SM90_FEATURES=1 to "
+                "build all of them without SM90 features."
+            )
+        if auto_disable_sm90:
+            print("All CUDA targets are below sm_90: building without SM90 features")
+
+        if disable_sm90:
             # Force A100 architecture
             default_arch = "8.0"
+        if disable_sm90 or auto_disable_sm90:
             # Disable some SM90 features: FP8, launch methods, and TMA
             cxx_flags.append("-DDISABLE_SM90_FEATURES")
             nvcc_flags.append("-DDISABLE_SM90_FEATURES")

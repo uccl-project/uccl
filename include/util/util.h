@@ -585,7 +585,23 @@ static inline jring_t* attach_shared_ring(char const* shm_name, int& shm_fd,
                                           size_t& shm_size) {
   shm_fd = shm_open(shm_name, O_RDWR, 0666);
   if (shm_fd < 0) {
-    perror("shm_open attach failed");
+    int const err = errno;
+    fprintf(stderr, "shm_open attach failed for %s: %s\n", shm_name,
+            strerror(err));
+    if (err == EACCES) {
+      // Name the owner: the usual cause is a ring left by another account.
+      struct stat st;
+      std::string const path = std::string("/dev/shm") + shm_name;
+      if (stat(path.c_str(), &st) == 0) {
+        fprintf(stderr,
+                "  %s is owned by uid %u with mode %o; this process runs as "
+                "uid %u\n",
+                path.c_str(), static_cast<unsigned>(st.st_uid),
+                static_cast<unsigned>(st.st_mode & 0777),
+                static_cast<unsigned>(geteuid()));
+      }
+    }
+    errno = err;
     return nullptr;
   }
 
@@ -626,7 +642,8 @@ static inline jring_t* create_shared_ring(char const* shm_name,
     *is_creator = true;
   } else {
     if (errno != EEXIST) {
-      perror("shm_open failed");
+      fprintf(stderr, "shm_open failed for %s: %s\n", shm_name,
+              strerror(errno));
       return nullptr;
     }
 

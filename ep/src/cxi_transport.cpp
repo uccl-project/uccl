@@ -3,6 +3,7 @@
 
 #ifdef USE_LIBFABRIC_CXI
 #include <rdma/fi_atomic.h>
+#include <rdma/fi_cxi_ext.h>
 #endif
 
 #include <algorithm>
@@ -164,6 +165,32 @@ fi_info* get_cxi_info() {
   return info;
 }
 
+// Enable CXI hybrid MR descriptors so the provider uses the desc we pass
+// instead of looking each local buffer up in its MR cache on every post.
+bool enable_cxi_hybrid_mr_desc(fid_domain* domain) {
+  fi_cxi_dom_ops* ops = nullptr;
+  int rc = fi_open_ops(&domain->fid, FI_CXI_DOM_OPS_3, 0,
+                       reinterpret_cast<void**>(&ops), nullptr);
+  if (rc == 0 && ops && ops->enable_hybrid_mr_desc) {
+    rc = ops->enable_hybrid_mr_desc(&domain->fid, true);
+  } else if (rc == 0) {
+    rc = -FI_ENOSYS;
+  }
+  static std::once_flag logged;
+  std::call_once(logged, [rc] {
+    if (rc == 0) {
+      std::fprintf(stderr,
+                   "[CXI] hybrid MR desc enabled; posts use UCCL's MR desc\n");
+    } else {
+      std::fprintf(stderr,
+                   "[CXI] hybrid MR desc not available (%s); the provider "
+                   "keeps registering local buffers internally\n",
+                   fi_strerror(-rc));
+    }
+  });
+  return rc == 0;
+}
+
 // UCCL_CXI_DOMAIN_RETRIES: fi_domain retries with a fresh fi_info (default 3,
 // 50 ms apart; 0 = a single attempt). A service id picked wrongly during
 // fi_getinfo stays in that fi_info, so a retry has to fetch a new one.
@@ -205,6 +232,8 @@ void CxiTransport::init(ProxyCtx& ctx) {
       rc = fi_domain(fabric_, selected, &domain_, nullptr);
     }
     check_fi(rc, "fi_domain");
+    // Must precede fi_endpoint: endpoints inherit the mode when created.
+    enable_cxi_hybrid_mr_desc(domain_);
     setup_lock.unlock();
 
     fi_cq_attr cq_attr = {};

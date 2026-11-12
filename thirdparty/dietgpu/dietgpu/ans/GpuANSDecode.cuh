@@ -317,8 +317,7 @@ template <
     typename InProvider,
     typename OutProvider,
     int Threads,
-    int ProbBits,
-    int BlockSize>
+    int ProbBits>
 __global__ __launch_bounds__(128) void ansDecodeKernel(
     InProvider inProvider,
     const TableT* __restrict__ table,
@@ -400,12 +399,14 @@ __global__ __launch_bounds__(128) void ansDecodeKernel(
     auto blockDataIn =
         headerIn->getBlockDataStart(numBlocks) + blockCompressedWordStart;
 
-    writer.setBlock(block);
+    // Re-read per block (two cached loads) instead of keeping the block size
+    // live across the decode loop, which costs a register and occupancy.
+    writer.setBlock(block, headerIn->getBlockSize());
 
     using Writer = typename OutProvider::Writer;
-    if (uncompressedWords == BlockSize) {
-      ANSDecodeWarpFullBlock<Writer, ProbBits, BlockSize, false>::decode(
-          laneId, state, compressedWords, blockDataIn, writer, lookup);
+    if (uncompressedWords == kDefaultBlockSize) {
+      ANSDecodeWarpFullBlock<Writer, ProbBits, kDefaultBlockSize, false>::
+          decode(laneId, state, compressedWords, blockDataIn, writer, lookup);
     } else {
       ansDecodeWarpBlock<Writer, ProbBits>(
           laneId,
@@ -531,8 +532,7 @@ ANSDecodeStatus ansDecodeBatch(
             InProvider,                                            \
             OutProvider,                                           \
             kThreads,                                              \
-            BITS,                                                  \
-            kDefaultBlockSize>,                                    \
+            BITS>,                                                 \
         kThreads,                                                  \
         0));                                                       \
     uint32_t maxGrid = maxBlocksPerSM * props.multiProcessorCount; \
@@ -543,8 +543,7 @@ ANSDecodeStatus ansDecodeBatch(
         InProvider,                                                \
         OutProvider,                                               \
         kThreads,                                                  \
-        BITS,                                                      \
-        kDefaultBlockSize><<<grid, kThreads, 0, stream>>>(         \
+        BITS><<<grid, kThreads, 0, stream>>>(                      \
         inProvider,                                                \
         table_dev.data(),                                          \
         outProvider,                                               \
