@@ -110,6 +110,16 @@ jobs:
           repository: ${{ inputs.head_repo || github.repository }}
           ref: ${{ inputs.sha || github.sha }}
           persist-credentials: false
+      # Older PR heads may not contain the setup helper used by this workflow.
+      - name: Checkout CPU setup from the workflow revision
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: .ci-workflow
+          sparse-checkout: ci/setup_cpu.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
           name: ci-plan
@@ -118,7 +128,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p ci-results
-          bash ci/setup_cpu.sh 2>&1 | tee ci-results/cpu-setup.log
+          bash .ci-workflow/ci/setup_cpu.sh 2>&1 | tee ci-results/cpu-setup.log
       - name: Run CPU suites
         run: python3 ci/run.py --local --target cpu --plan ci-plan.json
       - name: Summarize results
