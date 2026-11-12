@@ -461,10 +461,11 @@ class Buffer {
     }
 
     // The pointer arrays behind the barrier signals hold 8-byte pointers;
-    // pad the signals so they stay aligned for an odd number of NVL peers
-    // (one GPU per node would otherwise put them at a 4-byte offset).
+    // pad the signals (one slot per NVL peer plus the barrier mode) so the
+    // arrays stay aligned.
+    EP_HOST_ASSERT(max_nvl_peers <= NUM_MAX_NVL_PEERS);
     int64_t const barrier_signal_bytes =
-        (max_nvl_peers * sizeof(int) + 15) / 16 * 16;
+        (NUM_BARRIER_SIGNAL_INTS * sizeof(int) + 15) / 16 * 16;
     int64_t const buffer_ptr_bytes = max_nvl_peers * sizeof(void*);
     int64_t const barrier_signal_ptr_bytes = max_nvl_peers * sizeof(int*);
 
@@ -1823,13 +1824,18 @@ class Buffer {
     }
   }
 
-  // The NVL barrier (`barrier_block`) updates each signal slot with a local
-  // `atomicAdd_system` and a remote `atomicSub_system` from the peer GPU.
-  // Without native atomics over the peer link (PCIe P2P on many systems), the
-  // remote read-modify-write is not atomic against the local one. An update
-  // can be lost; the barrier then hangs or passes early, and dispatch/combine
-  // read stale data without any error. Refuse such GPU pairs.
-  void check_nvl_peer_atomics(std::vector<int> const& device_ids) const {
+  // The atomic NVL barrier (`barrier_block`) updates each signal slot with a
+  // local `atomicAdd_system` and a remote `atomicSub_system` from the peer
+  // GPU. Without native atomics over the peer link (PCIe P2P on many
+  // systems), the remote read-modify-write is not atomic against the local
+  // one. An update can be lost; the barrier then hangs or passes early, and
+  // dispatch/combine read stale data without any error. Such links use the
+  // epoch barrier, which needs only peer stores.
+  //
+  // Returns 1 when every NVL rank pair has native peer atomics, 0 when a pair
+  // lacks them (named in `missing`), and -1 when the pairs cannot be queried.
+  int nvl_peer_atomics_state(std::vector<int> const& device_ids,
+                             std::string& missing) const {
     int const offset = rdma_rank * num_nvl_ranks;
     int num_devices = 0;
     CUDA_CHECK(cudaGetDeviceCount(&num_devices));
@@ -1844,14 +1850,7 @@ class Buffer {
             sorted_ids.end() &&
         sorted_ids.front() >= 0 && sorted_ids.back() < num_devices &&
         ids[nvl_rank] == device_index;
-    if (not queryable) {
-      if (nvl_rank == 0 && num_nvl_ranks > 1)
-        fprintf(stderr,
-                "WARNING: cannot check native peer atomics between the NVL "
-                "ranks (each rank does not see all GPUs); the intranode "
-                "barrier needs them.\n");
-      return;
-    }
+    if (not queryable) return -1;
     for (int i = 0; i < num_nvl_ranks; ++i) {
       for (int j = 0; j < num_nvl_ranks; ++j) {
         if (i == j) continue;
@@ -1860,16 +1859,47 @@ class Buffer {
             &native_atomics, cudaDevP2PAttrNativeAtomicSupported, ids[i],
             ids[j]));
         if (not native_atomics) {
-          throw std::runtime_error(
-              "UCCL EP: GPU " + std::to_string(ids[i]) + " -> GPU " +
-              std::to_string(ids[j]) +
-              " has no native peer atomics "
-              "(cudaDevP2PAttrNativeAtomicSupported = 0, see `nvidia-smi "
-              "topo -p2p a`). The intranode barrier uses peer atomics and "
-              "can return wrong results on this link.");
+          missing = "GPU " + std::to_string(ids[i]) + " -> GPU " +
+                    std::to_string(ids[j]);
+          return 0;
         }
       }
     }
+    return 1;
+  }
+
+  // UCCL_EP_NVL_BARRIER=auto (default) | atomic | epoch. All NVL ranks must
+  // pick the same mode; `auto` decides from the device IDs every rank shares.
+  int select_nvl_barrier_mode(std::vector<int> const& device_ids) const {
+    if (num_nvl_ranks == 1) return BARRIER_MODE_ATOMIC;
+    std::string missing;
+    int const state = nvl_peer_atomics_state(device_ids, missing);
+    char const* env = std::getenv("UCCL_EP_NVL_BARRIER");
+    std::string const choice = env ? env : "auto";
+    std::string const reason =
+        state == 0 ? missing +
+                         " has no native peer atomics "
+                         "(cudaDevP2PAttrNativeAtomicSupported = 0)"
+                   : "native peer atomics between the NVL ranks cannot be "
+                     "checked (each rank does not see all GPUs)";
+    if (choice == "epoch") return BARRIER_MODE_EPOCH;
+    if (choice == "atomic") {
+      if (state != 1 && nvl_rank == 0)
+        fprintf(stderr,
+                "WARNING: UCCL_EP_NVL_BARRIER=atomic, but %s; the intranode "
+                "kernels can return wrong results.\n",
+                reason.c_str());
+      return BARRIER_MODE_ATOMIC;
+    }
+    if (choice != "auto")
+      throw std::runtime_error(
+          "UCCL_EP_NVL_BARRIER must be auto, atomic or epoch, not '" + choice +
+          "'");
+    if (state == 1) return BARRIER_MODE_ATOMIC;
+    if (nvl_rank == 0)
+      fprintf(stderr, "UCCL EP: %s; using the epoch NVL barrier.\n",
+              reason.c_str());
+    return BARRIER_MODE_EPOCH;
   }
 
   void sync(std::vector<int> const& device_ids,
@@ -1882,7 +1912,7 @@ class Buffer {
     if (num_nvl_bytes > 0) {
       EP_HOST_ASSERT(static_cast<std::size_t>(num_ranks) == device_ids.size());
       EP_HOST_ASSERT(device_ids.size() == all_gathered_handles.size());
-      check_nvl_peer_atomics(device_ids);
+      int const barrier_mode = select_nvl_barrier_mode(device_ids);
       for (int i = 0, offset = rdma_rank * num_nvl_ranks; i < num_nvl_ranks;
            ++i) {
         int global_rank = offset + i;
@@ -1922,6 +1952,10 @@ class Buffer {
       CUDA_CHECK(cudaMemcpy(barrier_signal_ptrs_gpu, barrier_signal_ptrs,
                             sizeof(int*) * max_nvl_peers,
                             cudaMemcpyHostToDevice));
+      // On `comm_stream`, after the constructor's memset of the signals
+      CUDA_CHECK(cudaMemcpyAsync(
+          barrier_signal_ptrs[nvl_rank] + BARRIER_MODE_SLOT, &barrier_mode,
+          sizeof(int), cudaMemcpyHostToDevice, comm_stream));
       CUDA_CHECK(cudaDeviceSynchronize());
     }
 
