@@ -1855,9 +1855,16 @@ class Buffer {
       for (int j = 0; j < num_nvl_ranks; ++j) {
         if (i == j) continue;
         int native_atomics = 0;
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+        // hipify maps the CUDA enum to a name HIP does not define
+        CUDA_CHECK(hipDeviceGetP2PAttribute(&native_atomics,
+                                            hipDevP2PAttrNativeAtomicSupported,
+                                            ids[i], ids[j]));
+#else
         CUDA_CHECK(cudaDeviceGetP2PAttribute(
             &native_atomics, cudaDevP2PAttrNativeAtomicSupported, ids[i],
             ids[j]));
+#endif
         if (not native_atomics) {
           missing = "GPU " + std::to_string(ids[i]) + " -> GPU " +
                     std::to_string(ids[j]);
