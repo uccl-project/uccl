@@ -11,6 +11,7 @@
 #include <arpa/inet.h>
 #include <cc/cc_state.h>
 #include <netinet/in.h>
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -229,10 +230,20 @@ size_t Endpoint::max_one_sided_inflight_ops() {
 }
 
 // ShmChannel helper function
+// The effective uid is part of the name so that rings of different accounts on
+// a shared host cannot clash.
 static inline std::string shm_ring_name(std::string const& from_bdf,
                                         std::string const& to_bdf) {
-  return "/uccl_gpu_jring_" + uccl::sanitize_bdf(from_bdf) + "_" +
-         uccl::sanitize_bdf(to_bdf);
+  return "/uccl_gpu_jring_u" + std::to_string(geteuid()) + "_" +
+         uccl::sanitize_bdf(from_bdf) + "_" + uccl::sanitize_bdf(to_bdf);
+}
+
+// A null inbox ring is skipped while polling, so say which sender is cut off.
+static inline void warn_missing_inbox_ring(std::string const& name,
+                                           std::string const& sender_bdf) {
+  std::cerr << "[UCCL P2P] cannot create or attach local inbox ring " << name
+            << "; local connections from GPU " << sender_bdf
+            << " will not reach this endpoint" << std::endl;
 }
 
 static inline void shm_ring_send(jring_t* ring, ShmMsg const& msg) {
@@ -338,6 +349,7 @@ Endpoint::Endpoint(uint32_t const gpu_idx) : passive_accept_(false) {
     handle.ring =
         uccl::create_shared_ring(name.c_str(), elem_sz, elem_cnt, handle.shm_fd,
                                  handle.shm_size, &is_creator);
+    if (handle.ring == nullptr) warn_missing_inbox_ring(name, sender_bdf);
     inbox_rings_[sender_bdf] = handle;
     inbox_creators_[sender_bdf] = is_creator;
   }
@@ -1067,80 +1079,56 @@ bool Endpoint::run_raw_one_sided_pipeline(
     std::vector<P2PMhandle*> const& mhandle_v,
     std::vector<void*> const& local_addr_v, std::vector<size_t> const& size_v,
     std::vector<FifoItem> const& slot_item_v, size_t num_iovs) {
-  struct PendingRawWait {
-    SendConnection::RawBatchWait wait;
-    bool active = false;
-  };
-
-  std::array<PendingRawWait, kMaxInflightOps> pending_waits{};
+  std::array<SendConnection::RawBatchWait, kMaxInflightOps> pending_waits{};
   size_t const max_inflight_ops = max_one_sided_inflight_ops();
   size_t next_iov = 0;
-  size_t num_completed = 0;
   size_t num_inflight = 0;
+  size_t num_pending = 0;
+  bool post_ok = true;
 
-  auto post_raw_window = [&]() -> bool {
-    if (next_iov >= num_iovs || num_inflight >= max_inflight_ops) return true;
-
+  for (;;) {
     size_t const batch_iovs =
-        std::min<size_t>(max_inflight_ops - num_inflight, num_iovs - next_iov);
-    std::array<SendConnection::OneSidedBatchOp, kMaxInflightOps> ops{};
-    int64_t wr_ids[kMaxInflightOps] = {};
-    std::array<SendConnection::RawBatchWait, kMaxInflightOps> waits{};
-    size_t num_waits = 0;
-
-    for (size_t i = 0; i < batch_iovs; ++i) {
-      size_t const iov = next_iov + i;
-      ops[i].local_addr = local_addr_v[iov];
-      ops[i].size = size_v[iov];
-      ops[i].local_mr_array = &mhandle_v[iov]->mr_array;
-      ops[i].slot_item = &slot_item_v[iov];
-    }
-
-    if (!send_group->post_write_or_read_batch(send_type, ops.data(), batch_iovs,
-                                              wr_ids, waits.data(),
-                                              &num_waits)) {
-      return false;
-    }
-    if (unlikely(num_waits == 0)) return false;
-
-    for (size_t i = 0; i < num_waits; ++i) {
-      bool inserted = false;
-      for (auto& pending : pending_waits) {
-        if (pending.active) continue;
-        pending.wait = waits[i];
-        pending.active = true;
-        inserted = true;
-        break;
+        std::min(max_inflight_ops - num_inflight, num_iovs - next_iov);
+    if (post_ok && batch_iovs != 0) {
+      std::array<SendConnection::OneSidedBatchOp, kMaxInflightOps> ops{};
+      int64_t wr_ids[kMaxInflightOps];
+      for (size_t i = 0; i < batch_iovs; ++i) {
+        size_t const iov = next_iov + i;
+        ops[i].local_addr = local_addr_v[iov];
+        ops[i].size = size_v[iov];
+        ops[i].local_mr_array = &mhandle_v[iov]->mr_array;
+        ops[i].slot_item = &slot_item_v[iov];
       }
-      if (unlikely(!inserted)) return false;
+
+      // Each wait covers at least one IOV, so the tail can hold this window.
+      size_t num_waits = 0;
+      post_ok = send_group->post_write_or_read_batch(
+                    send_type, ops.data(), batch_iovs, wr_ids,
+                    pending_waits.data() + num_pending, &num_waits) &&
+                num_waits != 0;
+      if (post_ok) {
+        num_pending += num_waits;
+        next_iov += batch_iovs;
+        num_inflight += batch_iovs;
+      }
     }
 
-    next_iov += batch_iovs;
-    num_inflight += batch_iovs;
-    return true;
-  };
-
-  while (num_completed < num_iovs) {
-    while (next_iov < num_iovs && num_inflight < max_inflight_ops) {
-      if (!post_raw_window()) return false;
-    }
+    // A rejected window leaves earlier DMA in flight until its waits retire.
+    if (num_pending == 0) return post_ok;
 
     auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
     uccl_drive_send(ep_);
-
-    for (auto& pending : pending_waits) {
-      if (!pending.active) continue;
-      if (!uccl_check_wr_fast(send_group, pending.wait.wr_id)) continue;
-
-      pending.active = false;
-      num_completed += pending.wait.iov_count;
-      UCCL_DCHECK(num_inflight >= pending.wait.iov_count);
-      num_inflight -= pending.wait.iov_count;
-      pending.wait = {};
-    }
+    auto end = std::remove_if(pending_waits.begin(),
+                              pending_waits.begin() + num_pending,
+                              [&](SendConnection::RawBatchWait const& wait) {
+                                if (!uccl_check_wr_fast(send_group, wait.wr_id))
+                                  return false;
+                                UCCL_DCHECK(num_inflight >= wait.iov_count);
+                                num_inflight -= wait.iov_count;
+                                return true;
+                              });
+    num_pending = end - pending_waits.begin();
   }
-
-  return true;
 }
 
 bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
@@ -1486,21 +1474,33 @@ bool Endpoint::connect_local(std::string const& remote_gpu_bdf,
     conn->remote_inbox_.shm_name = shm_ring_name(gpu_bus_id_, remote_gpu_bdf);
 
     jring_t* ring = nullptr;
-    for (int attempt = 0; attempt < kMaxRetry; attempt++) {
+    int attempts = 0;
+    int attach_errno = 0;
+    while (attempts < kMaxRetry) {
+      errno = 0;
       ring = uccl::attach_shared_ring(conn->remote_inbox_.shm_name.c_str(),
                                       conn->remote_inbox_.shm_fd,
                                       conn->remote_inbox_.shm_size);
+      attempts++;
       if (ring != nullptr) {
         break;
       }
-      // retry
+      attach_errno = errno;
+      // A permission error does not go away; only retry while the peer may
+      // still be creating its ring.
+      if (attach_errno == EACCES) {
+        break;
+      }
       std::this_thread::sleep_for(std::chrono::milliseconds(kRetrySleepMs));
     }
 
     if (ring == nullptr) {
       std::cout << "connect_local failed: cannot attach remote inbox ring "
-                << conn->remote_inbox_.shm_name << " after " << kMaxRetry
-                << " retries" << std::endl;
+                << conn->remote_inbox_.shm_name << " after " << attempts
+                << (attempts == 1 ? " attempt: " : " attempts: ")
+                << (attach_errno != 0 ? strerror(attach_errno)
+                                      : "ring not ready")
+                << std::endl;
       delete conn;
       return false;
     }
@@ -2523,6 +2523,7 @@ void Endpoint::initialize_engine() {
     handle.ring =
         uccl::create_shared_ring(name.c_str(), elem_sz, elem_cnt, handle.shm_fd,
                                  handle.shm_size, &is_creator);
+    if (handle.ring == nullptr) warn_missing_inbox_ring(name, sender_bdf);
     inbox_rings_[sender_bdf] = handle;
     inbox_creators_[sender_bdf] = is_creator;
   }
