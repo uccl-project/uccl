@@ -327,16 +327,10 @@ __device__ static __forceinline__ void quiet(uint64_t const* d2h_channel_addrs,
       "num_d2h_channel_addrs must be multiple of kChannelPerProxy");
   EP_DEVICE_ASSERT(num_d2h_channel_addrs % kChannelPerProxy == 0);
   EP_DEVICE_ASSERT(num_d2h_channel_addrs / kChannelPerProxy == kNumProxyThs);
-  // First, atomically commit QUIET to all CXI rings. Each proxy thread owns
-  // multiple D2H rings, so posting to one ring per proxy is not enough to fence
-  // sibling rings before RDMA buffer reuse.
-#if defined(USE_LIBFABRIC_CXI)
-  constexpr int kQuietStride = 1;
-  constexpr int kMaxQuietPosts = kNumProxyThs * kChannelPerProxy;
-#else
+  // First, atomically commit one QUIET per proxy thread. The proxy fences all
+  // of its D2H rings for that QUIET (on CXI, see Proxy::post_gpu_command()).
   constexpr int kQuietStride = kChannelPerProxy;
   constexpr int kMaxQuietPosts = kNumProxyThs;
-#endif
   uint64_t slots[kMaxQuietPosts];
   int posted_d2h_channel_idxs[kMaxQuietPosts];
   int num_posted = 0;

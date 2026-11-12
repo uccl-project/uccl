@@ -1,92 +1,17 @@
-#!/bin/bash
-# format.sh - Format all C++ files in project
+#!/usr/bin/env bash
+# Format tracked files using the same configuration as commits and CI.
+set -euo pipefail
 
-set -e
-
-# Directories to format (excluding thirdparty/, scripts/, docs/, etc.)
-
-DIRECTORIES=("collective" "ep" "p2p" "include" "experimental")
-
-EXTENSIONS=("cpp" "cxx" "cc" "h" "hpp" "cu" "cuh")
-EXCLUDE=(
-    "collective/afxdp/lib"
-    "experimental/lite/lite-collective/thirdparty"
-)
-
-REQUIRED_VERSION="14"
-
-# Use CLANG_FORMAT if set; otherwise prefer clang-format-14, then fall back to clang-format
-if [ -n "$CLANG_FORMAT" ]; then
-    :
-elif command -v clang-format-14 &> /dev/null; then
-    CLANG_FORMAT="clang-format-14"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$ROOT"
+if [[ -x .venv-format/bin/pre-commit ]]; then
+    PRE_COMMIT="$ROOT/.venv-format/bin/pre-commit"
+elif command -v pre-commit >/dev/null 2>&1; then
+    PRE_COMMIT="pre-commit"
 else
-    CLANG_FORMAT="clang-format"
-fi
-
-# Check if clang-format is installed
-if ! command -v "$CLANG_FORMAT" &> /dev/null; then
-    echo "$CLANG_FORMAT could not be found. Please install clang-format-14 (e.g. pip install clang-format==14)."
+    echo "Run 'bash scripts/install-hooks.sh' to install the pinned formatters." >&2
     exit 1
 fi
 
-# Ensure clang-format version is exactly 14.
-# Use sed for portability (BSD grep on macOS does not support -P).
-INSTALLED_VERSION=$("$CLANG_FORMAT" --version | sed -nE 's/.*[Vv]ersion[[:space:]]+([0-9]+)(\.[0-9]+){1,2}.*/\1/p' | head -1)
-
-if [ "$INSTALLED_VERSION" != "$REQUIRED_VERSION" ]; then
-    echo "clang-format version $REQUIRED_VERSION is required. Found version: $INSTALLED_VERSION ($CLANG_FORMAT)."
-    echo "Install version 14 (e.g. apt install clang-format-14) or set CLANG_FORMAT=/path/to/clang-format-14."
-    exit 1
-fi
-
-echo "Formatting C++ files..."
-
-EXCLUDE_ARGS=()
-for EXC in "${EXCLUDE[@]}"; do
-    EXCLUDE_ARGS+=( -path "$EXC" -prune -o )
-done
-
-FILES=()
-
-for DIR in "${DIRECTORIES[@]}"; do
-    if [ -d "$DIR" ]; then
-        for EXT in "${EXTENSIONS[@]}"; do
-            while IFS= read -r -d '' FILE; do
-                FILES+=("$FILE")
-            done < <(find "$DIR" "${EXCLUDE_ARGS[@]}" -type f -name "*.${EXT}" -print0)
-        done
-    fi
-done
-
-if [ ${#FILES[@]} -eq 0 ]; then
-    echo "No files to format."
-    exit 0
-fi
-
-for FILE in "${FILES[@]}"; do
-    echo "Formatting $FILE"
-    "$CLANG_FORMAT" -i "$FILE"
-done
-
-echo "Formatting Python files with black..."
-
-PYTHON_DIRS=("p2p" "ep")  # Adjust as needed
-BLACK_EXCLUDES=("thirdparty" "docs" "build")
-
-# Convert to exclude args
-BLACK_EXCLUDE_ARGS=$(IFS="|"; echo "${BLACK_EXCLUDES[*]}")
-
-if command -v black &>/dev/null; then
-    for DIR in "${PYTHON_DIRS[@]}"; do
-        if [ -d "$DIR" ]; then
-            echo "  → $DIR"
-            black "$DIR" --exclude "$BLACK_EXCLUDE_ARGS"
-        fi
-    done
-else
-    echo "black could not be found. Please install black (e.g. pip install black)."
-    exit 1
-fi
-
-echo "Formatting complete."
+# pre-commit exits nonzero if it makes changes or encounters an error.
+exec "$PRE_COMMIT" run --all-files --show-diff-on-failure "$@"

@@ -54,13 +54,13 @@ __global__ void multi_ring_throughput_kernel(
   metrics[warp_id].total_cycles = 0;
 
   // Create dummy transfer command
-  TransferCmd dummy_cmd;
+  TransferCmd dummy_cmd{};
+  dummy_cmd.cmd_type = make_cmd_type(CmdType::WRITE, false, false);
   dummy_cmd.dst_rank = warp_id / RINGS_PER_PROXY;
   dummy_cmd.bytes = config.payload_size;
   dummy_cmd.req_rptr = warp_id;
   dummy_cmd.req_lptr = 0;
   dummy_cmd.value = warp_id;
-  dummy_cmd.is_combine = false;
 
   // Test loop
   uint64_t test_start = clock64();
@@ -132,6 +132,7 @@ void cpu_proxy_thread_multi(std::vector<DeviceToHostCmdBuffer*> ring_buffers,
 
         TransferCmd& cmd_entry = ring_buffer->load_cmd_entry(i);
         cmds_to_process.push_back(cmd_entry);
+        ring_buffer->volatile_clear_cmd_type(i);
         seen = i + 1;
       }
 

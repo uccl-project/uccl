@@ -14,17 +14,12 @@ torchrun --nnodes=2 --nproc_per_node=1 --node_rank=1 \
 
 import torch
 import torch.distributed as dist
-import time
 from buffer import Buffer
 import os
-import sys
 
 from utils import (
-    init_dist,
+    init_dist_under_torchrun,
     detect_ib_hca,
-    get_cpu_proxies_meta,
-    initialize_uccl,
-    destroy_uccl,
 )
 
 
@@ -48,17 +43,12 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
     num_device_sms = torch.cuda.get_device_properties(
         device_index
     ).multi_processor_count
-
-    scratch_nbytes = int(1e9)  # 256 MB
-    scratch = torch.empty(
-        scratch_nbytes, dtype=torch.uint8, device=f"cuda:{device_index}"
-    )
-    proxies, workers = initialize_uccl(scratch, scratch_nbytes, rank, num_ranks, group)
+    scratch_nbytes = int(1e9)
+    buffer = None
 
     try:
         buffer = Buffer(
             group=group,
-            rdma_buffer_ptr=scratch.data_ptr(),
             num_nvl_bytes=0,
             num_rdma_bytes=int(scratch_nbytes),
             low_latency_mode=True,
@@ -70,20 +60,6 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
 
         if rank == 0:
             print("[simple-test] ✓ Buffer created successfully", flush=True)
-
-        buffer.connect_atomic_buffer(proxies[0])
-
-        for proxy in proxies:
-            proxy.calculate_and_set_dispatch_recv_data_offset(
-                num_tokens, hidden, num_experts
-            )
-            proxy.set_atomic_buffer_ptr(proxies[0].get_atomic_buffer_ptr())
-
-        if rank == 0:
-            print(
-                "[simple-test] ✓ dispatch_recv_data_offset calculated and set by CPU proxy",
-                flush=True,
-            )
 
         cumulative_local_expert_recv_stats = torch.zeros(
             (num_experts // num_ranks,), dtype=torch.int, device="cuda"
@@ -125,38 +101,21 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
             f"[simple-test] Combined tensor shape: {combined_x.shape}",
             flush=True,
         )
-        print("[simple-test] ✓ All tests passed!", flush=True)
-
-        time.sleep(1)
-        print("[simple-test] ✓ before destroy!", flush=True)
-
-    except Exception as e:
-        if rank == 0:
-            import traceback
-
-            print(f"[simple-test] ✗ Error: {repr(e)}", flush=True)
-            traceback.print_exc()
-        raise
-
-    try:
-        buffer.destroy()
-    except Exception:
-        pass
-
-    dist.barrier()
-    print("[simple-test] ✓ Buffer destroyed", flush=True)
-
-    destroy_uccl(proxies, workers)
-    dist.barrier()
+        torch.testing.assert_close(
+            combined_x.float(), x.float() * num_topk, rtol=0.02, atol=0.02
+        )
+        print("[simple-test] ✓ Dispatch/combine values verified", flush=True)
+    finally:
+        if buffer is not None:
+            buffer.destroy()
 
 
 def test_worker(local_rank: int, num_local_ranks: int):
-    rank, num_ranks, group = init_dist(local_rank, num_local_ranks)
+    rank, num_ranks, group = init_dist_under_torchrun(local_rank, num_local_ranks)
 
     try:
         test_simple_internode(rank, num_ranks, group)
     finally:
-        dist.barrier()
         dist.destroy_process_group()
 
 

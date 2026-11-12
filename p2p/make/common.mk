@@ -134,6 +134,17 @@ $(BUILD_DIR)/nanobind/%.o: $(NB_SRC_DIR)/%.cpp $(BUILD_DIR)/config
 
 -include $(CORE_OBJECTS:.o=.d) $(API_OBJECTS:.o=.d) $(NB_OBJECTS:.o=.d)
 
+# Build with USE_DIETGPU=1 after building thirdparty/dietgpu/dietgpu/float.
+rdma/tests/test_compression: rdma/tests/test_compression.cpp $(P2P_SHARED_LIB)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ -L. -luccl_p2p $(LDLIBS) -lgflags \
+	  -Wl,-rpath,'$$ORIGIN/../..'
+
+test-compression: rdma/tests/test_compression
+	@set -e; for type in fp16 bf16 fp32; do \
+	  UCCL_P2P_COMPRESS_STRATEGY=$${UCCL_P2P_COMPRESS_STRATEGY:-split_encode} \
+	    $< --float_type=$$type; \
+	done
+
 install: all
 	install -d $(INSTALL_DIR) $(LIBDIR) $(INCDIR)
 	rm -f $(INSTALL_DIR)/p2p.so $(INSTALL_DIR)/p2p.abi3.so $(INSTALL_DIR)/p2p.cpython-*.so
@@ -142,6 +153,7 @@ install: all
 	install -m 644 uccl_engine.h util/common.h $(INCDIR)/
 
 clean:
+	rm -f rdma/tests/test_compression rdma/tests/test_compression.d
 	rm -f $(CORE_OBJECTS) $(API_OBJECTS) $(NB_OBJECTS)
 	rm -f $(CORE_OBJECTS:.o=.d) $(API_OBJECTS:.o=.d) $(NB_OBJECTS:.o=.d) $(BUILD_DIR)/config
 	rm -f $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB) test_notify_serde test_epoll_server test_epoll_client test_gpu_topology notif_e2e
@@ -178,3 +190,5 @@ help:
 	@echo 'Profiles: Makefile (CUDA), Makefile.rocm, Makefile.dtk, Makefile.therock, Makefile.cnrt, Makefile.musa'
 	@echo 'Options: ENABLE_NCCL=0|1 ENABLE_CXI=0|1 ENABLE_EFA=0|1 USE_DIETGPU=0|1 USE_NFH=0|1'
 .PHONY: test install-deps help
+
+.PHONY: test-compression
