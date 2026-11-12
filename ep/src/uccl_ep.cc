@@ -666,10 +666,13 @@ class Buffer {
     CUDA_CHECK(cudaDeviceSynchronize());
 
     if (num_nvl_bytes > 0) {
-      // Barrier
-      intranode::barrier(barrier_signal_ptrs_gpu, nvl_rank, num_nvl_ranks,
-                         comm_stream);
-      CUDA_CHECK(cudaDeviceSynchronize());
+      // Barrier. Before sync() completes the peer barrier pointers are not
+      // set, so a buffer whose sync() failed must not run it.
+      if (is_available()) {
+        intranode::barrier(barrier_signal_ptrs_gpu, nvl_rank, num_nvl_ranks,
+                           comm_stream);
+        CUDA_CHECK(cudaDeviceSynchronize());
+      }
 
       // Close remote IPC
       if (is_available()) {
@@ -1820,6 +1823,55 @@ class Buffer {
     }
   }
 
+  // The NVL barrier (`barrier_block`) updates each signal slot with a local
+  // `atomicAdd_system` and a remote `atomicSub_system` from the peer GPU.
+  // Without native atomics over the peer link (PCIe P2P on many systems), the
+  // remote read-modify-write is not atomic against the local one. An update
+  // can be lost; the barrier then hangs or passes early, and dispatch/combine
+  // read stale data without any error. Refuse such GPU pairs.
+  void check_nvl_peer_atomics(std::vector<int> const& device_ids) const {
+    int const offset = rdma_rank * num_nvl_ranks;
+    int num_devices = 0;
+    CUDA_CHECK(cudaGetDeviceCount(&num_devices));
+    std::vector<int> ids(device_ids.begin() + offset,
+                         device_ids.begin() + offset + num_nvl_ranks);
+    std::vector<int> sorted_ids = ids;
+    std::sort(sorted_ids.begin(), sorted_ids.end());
+    // Device IDs are per-process ordinals. They name the peers only when every
+    // rank sees every GPU of the node (not with one GPU per process).
+    bool const queryable =
+        std::adjacent_find(sorted_ids.begin(), sorted_ids.end()) ==
+            sorted_ids.end() &&
+        sorted_ids.front() >= 0 && sorted_ids.back() < num_devices &&
+        ids[nvl_rank] == device_index;
+    if (not queryable) {
+      if (nvl_rank == 0 && num_nvl_ranks > 1)
+        fprintf(stderr,
+                "WARNING: cannot check native peer atomics between the NVL "
+                "ranks (each rank does not see all GPUs); the intranode "
+                "barrier needs them.\n");
+      return;
+    }
+    for (int i = 0; i < num_nvl_ranks; ++i) {
+      for (int j = 0; j < num_nvl_ranks; ++j) {
+        if (i == j) continue;
+        int native_atomics = 0;
+        CUDA_CHECK(cudaDeviceGetP2PAttribute(
+            &native_atomics, cudaDevP2PAttrNativeAtomicSupported, ids[i],
+            ids[j]));
+        if (not native_atomics) {
+          throw std::runtime_error(
+              "UCCL EP: GPU " + std::to_string(ids[i]) + " -> GPU " +
+              std::to_string(ids[j]) +
+              " has no native peer atomics "
+              "(cudaDevP2PAttrNativeAtomicSupported = 0, see `nvidia-smi "
+              "topo -p2p a`). The intranode barrier uses peer atomics and "
+              "can return wrong results on this link.");
+        }
+      }
+    }
+  }
+
   void sync(std::vector<int> const& device_ids,
             std::vector<std::optional<nb::bytes>> const& all_gathered_handles,
             std::optional<nb::bytes> const& root_unique_id_opt,
@@ -1830,6 +1882,7 @@ class Buffer {
     if (num_nvl_bytes > 0) {
       EP_HOST_ASSERT(static_cast<std::size_t>(num_ranks) == device_ids.size());
       EP_HOST_ASSERT(device_ids.size() == all_gathered_handles.size());
+      check_nvl_peer_atomics(device_ids);
       for (int i = 0, offset = rdma_rank * num_nvl_ranks; i < num_nvl_ranks;
            ++i) {
         int global_rank = offset + i;
