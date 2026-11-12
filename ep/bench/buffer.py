@@ -18,6 +18,11 @@ from uccl.ep import EventHandle, Config
 # 1) As part of the packaged deep_ep_wrapper (symlinked buffer inside a package): uses relative import `.utils`.
 # 2) As a standalone benchmark script from the `ep/bench` directory (no package): falls back to plain `utils`.
 try:
+    from .config_check import check_consistency, effective_env
+except ImportError:
+    from config_check import check_consistency, effective_env
+
+try:
     from .utils import (
         EventOverlap,
         check_nvlink_connections,
@@ -112,6 +117,11 @@ class Buffer:
             raise NotImplementedError(
                 "UCCL EP does not currently support enable_shrink=True"
             )
+        # Every rank must agree on the settings that decide where peers write.
+        # Check once, before any buffer is allocated or any proxy is started.
+        Buffer._check_cross_rank_config(
+            group, num_nvl_bytes, num_rdma_bytes, low_latency_mode
+        )
         # The high-throughput internode kernels split ranks by
         # NUM_MAX_NVL_PEERS and assume full nodes; with fewer GPUs per node the
         # RDMA buffer hint is 0 bytes and setup crashes later. Fail here.
@@ -244,6 +254,62 @@ class Buffer:
 
         for proxy in self.proxies:
             proxy.set_atomic_buffer_ptr(self.proxies[0].get_atomic_buffer_ptr())
+
+    @staticmethod
+    def _config_signature(
+        group_size: int, num_nvl_bytes: int, num_rdma_bytes: int, low_latency_mode: bool
+    ) -> dict:
+        build = {
+            "num_max_nvl_peers": (
+                ep.num_max_nvl_peers() if hasattr(ep, "num_max_nvl_peers") else None
+            ),
+            "num_proxy_threads": ep.get_num_proxy_threads(),
+            "sm90_features": bool(ep.is_sm90_compiled()),
+        }
+        if hasattr(ep, "build_config"):
+            build.update(ep.build_config())
+
+        def as_tuple(cfg):
+            return (
+                cfg.num_sms,
+                cfg.num_max_nvl_chunked_send_tokens,
+                cfg.num_max_nvl_chunked_recv_tokens,
+                cfg.num_max_rdma_chunked_send_tokens,
+                cfg.num_max_rdma_chunked_recv_tokens,
+            )
+
+        config = {}
+        for name, get in (
+            ("dispatch", Buffer.get_dispatch_config),
+            ("combine", Buffer.get_combine_config),
+        ):
+            try:
+                config[name] = as_tuple(get(group_size))
+            except (AssertionError, ValueError) as exc:
+                config[name] = f"unavailable: {exc}"
+        return {
+            "build": build,
+            "args": {
+                "low_latency_mode": bool(low_latency_mode),
+                "num_nvl_bytes": int(num_nvl_bytes),
+                "num_rdma_bytes": int(num_rdma_bytes),
+            },
+            "config": config,
+            "env": effective_env(),
+        }
+
+    @staticmethod
+    def _check_cross_rank_config(
+        group, num_nvl_bytes: int, num_rdma_bytes: int, low_latency_mode: bool
+    ) -> str:
+        signature, error = {}, ""
+        try:
+            signature = Buffer._config_signature(
+                group.size(), num_nvl_bytes, num_rdma_bytes, low_latency_mode
+            )
+        except Exception as exc:  # still gather, so no rank is left waiting
+            error = f"{type(exc).__name__}: {exc}"
+        return check_consistency(group, signature, error)
 
     def _ll_compute_stream_ptr(self, device: torch.device):
         """

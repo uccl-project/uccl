@@ -2199,6 +2199,24 @@ NB_MODULE(ep, m) {
       "num_max_nvl_peers", []() { return NUM_MAX_NVL_PEERS; },
       "GPUs per node the high-throughput kernels were built for");
   m.def(
+      "build_config",
+      []() {
+        nb::dict d;
+        d["num_max_nvl_peers"] = nb::int_(NUM_MAX_NVL_PEERS);
+#ifdef PER_EXPERT_BATCHING
+        d["per_expert_batching"] = nb::bool_(true);
+#else
+        d["per_expert_batching"] = nb::bool_(false);
+#endif
+#ifdef DISABLE_AGGRESSIVE_PTX_INSTRS
+        d["disable_aggressive_ptx_instrs"] = nb::bool_(true);
+#else
+        d["disable_aggressive_ptx_instrs"] = nb::bool_(false);
+#endif
+        return d;
+      },
+      "Compile-time settings compared across ranks when a Buffer is built");
+  m.def(
       "get_physical_gpu_rank",
       [](int device_index) {
         std::string const bdf = get_cuda_device_bdf(device_index);
