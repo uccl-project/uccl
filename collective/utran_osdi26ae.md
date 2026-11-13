@@ -269,7 +269,7 @@ Beyond the figures in the paper, the artifact is structured so that downstream r
 
 * **Add a new transport flavor** by extending `collective/rdma/` (RoCE/IB), `collective/efa/` (EFA), or `collective/afxdp/` (AF\_XDP) — each is a self-contained NCCL/RCCL net plugin.
 * **Tune the data plane** via the `UCCL_*` environment variables documented in [`collective/rdma/README.md`](rdma/README.md#environment-variables-in-uccl) (chunk size, engine count, RC vs. UC mode, port entropy, traffic class, etc.).
-* **Drop UCCL-Tran into existing PyTorch / DeepSpeed / vLLM / Megatron-LM workloads** by setting only `NCCL_NET_PLUGIN` (and `LD_PRELOAD` for EFA). See [`examples/README.md`](../examples/README.md) for a worked DDP example on CIFAR-10 / ResNet-18.
+* **Drop UCCL-Tran into existing PyTorch / DeepSpeed / vLLM / Megatron-LM workloads** by setting only `NCCL_NET_PLUGIN` (and `LD_PRELOAD` for EFA). See [`collective/examples/README.md`](examples/README.md) for a worked DDP example on CIFAR-10 / ResNet-18.
 
 ---
 
