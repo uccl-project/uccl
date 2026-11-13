@@ -72,6 +72,29 @@ struct IpcMappings {
   std::unordered_map<std::string_view, size_t> other_handles;
 };
 
+// Ordinal in this process of the GPU with PCI bus id `bdf`, or -1.
+int visible_ordinal_of_bdf(std::string const& bdf) {
+  int count = 0;
+  if (gpuGetDeviceCount(&count) != gpuSuccess) return -1;
+  char buf[64];
+  for (int i = 0; i < count; ++i) {
+    if (gpuDeviceGetPCIBusId(buf, sizeof(buf), i) != gpuSuccess) continue;
+    if (uccl::normalize_pci_bus_id(buf) == bdf) return i;
+  }
+  return -1;
+}
+
+// Device whose context imports an IPC handle from `conn`. The exporter reports
+// an owner only on runtimes that need it (`advertised`); otherwise CUDA/HIP
+// import into the local context, which needs peer access to the owner GPU.
+// Without it, fall back to the owner's context when that GPU is visible here.
+int ipc_owner_device(int local, Conn const* conn, int advertised) {
+  if (advertised >= 0 || conn == nullptr) return advertised;
+  int owner = conn->remote_gpu_ordinal_;
+  if (owner < 0 || uccl::device::peer_accessible(local, owner)) return -1;
+  return owner;
+}
+
 }  // namespace
 
 std::size_t VectorUint8Hash::operator()(std::vector<uint8_t> const& vec) const {
@@ -209,10 +232,20 @@ size_t Endpoint::max_one_sided_inflight_ops() {
 }
 
 // ShmChannel helper function
+// The effective uid is part of the name so that rings of different accounts on
+// a shared host cannot clash.
 static inline std::string shm_ring_name(std::string const& from_bdf,
                                         std::string const& to_bdf) {
-  return "/uccl_gpu_jring_" + uccl::sanitize_bdf(from_bdf) + "_" +
-         uccl::sanitize_bdf(to_bdf);
+  return "/uccl_gpu_jring_u" + std::to_string(geteuid()) + "_" +
+         uccl::sanitize_bdf(from_bdf) + "_" + uccl::sanitize_bdf(to_bdf);
+}
+
+// A null inbox ring is skipped while polling, so say which sender is cut off.
+static inline void warn_missing_inbox_ring(std::string const& name,
+                                           std::string const& sender_bdf) {
+  std::cerr << "[UCCL P2P] cannot create or attach local inbox ring " << name
+            << "; local connections from GPU " << sender_bdf
+            << " will not reach this endpoint" << std::endl;
 }
 
 static inline void shm_ring_send(jring_t* ring, ShmMsg const& msg) {
@@ -318,6 +351,7 @@ Endpoint::Endpoint(uint32_t const gpu_idx) : passive_accept_(false) {
     handle.ring =
         uccl::create_shared_ring(name.c_str(), elem_sz, elem_cnt, handle.shm_fd,
                                  handle.shm_size, &is_creator);
+    if (handle.ring == nullptr) warn_missing_inbox_ring(name, sender_bdf);
     inbox_rings_[sender_bdf] = handle;
     inbox_creators_[sender_bdf] = is_creator;
   }
@@ -434,13 +468,10 @@ Endpoint::~Endpoint() {
 
   {
     std::unique_lock<std::shared_mutex> lock(mr_mu_);
-    // Keep the previous teardown behavior: registrations still in the registry
-    // are freed without a transport deregistration call. The proxy threads were
-    // joined above, so no cooperative request still shares these entries.
-    for (auto& entry : mr_id_to_mr_) {
-      delete entry.second->mhandle_;
-      entry.second->mhandle_ = nullptr;
-    }
+    // Deregister MRs the caller did not destroy: an MR left open keeps the
+    // transport's domain busy, so it could not be closed at teardown. The proxy
+    // threads were joined above, so the registry holds the last reference and
+    // clearing it releases each registration.
     mr_id_to_mr_.clear();
   }
 
@@ -1063,80 +1094,56 @@ bool Endpoint::run_raw_one_sided_pipeline(
     std::vector<P2PMhandle*> const& mhandle_v,
     std::vector<void*> const& local_addr_v, std::vector<size_t> const& size_v,
     std::vector<FifoItem> const& slot_item_v, size_t num_iovs) {
-  struct PendingRawWait {
-    SendConnection::RawBatchWait wait;
-    bool active = false;
-  };
-
-  std::array<PendingRawWait, kMaxInflightOps> pending_waits{};
+  std::array<SendConnection::RawBatchWait, kMaxInflightOps> pending_waits{};
   size_t const max_inflight_ops = max_one_sided_inflight_ops();
   size_t next_iov = 0;
-  size_t num_completed = 0;
   size_t num_inflight = 0;
+  size_t num_pending = 0;
+  bool post_ok = true;
 
-  auto post_raw_window = [&]() -> bool {
-    if (next_iov >= num_iovs || num_inflight >= max_inflight_ops) return true;
-
+  for (;;) {
     size_t const batch_iovs =
-        std::min<size_t>(max_inflight_ops - num_inflight, num_iovs - next_iov);
-    std::array<SendConnection::OneSidedBatchOp, kMaxInflightOps> ops{};
-    int64_t wr_ids[kMaxInflightOps] = {};
-    std::array<SendConnection::RawBatchWait, kMaxInflightOps> waits{};
-    size_t num_waits = 0;
-
-    for (size_t i = 0; i < batch_iovs; ++i) {
-      size_t const iov = next_iov + i;
-      ops[i].local_addr = local_addr_v[iov];
-      ops[i].size = size_v[iov];
-      ops[i].local_mr_array = &mhandle_v[iov]->mr_array;
-      ops[i].slot_item = &slot_item_v[iov];
-    }
-
-    if (!send_group->post_write_or_read_batch(send_type, ops.data(), batch_iovs,
-                                              wr_ids, waits.data(),
-                                              &num_waits)) {
-      return false;
-    }
-    if (unlikely(num_waits == 0)) return false;
-
-    for (size_t i = 0; i < num_waits; ++i) {
-      bool inserted = false;
-      for (auto& pending : pending_waits) {
-        if (pending.active) continue;
-        pending.wait = waits[i];
-        pending.active = true;
-        inserted = true;
-        break;
+        std::min(max_inflight_ops - num_inflight, num_iovs - next_iov);
+    if (post_ok && batch_iovs != 0) {
+      std::array<SendConnection::OneSidedBatchOp, kMaxInflightOps> ops{};
+      int64_t wr_ids[kMaxInflightOps];
+      for (size_t i = 0; i < batch_iovs; ++i) {
+        size_t const iov = next_iov + i;
+        ops[i].local_addr = local_addr_v[iov];
+        ops[i].size = size_v[iov];
+        ops[i].local_mr_array = &mhandle_v[iov]->mr_array;
+        ops[i].slot_item = &slot_item_v[iov];
       }
-      if (unlikely(!inserted)) return false;
+
+      // Each wait covers at least one IOV, so the tail can hold this window.
+      size_t num_waits = 0;
+      post_ok = send_group->post_write_or_read_batch(
+                    send_type, ops.data(), batch_iovs, wr_ids,
+                    pending_waits.data() + num_pending, &num_waits) &&
+                num_waits != 0;
+      if (post_ok) {
+        num_pending += num_waits;
+        next_iov += batch_iovs;
+        num_inflight += batch_iovs;
+      }
     }
 
-    next_iov += batch_iovs;
-    num_inflight += batch_iovs;
-    return true;
-  };
-
-  while (num_completed < num_iovs) {
-    while (next_iov < num_iovs && num_inflight < max_inflight_ops) {
-      if (!post_raw_window()) return false;
-    }
+    // A rejected window leaves earlier DMA in flight until its waits retire.
+    if (num_pending == 0) return post_ok;
 
     auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
     uccl_drive_send(ep_);
-
-    for (auto& pending : pending_waits) {
-      if (!pending.active) continue;
-      if (!uccl_check_wr_fast(send_group, pending.wait.wr_id)) continue;
-
-      pending.active = false;
-      num_completed += pending.wait.iov_count;
-      UCCL_DCHECK(num_inflight >= pending.wait.iov_count);
-      num_inflight -= pending.wait.iov_count;
-      pending.wait = {};
-    }
+    auto end = std::remove_if(pending_waits.begin(),
+                              pending_waits.begin() + num_pending,
+                              [&](SendConnection::RawBatchWait const& wait) {
+                                if (!uccl_check_wr_fast(send_group, wait.wr_id))
+                                  return false;
+                                UCCL_DCHECK(num_inflight >= wait.iov_count);
+                                num_inflight -= wait.iov_count;
+                                return true;
+                              });
+    num_pending = end - pending_waits.begin();
   }
-
-  return true;
 }
 
 bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
@@ -1468,6 +1475,7 @@ bool Endpoint::connect_local(std::string const& remote_gpu_bdf,
 
   Conn* conn = new Conn;
   conn->remote_gpu_bdf_ = remote_gpu_bdf;
+  conn->remote_gpu_ordinal_ = visible_ordinal_of_bdf(remote_gpu_bdf);
 
   if (same_process) {
     // Same process: use inbox_rings_ directly, no shm attach needed.
@@ -1481,21 +1489,33 @@ bool Endpoint::connect_local(std::string const& remote_gpu_bdf,
     conn->remote_inbox_.shm_name = shm_ring_name(gpu_bus_id_, remote_gpu_bdf);
 
     jring_t* ring = nullptr;
-    for (int attempt = 0; attempt < kMaxRetry; attempt++) {
+    int attempts = 0;
+    int attach_errno = 0;
+    while (attempts < kMaxRetry) {
+      errno = 0;
       ring = uccl::attach_shared_ring(conn->remote_inbox_.shm_name.c_str(),
                                       conn->remote_inbox_.shm_fd,
                                       conn->remote_inbox_.shm_size);
+      attempts++;
       if (ring != nullptr) {
         break;
       }
-      // retry
+      attach_errno = errno;
+      // A permission error does not go away; only retry while the peer may
+      // still be creating its ring.
+      if (attach_errno == EACCES) {
+        break;
+      }
       std::this_thread::sleep_for(std::chrono::milliseconds(kRetrySleepMs));
     }
 
     if (ring == nullptr) {
       std::cout << "connect_local failed: cannot attach remote inbox ring "
-                << conn->remote_inbox_.shm_name << " after " << kMaxRetry
-                << " retries" << std::endl;
+                << conn->remote_inbox_.shm_name << " after " << attempts
+                << (attempts == 1 ? " attempt: " : " attempts: ")
+                << (attach_errno != 0 ? strerror(attach_errno)
+                                      : "ring not ready")
+                << std::endl;
       delete conn;
       return false;
     }
@@ -1555,6 +1575,7 @@ got:
   Conn* conn = new Conn;
   conn->conn_id_ = conn_id;
   conn->remote_gpu_bdf_ = remote_gpu_bdf;
+  conn->remote_gpu_ordinal_ = visible_ordinal_of_bdf(remote_gpu_bdf);
 
   if (remote_gpu_bdf == gpu_bus_id_) {
     // same GPU: no attach, bind inbox directly
@@ -1602,7 +1623,8 @@ bool Endpoint::write_ipc(uint64_t conn_id, void const* data, size_t size,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  int ipc_dev = uccl::device::ipc_open_device(local_gpu_idx_, info.gpu_idx);
+  int ipc_dev = uccl::device::ipc_open_device(
+      local_gpu_idx_, ipc_owner_device(local_gpu_idx_, conn, info.gpu_idx));
   void* raw_dst_ptr = nullptr;
   GPU_RT_CHECK(gpuSetDevice(ipc_dev));
   GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_dst_ptr, info.handle,
@@ -1632,9 +1654,8 @@ bool Endpoint::write_ipc(uint64_t conn_id, void const* data, size_t size,
         memcpy_kind, dst_streams[i]));
   }
 
-  // Wait for all streams to complete
-  for (auto& stream : dst_streams) {
-    GPU_RT_CHECK(gpuStreamSynchronize(stream));
+  for (int i = 0; i < num_streams; ++i) {
+    GPU_RT_CHECK(gpuStreamSynchronize(dst_streams[i]));
   }
 
   // Close the IPC memory handle
@@ -1662,7 +1683,8 @@ bool Endpoint::read_ipc(uint64_t conn_id, void* data, size_t size,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  int ipc_dev = uccl::device::ipc_open_device(local_gpu_idx_, info.gpu_idx);
+  int ipc_dev = uccl::device::ipc_open_device(
+      local_gpu_idx_, ipc_owner_device(local_gpu_idx_, conn, info.gpu_idx));
   void* raw_src_ptr = nullptr;
   GPU_RT_CHECK(gpuSetDevice(ipc_dev));
   GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_src_ptr, info.handle,
@@ -1692,9 +1714,8 @@ bool Endpoint::read_ipc(uint64_t conn_id, void* data, size_t size,
         memcpy_kind, src_streams[i]));
   }
 
-  // Wait for all streams to complete
-  for (auto& stream : src_streams) {
-    GPU_RT_CHECK(gpuStreamSynchronize(stream));
+  for (int i = 0; i < num_streams; ++i) {
+    GPU_RT_CHECK(gpuStreamSynchronize(src_streams[i]));
   }
 
   // Close the IPC memory handle
@@ -1717,13 +1738,16 @@ bool Endpoint::writev_ipc(uint64_t conn_id, std::vector<void const*> data_v,
     return false;
   }
 
+  if (num_iovs == 0) return true;
+
   int orig_device;
   GPU_RT_CHECK(gpuGetDevice(&orig_device));
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
   int ipc_dev_w = uccl::device::ipc_open_device(
-      local_gpu_idx_, num_iovs > 0 ? info_v[0].gpu_idx : -1);
+      local_gpu_idx_,
+      ipc_owner_device(local_gpu_idx_, conn, info_v[0].gpu_idx));
   GPU_RT_CHECK(gpuSetDevice(ipc_dev_w));
   std::vector<gpuStream_t>& streams = get_ipc_streams(ipc_dev_w);
 
@@ -1732,6 +1756,7 @@ bool Endpoint::writev_ipc(uint64_t conn_id, std::vector<void const*> data_v,
   for (size_t iov = 0; iov < num_iovs; ++iov) {
     mappings.prepare(iov, info_v[iov].handle);
   }
+  int active_streams = 0;
   for (size_t iov = 0; iov < num_iovs; ++iov) {
     UCCL_CHECK(data_v[iov] != nullptr)
         << "writev_ipc: data_v[" << iov << "] is null";
@@ -1746,6 +1771,7 @@ bool Endpoint::writev_ipc(uint64_t conn_id, std::vector<void const*> data_v,
     size_t sz = size_v[iov];
     int num_streams = std::min(
         streams.size(), sz < kIpcSizePerEngine ? 1 : sz / kIpcSizePerEngine);
+    active_streams = std::max(active_streams, num_streams);
     size_t chunk_size = sz / num_streams;
 
     for (int i = 0; i < num_streams; ++i) {
@@ -1760,9 +1786,8 @@ bool Endpoint::writev_ipc(uint64_t conn_id, std::vector<void const*> data_v,
     }
   }
 
-  // Sync all streams, then close all handles.
-  for (auto& stream : streams) {
-    GPU_RT_CHECK(gpuStreamSynchronize(stream));
+  for (int i = 0; i < active_streams; ++i) {
+    GPU_RT_CHECK(gpuStreamSynchronize(streams[i]));
   }
   for (void* raw_ptr : mappings.raw_ptrs) {
     GPU_RT_CHECK(gpuIpcCloseMemHandle(raw_ptr));
@@ -1784,13 +1809,16 @@ bool Endpoint::readv_ipc(uint64_t conn_id, std::vector<void*> data_v,
     return false;
   }
 
+  if (num_iovs == 0) return true;
+
   int orig_device;
   GPU_RT_CHECK(gpuGetDevice(&orig_device));
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
   int ipc_dev_r = uccl::device::ipc_open_device(
-      local_gpu_idx_, num_iovs > 0 ? info_v[0].gpu_idx : -1);
+      local_gpu_idx_,
+      ipc_owner_device(local_gpu_idx_, conn, info_v[0].gpu_idx));
   GPU_RT_CHECK(gpuSetDevice(ipc_dev_r));
   std::vector<gpuStream_t>& streams = get_ipc_streams(ipc_dev_r);
 
@@ -1799,6 +1827,7 @@ bool Endpoint::readv_ipc(uint64_t conn_id, std::vector<void*> data_v,
   for (size_t iov = 0; iov < num_iovs; ++iov) {
     mappings.prepare(iov, info_v[iov].handle);
   }
+  int active_streams = 0;
   for (size_t iov = 0; iov < num_iovs; ++iov) {
     UCCL_CHECK(data_v[iov] != nullptr)
         << "readv_ipc: data_v[" << iov << "] is null";
@@ -1813,6 +1842,7 @@ bool Endpoint::readv_ipc(uint64_t conn_id, std::vector<void*> data_v,
     size_t sz = size_v[iov];
     int num_streams = std::min(
         streams.size(), sz < kIpcSizePerEngine ? 1 : sz / kIpcSizePerEngine);
+    active_streams = std::max(active_streams, num_streams);
     size_t chunk_size = sz / num_streams;
 
     for (int i = 0; i < num_streams; ++i) {
@@ -1827,9 +1857,8 @@ bool Endpoint::readv_ipc(uint64_t conn_id, std::vector<void*> data_v,
     }
   }
 
-  // Sync all streams, then close all handles.
-  for (auto& stream : streams) {
-    GPU_RT_CHECK(gpuStreamSynchronize(stream));
+  for (int i = 0; i < active_streams; ++i) {
+    GPU_RT_CHECK(gpuStreamSynchronize(streams[i]));
   }
   for (void* raw_ptr : mappings.raw_ptrs) {
     GPU_RT_CHECK(gpuIpcCloseMemHandle(raw_ptr));
@@ -1856,8 +1885,9 @@ bool Endpoint::write_ipc_async(uint64_t conn_id, void const* data, size_t size,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  int target_gpu = uccl::device::ipc_async_device(local_gpu_idx_, info.gpu_idx,
-                                                  info.direct_addr != 0);
+  int target_gpu = uccl::device::ipc_async_device(
+      local_gpu_idx_, ipc_owner_device(local_gpu_idx_, conn, info.gpu_idx),
+      info.direct_addr != 0);
   GPU_RT_CHECK(gpuSetDevice(target_gpu));
 
   std::vector<gpuStream_t>& streams = get_ipc_streams(target_gpu);
@@ -1929,8 +1959,9 @@ bool Endpoint::read_ipc_async(uint64_t conn_id, void* data, size_t size,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  int target_gpu = uccl::device::ipc_async_device(local_gpu_idx_, info.gpu_idx,
-                                                  info.direct_addr != 0);
+  int target_gpu = uccl::device::ipc_async_device(
+      local_gpu_idx_, ipc_owner_device(local_gpu_idx_, conn, info.gpu_idx),
+      info.direct_addr != 0);
   GPU_RT_CHECK(gpuSetDevice(target_gpu));
 
   std::vector<gpuStream_t>& streams = get_ipc_streams(target_gpu);
@@ -2008,7 +2039,9 @@ bool Endpoint::writev_ipc_async(uint64_t conn_id,
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
   int target_gpu = uccl::device::ipc_async_device(
-      local_gpu_idx_, num_iovs > 0 ? info_v[0].gpu_idx : -1,
+      local_gpu_idx_,
+      ipc_owner_device(local_gpu_idx_, conn,
+                       num_iovs > 0 ? info_v[0].gpu_idx : -1),
       num_iovs > 0 && info_v[0].direct_addr != 0);
   GPU_RT_CHECK(gpuSetDevice(target_gpu));
   std::vector<gpuStream_t>& streams = get_ipc_streams(target_gpu);
@@ -2116,7 +2149,9 @@ bool Endpoint::readv_ipc_async(uint64_t conn_id, std::vector<void*> data_v,
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
   int target_gpu = uccl::device::ipc_async_device(
-      local_gpu_idx_, num_iovs > 0 ? info_v[0].gpu_idx : -1,
+      local_gpu_idx_,
+      ipc_owner_device(local_gpu_idx_, conn,
+                       num_iovs > 0 ? info_v[0].gpu_idx : -1),
       num_iovs > 0 && info_v[0].direct_addr != 0);
   GPU_RT_CHECK(gpuSetDevice(target_gpu));
   std::vector<gpuStream_t>& streams = get_ipc_streams(target_gpu);
@@ -2466,6 +2501,13 @@ gpuError_t Endpoint::export_ipc_range(void* ptr, size_t size,
 }
 
 void Endpoint::initialize_engine() {
+  // Host-memory registration can select a different device from the caller's
+  // current device. Keep lazy engine setup from changing subsequent GPU work
+  // on this thread, including when setup throws.
+  int orig_device;
+  GPU_RT_CHECK(gpuGetDevice(&orig_device));
+  auto dev_reset =
+      uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
   int n_streams = std::max(1, (int)kNumGpuRtStreams);
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
 
@@ -2500,6 +2542,7 @@ void Endpoint::initialize_engine() {
     handle.ring =
         uccl::create_shared_ring(name.c_str(), elem_sz, elem_cnt, handle.shm_fd,
                                  handle.shm_size, &is_creator);
+    if (handle.ring == nullptr) warn_missing_inbox_ring(name, sender_bdf);
     inbox_rings_[sender_bdf] = handle;
     inbox_creators_[sender_bdf] = is_creator;
   }

@@ -117,6 +117,7 @@ class Proxy {
   void post_cxi_commands(std::vector<uint64_t> const& wrs_to_post,
                          std::vector<TransferCmd> const& cmds_to_post);
   void poll_cxi_completions();
+  void complete_cxi_quiet();
   CxiTransport* cxi_transport_for_rank(int rank) const;
   uint64_t load_cxi_barrier_word_sum(size_t slot) const;
   void post_barrier_msg(int dst_rank, bool ack, uint64_t seq);
@@ -156,6 +157,11 @@ class Proxy {
   CxiTransport* cxi_transport_ = nullptr;
   std::vector<std::unique_ptr<CxiTransport>> cxi_transports_by_rank_;
   size_t cxi_outstanding_ops_ = 0;
+  // A QUIET read from one D2H ring fences all rings of this thread. It is
+  // acked only after a later pass read every sibling ring until empty and all
+  // posted CXI operations completed (see post_gpu_command()).
+  bool cxi_quiet_pending_ = false;
+  uint64_t cxi_quiet_wr_ = 0;
   std::vector<TransferCmd> postponed_atomics_;
   std::vector<uint64_t> postponed_wr_ids_;
 

@@ -235,6 +235,7 @@ def benchmark_backend(
     }
 
 
+failed = False
 for cfg in configs:
     print(f"Testing: {cfg['name']} ({cfg['tokens']} tokens, {cfg['hidden']} hidden)")
     print("=" * 70)
@@ -280,6 +281,7 @@ for cfg in configs:
         )
         results.append(triton_result)
     except Exception as e:
+        failed = True
         print(f"  ❌ Triton backend failed: {e}")
         results.append(None)
 
@@ -301,6 +303,7 @@ for cfg in configs:
             )
             results.append(cuda_result)
         except Exception as e:
+            failed = True
             print(f"  ❌ CUDA backend failed: {e}")
             results.append(None)
     else:
@@ -388,9 +391,11 @@ for cfg in configs:
         if result is None:
             continue
         is_correct, msg = result["correctness"]
+        failed |= not is_correct
         status = "✓" if is_correct else "✗"
         print(f"  {result['backend']:<12}: {status} {msg}")
 
     print("\n" + "=" * 70 + "\n")
 
 print("Benchmark complete!")
+raise SystemExit(1 if failed else 0)

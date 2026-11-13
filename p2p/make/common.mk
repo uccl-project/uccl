@@ -16,6 +16,10 @@ INCDIR ?= $(PREFIX)/include
 EFA_HOME ?= /opt/amazon/efa
 LIBFABRIC_HOME ?= /opt/libfabric
 
+# The standalone topology test needs neither Python nor nanobind. Keep
+# discovery enabled for the default build and any invocation with other goals.
+HOST_TEST_TARGETS := test_gpu_topology
+ifneq ($(filter-out $(HOST_TEST_TARGETS),$(or $(MAKECMDGOALS),all)),)
 NB_DIR ?= $(shell $(PYTHON) -c "import nanobind, os; print(os.path.dirname(nanobind.__file__))")
 NB_SRC_DIR := $(NB_DIR)/src
 NB_INCLUDES := -I$(NB_DIR)/include -I$(NB_DIR)/ext/robin_map/include \
@@ -30,6 +34,7 @@ PYEXT := $(shell $(PYTHON) -c "import sysconfig; print(sysconfig.get_config_var(
 endif
 PYTHON_LDFLAGS := $(shell $(PYTHON_CONFIG) --ldflags)
 INSTALL_DIR ?= $(shell $(PYTHON) -c "import site; print(site.getsitepackages()[0])")/uccl
+endif
 
 # Isolate device, optional features and Python ABI. A config stamp below also
 # invalidates objects when compilers, SDK paths or user flags change in place.
@@ -37,7 +42,10 @@ BUILD_DIR ?= .build/$(PROFILE)/nccl$(ENABLE_NCCL)-cxi$(ENABLE_CXI)-efa$(ENABLE_E
 override CPPFLAGS += -I. -I./util -I./rdma -I./rdma/providers -I../include \
   $(DEVICE_CPPFLAGS) -DUCCL_DEVICE_BACKEND_HEADER=\"util/device/$(DEVICE_BACKEND)/config.h\" \
   -DUCCL_P2P_ENABLE_NCCL=$(ENABLE_NCCL) -DUCCL_P2P_ENABLE_CXI=$(ENABLE_CXI) \
-  -DUCCL_P2P_ENABLE_EFA=$(ENABLE_EFA) -I$(EFA_HOME)/include
+  -DUCCL_P2P_ENABLE_EFA=$(ENABLE_EFA)
+ifeq ($(ENABLE_EFA),1)
+override CPPFLAGS += -I$(EFA_HOME)/include
+endif
 override CXXFLAGS += -O3 -std=c++17 -fPIC -MMD -MP \
   -Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable
 IBV_WRAP_FLAGS := -Wl,--wrap=ibv_get_device_list \
@@ -64,8 +72,11 @@ CORE_SOURCES := engine.cc \
   rdma/compression.cc rdma/rdma_context.cc rdma/rdma_connection.cc \
   rdma/rdma_ctrl_channel.cc rdma/rdma_data_channel.cc \
   rdma/rdma_device.cc rdma/rdma_endpoint.cc \
-  rdma/providers/efa_data_channel_impl.cc rdma/providers/ib_data_channel_impl.cc \
-  rdma/ibverbs_dl.cc rdma/efadv_dl.cc $(DEVICE_SOURCES)
+  rdma/providers/ib_data_channel_impl.cc \
+  rdma/ibverbs_dl.cc $(DEVICE_SOURCES)
+ifeq ($(ENABLE_EFA),1)
+CORE_SOURCES += rdma/providers/efa_data_channel_impl.cc rdma/efadv_dl.cc
+endif
 ifeq ($(ENABLE_NCCL),1)
 override CPPFLAGS += -I./nccl
 CORE_SOURCES += nccl/nccl_endpoint.cc nccl/nccl_dl.cc
@@ -111,6 +122,17 @@ $(BUILD_DIR)/nanobind/%.o: $(NB_SRC_DIR)/%.cpp $(BUILD_DIR)/config
 
 -include $(CORE_OBJECTS:.o=.d) $(API_OBJECTS:.o=.d) $(NB_OBJECTS:.o=.d)
 
+# Build with USE_DIETGPU=1 after building thirdparty/dietgpu/dietgpu/float.
+rdma/tests/test_compression: rdma/tests/test_compression.cpp $(P2P_SHARED_LIB)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ -L. -luccl_p2p $(LDLIBS) -lgflags \
+	  -Wl,-rpath,'$$ORIGIN/../..'
+
+test-compression: rdma/tests/test_compression
+	@set -e; for type in fp16 bf16 fp32; do \
+	  UCCL_P2P_COMPRESS_STRATEGY=$${UCCL_P2P_COMPRESS_STRATEGY:-split_encode} \
+	    $< --float_type=$$type; \
+	done
+
 install: all
 	install -d $(INSTALL_DIR) $(LIBDIR) $(INCDIR)
 	rm -f $(INSTALL_DIR)/p2p.so $(INSTALL_DIR)/p2p.abi3.so $(INSTALL_DIR)/p2p.cpython-*.so
@@ -119,9 +141,10 @@ install: all
 	install -m 644 uccl_engine.h util/common.h $(INCDIR)/
 
 clean:
+	rm -f rdma/tests/test_compression rdma/tests/test_compression.d
 	rm -f $(CORE_OBJECTS) $(API_OBJECTS) $(NB_OBJECTS)
 	rm -f $(CORE_OBJECTS:.o=.d) $(API_OBJECTS:.o=.d) $(NB_OBJECTS:.o=.d) $(BUILD_DIR)/config
-	rm -f $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB) test_notify_serde test_epoll_server notif_e2e
+	rm -f $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB) test_notify_serde test_epoll_server test_epoll_client test_gpu_topology notif_e2e
 
 test_notify_serde: tests/test_notify_serde.cc util/common.h
 	$(CXX) -std=c++17 -O2 -I. -I./util -o $@ tests/test_notify_serde.cc
@@ -129,20 +152,31 @@ test_notify_serde: tests/test_notify_serde.cc util/common.h
 test_epoll_server: tests/test_epoll_server.cc util/epoll_server.cc util/epoll_server.h
 	$(CXX) -std=c++17 -O2 -I. -I./util -I../include -o $@ tests/test_epoll_server.cc util/epoll_server.cc -lpthread
 
+test_epoll_client: tests/test_epoll_client.cc util/epoll_client.cc util/epoll_client.h
+	$(CXX) -std=c++17 -O2 -I. -I./util -I../include -o $@ tests/test_epoll_client.cc util/epoll_client.cc -lpthread
+
+# Runtime ordinal preservation and sysfs mapping; no GPU or RDMA device needed.
+test_gpu_topology: ../include/util/gpu_topology_test.cc ../include/util/gpu_topology.h
+	$(CXX) -std=c++17 -O2 -o $@ ../include/util/gpu_topology_test.cc
+
 notif_e2e: tests/test_notify_e2e.cc $(P2P_SHARED_LIB)
 	$(CXX) -std=c++17 -O2 $(CPPFLAGS) -o $@ tests/test_notify_e2e.cc \
 	  -L. -luccl_p2p $(DEVICE_LDLIBS) -Wl,-rpath,'$$ORIGIN'
 
-test: test_notify_serde test_epoll_server all
+test: test_notify_serde test_epoll_server test_epoll_client test_gpu_topology all
 	./test_notify_serde
 	./test_epoll_server
+	./test_epoll_client
+	./test_gpu_topology
 	$(PYTHON) tests/test_engine_write.py
 
 install-deps:
 	$(PYTHON) -m pip install nanobind
 
 help:
-	@echo 'Targets: all install clean test test_notify_serde test_epoll_server notif_e2e install-deps'
+	@echo 'Targets: all install clean test test_notify_serde test_epoll_server test_epoll_client test_gpu_topology notif_e2e install-deps'
 	@echo 'Profiles: Makefile (CUDA), Makefile.rocm, Makefile.dtk, Makefile.therock, Makefile.cnrt, Makefile.musa'
 	@echo 'Options: ENABLE_NCCL=0|1 ENABLE_CXI=0|1 ENABLE_EFA=0|1 USE_DIETGPU=0|1'
 .PHONY: test install-deps help
+
+.PHONY: test-compression

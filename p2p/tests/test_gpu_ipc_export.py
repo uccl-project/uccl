@@ -65,6 +65,18 @@ inline Error peer_copy(void* dst, int dst_device, void const* src,
   last_dst_device = dst_device; last_src_device = src_device;
   last_stream = stream; return copy_error;
 }
+// Ordinals 0-3 and 4-5 are two peer groups without access to each other.
+inline int device_count = 6, peer_queries = 0, last_error_calls = 0;
+inline Error get_device_count(int* count) { *count = device_count; return success; }
+inline bool peer_pair(int device, int peer) { return (device < 4) == (peer < 4); }
+inline Error can_access_peer(int* can, int device, int peer) {
+  ++peer_queries; *can = peer_pair(device, peer); return success;
+}
+inline Error cnrt_device_count(unsigned* count) { *count = device_count; return success; }
+inline Error cnrt_peer_accessibility(unsigned* can, int device, int peer) {
+  ++peer_queries; *can = peer_pair(device, peer); return success;
+}
+inline Error get_last_error() { ++last_error_calls; return success; }
 """
 
 CHECKS = r"""
@@ -142,7 +154,33 @@ int main() {
   assert(last_kind == 2 && peer_calls == peers);
   copy_error = unknown;
   assert(ipc_copy_async(dst, 3, src, 0, 128, false, 2, stream) == unknown);
-
+  copy_error = success;
+  // Without peer access every runtime opens and copies in the owner's context.
+  assert(ipc_open_device(0, 5) == 5);
+  assert(ipc_async_device(0, 5, false) == 5);
+  peers = peer_calls;
+  int copies = copy_calls;
+  assert(ipc_copy_async(dst, 5, src, 0, 128, false, 2, stream) == success);
+  assert(peer_calls == peers + 1 && copy_calls == copies);
+  assert(last_dst_device == 5 && last_src_device == 0);
+  assert(ipc_copy_async(dst, 0, src, 5, 128, false, 2, stream) == success);
+  assert(peer_calls == peers + 2 && last_dst_device == 0 && last_src_device == 5);
+  assert(ipc_copy_async(dst, 5, src, 0, 128, true, 1, stream) == success);
+  assert(last_kind == 1 && peer_calls == peers + 2 && copy_calls == copies + 1);
+  // Owner-context runtimes never need the query.
+  if (Backend::ipc_owner_context) assert(peer_queries == 0);
+  assert(peer_accessible(0, 3) && peer_accessible(3, 0) && peer_accessible(4, 5));
+  assert(!peer_accessible(0, 5) && !peer_accessible(5, 0));
+  // Each pair is queried once and the runtime error state is cleared.
+  int queries = peer_queries;
+  assert(last_error_calls == queries);
+  assert(!peer_accessible(0, 5) && peer_accessible(0, 3));
+  assert(peer_queries == queries);
+  // Unknown, invisible or identical ordinals keep the previous behavior.
+  assert(peer_accessible(0, -1) && peer_accessible(-1, 0) && peer_accessible(2, 2));
+  assert(peer_accessible(0, 6) && peer_accessible(6, 0));
+  assert(peer_queries == queries);
+  assert(ipc_open_device(0, 6) == (Backend::ipc_owner_context ? 6 : 0));
 }
 """
 
@@ -168,10 +206,14 @@ def runtime_header(backend):
             "cnrtQueueCreate",
             "cnrtNotifierCreate",
             "cnrtQueueWaitNotifier",
-            "cnrtGetPeerAccessibility",
-            "cnrtGetDeviceCount",
         ):
             aliases[function] = "unused_api"
+        aliases.update(
+            {
+                "cnrtGetDeviceCount": "cnrt_device_count",
+                "cnrtGetPeerAccessibility": "cnrt_peer_accessibility",
+            }
+        )
     else:
         aliases = {
             f"{backend}Error_t": "Error",
@@ -192,12 +234,15 @@ def runtime_header(backend):
             "CUmemRangeHandleType": "int",
             "CUDA_SUCCESS": "success",
             "cuMemGetAddressRange": "driver_range",
+            f"{backend}GetDeviceCount": "get_device_count",
+            f"{backend}DeviceCanAccessPeer": "can_access_peer",
         }
     aliases.update(
         {
             f"{backend}Stream_t": "void*",
             f"{backend}MemcpyAsync": "cnrt_copy" if backend == "cnrt" else "copy",
             f"{backend}MemcpyPeerAsync": "peer_copy",
+            f"{backend}GetLastError": "get_last_error",
         }
     )
     return '#include "runtime.h"\n' + "\n".join(

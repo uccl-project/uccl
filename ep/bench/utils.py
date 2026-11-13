@@ -7,7 +7,7 @@ import torch.distributed as dist
 from typing import Optional
 import glob
 import sys
-from uccl.ep import EventHandle
+from uccl.ep import EventHandle as _UcclEventHandle
 import tempfile
 import json
 from pathlib import Path
@@ -270,6 +270,18 @@ def check_nvlink_connections(group: dist.ProcessGroup):
         pynvml.nvmlShutdown()
 
 
+def EventHandle(stream_ptr: Optional[int] = None) -> _UcclEventHandle:
+    """Record a CUDA event, with DeepEP semantics.
+
+    Without an argument the event is recorded on the current PyTorch stream, as
+    ``deep_ep.EventHandle()`` does. The C++ default constructor records on the legacy
+    default stream, which is a different stream whenever the caller runs on a side stream.
+    """
+    if stream_ptr is None:
+        stream_ptr = torch.cuda.current_stream().cuda_stream
+    return _UcclEventHandle(int(stream_ptr))
+
+
 class EventOverlap:
     """
     A wrapper class to manage CUDA events, also for better overlapping convenience.
@@ -281,7 +293,7 @@ class EventOverlap:
 
     def __init__(
         self,
-        event: Optional[EventHandle] = None,
+        event: Optional[_UcclEventHandle] = None,
         extra_tensors: Optional[Tuple[torch.Tensor]] = None,
     ) -> None:
         """

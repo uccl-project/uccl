@@ -153,6 +153,8 @@ class NCCLEndpoint {
                       NcclRequest* ureq);
   bool recv_internal_(Conn& conn, void* data, size_t size, int comm_index,
                       NcclRequest* ureq);
+  bool transfer_internal_(Conn& conn, void* data, size_t size, int comm_index,
+                          NcclRequest* ureq, bool send);
   void cleanup_conn_(Conn& conn);
 
   // GPU index the endpoint binds to by default.

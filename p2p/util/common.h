@@ -2,8 +2,10 @@
 #define COMMON_H
 
 #include <arpa/inet.h>
-#include <infiniband/efadv.h>
 #include <infiniband/verbs.h>
+#if UCCL_P2P_ENABLE_EFA
+#include <infiniband/efadv.h>
+#endif
 #include <netinet/in.h>
 #include <algorithm>
 #include <atomic>
