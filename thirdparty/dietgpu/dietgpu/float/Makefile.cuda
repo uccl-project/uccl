@@ -7,6 +7,7 @@
 # Usage:
 #   make -f Makefile.cuda            # build with default GPU arch (sm_90)
 #   make -f Makefile.cuda GPU_ARCH=sm_80
+#   make -f Makefile.cuda GPU_ARCH_FLAGS="-gencode=arch=compute_89,code=sm_89 ..."
 #   make -f Makefile.cuda clean
 
 NVCC ?= nvcc
@@ -28,9 +29,10 @@ INCLUDES = -I$(DIETGPU_ROOT) -I$(UCCL_INCLUDE)
 NVCC_FLAGS = -O3 -std=c++17 -Xcompiler -fPIC
 NVCC_FLAGS += $(INCLUDES)
 
-# NVIDIA GPU architecture
+# NVIDIA GPU architecture: GPU_ARCH for one, GPU_ARCH_FLAGS for several
 GPU_ARCH ?= sm_90
-NVCC_FLAGS += -arch=$(GPU_ARCH)
+GPU_ARCH_FLAGS ?= -arch=$(GPU_ARCH)
+NVCC_FLAGS += $(GPU_ARCH_FLAGS)
 
 # Linker flags
 LDFLAGS = -shared
@@ -83,7 +85,7 @@ $(OBJ_DIR)/float_%.o: $(FLOAT_DIR)/%.cu | $(OBJ_DIR)
 
 # Link shared library
 $(LIB_TARGET): $(ALL_OBJS)
-	$(NVCC) $(LDFLAGS) -o $@ $^ -arch=$(GPU_ARCH) -lcuda
+	$(NVCC) $(LDFLAGS) -o $@ $^ $(GPU_ARCH_FLAGS) -lcuda
 
 clean:
 	rm -rf $(OBJ_DIR) $(LIB_TARGET)

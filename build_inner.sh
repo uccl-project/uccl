@@ -23,6 +23,7 @@
 #
 #   Build feature flags:
 #     USE_DIETGPU                   Enable DietGPU compression (default "0")
+#     USE_NFH                       Enable the NFH BF16 codec, CUDA only (default "0")
 #     USE_INTEL_RDMA_NIC            Enable Intel RDMA NIC / irdma driver (default "0")
 #     USE_DMABUF                    Enable EP DMA-BUF GPU memory registration (default "0")
 #     PER_EXPERT_BATCHING           Enable per-expert batching (default "0")
@@ -53,6 +54,20 @@ rename_to_abi3() {
       mv "$f" "$newname"
     fi
   done
+}
+
+# nvcc arch flags for every entry of a TORCH_CUDA_ARCH_LIST such as "9.0",
+# "8.9;12.0" or "9.0+PTX 10.0a". Each entry gets what -arch=sm_XX gives
+# (SASS and PTX), so a single-entry list builds exactly as before.
+cuda_gencode_flags() {
+  local entry num flags=()
+  for entry in ${1//[;,]/ }; do
+    num="${entry%+PTX}"
+    num="${num//./}"
+    flags+=("-gencode=arch=compute_${num},code=sm_${num}"
+      "-gencode=arch=compute_${num},code=compute_${num}")
+  done
+  echo "${flags[*]}"
 }
 
 build_rccl_nccl_header() {
@@ -150,9 +165,9 @@ build_p2p() {
     cd thirdparty/dietgpu
     if [[ "$TARGET" == cu* ]]; then
       cd dietgpu/float
-      CUDA_GPU_ARCH="sm_$(echo "${TORCH_CUDA_ARCH_LIST:-9.0}" | awk '{print $1}' | sed 's/+PTX//; s/\.//')"
-      echo "Building dietgpu float for CUDA: $CUDA_GPU_ARCH"
-      make clean -f Makefile.cuda && make -j$(nproc) -f Makefile.cuda GPU_ARCH=$CUDA_GPU_ARCH
+      GPU_ARCH_FLAGS="$(cuda_gencode_flags "${TORCH_CUDA_ARCH_LIST:-9.0}")"
+      echo "Building dietgpu float for CUDA: $GPU_ARCH_FLAGS"
+      make clean -f Makefile.cuda && make -j$(nproc) -f Makefile.cuda GPU_ARCH_FLAGS="$GPU_ARCH_FLAGS"
     else
       rm -rf build/
       python3 setup.py build
@@ -161,7 +176,16 @@ build_p2p() {
       make clean -f Makefile.rocm && make -j$(nproc) -f Makefile.rocm GPU_ARCH=$TORCH_CUDA_ARCH_LIST
     fi
     cd ../../../..
-    cp thirdparty/dietgpu/dietgpu/float/libdietgpu_float.so uccl/lib
+    mkdir -p uccl/lib
+    cp thirdparty/dietgpu/dietgpu/float/libdietgpu_float.so uccl/lib/
+  fi
+
+  if [[ "${USE_NFH:-0}" == "1" && "$TARGET" == cu* ]]; then
+    GPU_ARCH_FLAGS="$(cuda_gencode_flags "${TORCH_CUDA_ARCH_LIST:-9.0}")"
+    echo "Building NFH codec for CUDA: $GPU_ARCH_FLAGS"
+    make -C p2p/rdma/nfh clean && make -C p2p/rdma/nfh -j$(nproc) GPU_ARCH_FLAGS="$GPU_ARCH_FLAGS"
+    mkdir -p uccl/lib
+    cp p2p/rdma/nfh/libnfh_codec.so uccl/lib/
   fi
 
   cd p2p
