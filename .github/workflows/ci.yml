@@ -24,11 +24,41 @@ on:
       head_repo:
         description: 'Source owner/repo (empty = this repository)'
         default: ''
+      pr:
+        description: 'PR number for command status comments (set by dispatcher)'
+        default: ''
+      reply_comment_id:
+        description: 'Bot comment to update (set by dispatcher)'
+        default: ''
+      reply_marker:
+        description: 'Bot comment request marker (set by dispatcher)'
+        default: ''
 
 permissions:
   contents: read
 
 jobs:
+  comment-start:
+    name: Start command status
+    if: github.event_name == 'workflow_dispatch' && inputs.reply_comment_id != ''
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout trusted comment helper
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Mark command running
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await require('./ci/github_comments.js').update({github, context, status: 'running'});
+
   plan:
     runs-on: ubuntu-24.04
     outputs:
@@ -80,11 +110,25 @@ jobs:
           repository: ${{ inputs.head_repo || github.repository }}
           ref: ${{ inputs.sha || github.sha }}
           persist-credentials: false
+      # Older PR heads may not contain the setup helper used by this workflow.
+      - name: Checkout CPU setup from the workflow revision
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: .ci-workflow
+          sparse-checkout: ci/setup_cpu.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
           name: ci-plan
       - name: Install CPU compiler and Python venv support
-        run: sudo apt-get update -qq && sudo apt-get install -y build-essential python3-venv libgtest-dev libibverbs-dev libgflags-dev zlib1g-dev libelf-dev
+        timeout-minutes: 8
+        run: |
+          set -o pipefail
+          mkdir -p ci-results
+          bash .ci-workflow/ci/setup_cpu.sh 2>&1 | tee ci-results/cpu-setup.log
       - name: Run CPU suites
         run: python3 ci/run.py --local --target cpu --plan ci-plan.json
       - name: Summarize results
@@ -103,7 +147,7 @@ jobs:
           if-no-files-found: error
 
   gpu:
-    name: GPU (${{ matrix.target }})
+    name: GPU
     needs: plan
     # PR code reaches lab machines only through a maintainer's workflow dispatch.
     if: github.event_name != 'pull_request' && needs.plan.outputs.has_gpu == 'true'
@@ -114,6 +158,8 @@ jobs:
     timeout-minutes: 180
     concurrency:
       group: uccl-gpu-${{ matrix.target }}
+      # Preserve waiting merge/manual runs instead of replacing the pending job.
+      queue: max
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
@@ -167,11 +213,53 @@ jobs:
     if: always()
     runs-on: ubuntu-24.04
     steps:
-      - env:
+      - name: Report aggregate CI status
+        env:
           PLAN: ${{ needs.plan.result }}
           CPU_RESULT: ${{ needs.cpu.result }}
           GPU_RESULT: ${{ needs.gpu.result }}
         run: |
-          [[ $PLAN == success ]]
-          [[ $CPU_RESULT == success || $CPU_RESULT == skipped ]]
-          [[ $GPU_RESULT == success || $GPU_RESULT == skipped ]]
+          printf '| Job | Result |\n|---|---|\n| Plan | %s |\n| CPU | %s |\n| GPU | %s |\n' \
+            "$PLAN" "$CPU_RESULT" "$GPU_RESULT" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [[ $PLAN != success ]]; then
+            echo "::error::CI planning did not succeed: $PLAN"
+            exit 1
+          fi
+          failed=0
+          for entry in "CPU:$CPU_RESULT" "GPU:$GPU_RESULT"; do
+            case ${entry#*:} in
+              success|skipped) ;;
+              cancelled)
+                echo "::error::${entry%%:*} jobs were cancelled before completion; check their scheduling/cancellation annotations."
+                failed=1 ;;
+              *)
+                echo "::error::${entry%%:*} jobs did not succeed: ${entry#*:}"
+                failed=1 ;;
+            esac
+          done
+          exit "$failed"
+
+  comment-result:
+    name: Finish command status
+    needs: [comment-start, plan, cpu, gpu, status]
+    if: always() && github.event_name == 'workflow_dispatch' && inputs.reply_comment_id != ''
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout trusted comment helper
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Post command result
+        uses: actions/github-script@v7
+        env:
+          CI_JOB_RESULTS: ${{ toJSON(needs) }}
+        with:
+          script: |
+            const results = JSON.parse(process.env.CI_JOB_RESULTS);
+            await require('./ci/github_comments.js').update({github, context, status: 'complete', results});

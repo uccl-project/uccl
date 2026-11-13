@@ -15,6 +15,11 @@ CPU tests and orchestrates GPU jobs over SSH as `uccl`, using local
 | `gb10` | `gb10_0`, `gb10_1` | 1 GB10/node, RoCE, CUDA 13.0 | Host-staged EP/P2P and NIXL |
 | `amd` | Offline | ROCm | Disabled; worker support needs validation |
 
+CPU setup adds kernel.org, when reachable, as the preferred entry in the runner's
+`/etc/apt/apt-mirrors.txt`, retaining its default fallback mirrors. APT uses
+bounded retries/timeouts and an eight-minute step limit. Setup output is saved
+in the job log and the `ci-cpu` artifact as `cpu-setup.log`.
+
 Both GH200 nodes are provisioned and reachable as of 2026-11-09; both RDMA ports
 report active 400G links. Single-node suites use `gh200_1`; two-node suites
 require both. Link rate is not application throughput. Per-host interfaces and
@@ -112,6 +117,14 @@ Five workflows remain in `.github/workflows`; six unused helpers were removed:
 Manual runs ignore changed-file filtering. Comment commands require `write`,
 `maintain` or `admin` permission and run the PR's exact head SHA at dispatch.
 Supported targets: `all`, `cpu`, `l4`, `gb10`, `gh200`.
+
+GPU jobs queue per target (up to 100 waiting runs), so newer requests do not
+cancel waiting runs. `CI status` reports job outcomes; cancelled work is incomplete.
+
+Each authorized command creates one bot comment, updated from queued to running
+and then completed, failed, cancelled or skipped, with a run/log link. Forked
+PRs use the same permission check and exact commit; only separate jobs running
+trusted workflow code can update comments. Dispatch failures update the reply too.
 
 ```text
 /run-ci all
