@@ -342,6 +342,7 @@ struct DispatchParams {
 
     // Sync state (group-level monotonic counters, computed on host)
     uint64_t expected_rdma_flag_value;
+    const uint64_t* expected_signal_generations = nullptr;
     uint32_t expected_intra_node_flag_value;
     uint64_t* rdma_inter_node_group_flags;
     uint32_t* intra_node_write_completion_flags;
@@ -408,6 +409,7 @@ struct CombineParams {
 
     // Sync state (group-level monotonic counters, computed on host)
     uint64_t combine_expected_rdma_flag_value;
+    const uint64_t* expected_signal_generations = nullptr;
     uint32_t combine_expected_intra_node_flag_value;
     uint64_t* combine_rdma_inter_node_group_flags;
     uint32_t* combine_intra_node_write_completion_flags;

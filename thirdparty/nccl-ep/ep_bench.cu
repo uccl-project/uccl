@@ -1687,6 +1687,8 @@ void printUsage(const char* programName, int myRank) {
 }
 
 int main(int argc, char* argv[]) {
+    int qualification_exit = 0;  // GH200_VALIDATION_EXIT_STATUS
+
     int myRank, nRanks, localRank = 0;
 
     // Default parameters
@@ -1975,7 +1977,8 @@ int main(int argc, char* argv[]) {
     // max_tokens_per_rank is the per-rank dispatch count.
     // num_recv_tokens is the max tokens this rank can receive (nRanks * max_tokens_per_rank).
     unsigned int num_recv_tokens = 0;
-    if (dynamic_tokens) {
+    // GH200_ACTUAL_RECV_ROWS: packed HT input uses actual handle rows.
+    if (dynamic_tokens || algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT) {
         NCCLCHECK(ncclEpHandleGetNumRecvTokens(ep_handle, &num_recv_tokens));
         if (myRank == 0) {
             printf("[DEBUG] Dynamic tokens: num_recv_tokens=%u\n", num_recv_tokens);
@@ -2247,6 +2250,8 @@ int main(int argc, char* argv[]) {
         }
 
         // Collect validation results across all ranks
+        printf("EP_BENCH_RANK_VALIDATION rank=%d dispatch=%s combine=%s\n", myRank, dispatch_valid.passed ? "PASS" : "FAIL", combine_valid.passed ? "PASS" : "FAIL");
+        fflush(stdout);
         int local_dispatch_pass = dispatch_valid.passed ? 1 : 0;
         int local_combine_pass = combine_valid.passed ? 1 : 0;
         int global_dispatch_pass, global_combine_pass;
@@ -2254,6 +2259,7 @@ int main(int argc, char* argv[]) {
         MPICHECK(MPI_Allreduce(&local_dispatch_pass, &global_dispatch_pass, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD));
         MPICHECK(MPI_Allreduce(&local_combine_pass, &global_combine_pass, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD));
 
+        qualification_exit = (global_dispatch_pass && global_combine_pass) ? 0 : 3;
         if (myRank == 0) {
             printf("\nGlobal validation: Dispatch=%s, Combine=%s\n",
                    global_dispatch_pass ? "PASSED" : "FAILED",
@@ -2276,7 +2282,9 @@ int main(int argc, char* argv[]) {
         ncclEpTensorDestroy(ep_group, recv_expert_counter_tensor);
     }
 
+    printf("EP_BENCH_DESTROY_BEGIN rank=%d\n", myRank); fflush(stdout);
     NCCLCHECK(ncclEpGroupDestroy(ep_group, stream));
+    printf("EP_BENCH_DESTROY_END rank=%d\n", myRank); fflush(stdout);
     ncclCommDestroy(comm);
 
     CUDACHECK(cudaStreamDestroy(stream));
@@ -2284,5 +2292,5 @@ int main(int argc, char* argv[]) {
     MPICHECK(MPI_Finalize());
     cudaDeviceReset();
 
-    return 0;
+    return qualification_exit;
 }
