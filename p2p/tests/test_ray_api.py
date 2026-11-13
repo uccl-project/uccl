@@ -536,7 +536,10 @@ def test_transfer():
                 try:
                     ep.transfer(conn_id, op, local_descs * count, remote_descs[-count:])
                 except RuntimeError as exc:
-                    if str(exc) != f"Transfer exceeds remote descriptor at index {count - 1}":
+                    if (
+                        str(exc)
+                        != f"Transfer exceeds remote descriptor at index {count - 1}"
+                    ):
                         raise
                 else:
                     raise RuntimeError("accepted a transfer past the remote tensor")
