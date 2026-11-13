@@ -1457,29 +1457,51 @@ bool Endpoint::advertisev(std::vector<uint64_t> mr_id_v,
 
 bool Endpoint::connect_local(std::string const& remote_gpu_bdf,
                              uint64_t& conn_id, bool same_process) {
-  constexpr int kMaxRetry = 20;
   constexpr int kRetrySleepMs = 10;
+  constexpr int kAttachDeadlineMs = 2000;
+
+  // Normalise once: the same-GPU check and the ring name must agree on the
+  // BDF format (gpu_bus_id_ is normalised).
+  std::string const remote_bdf = normalize_pci_bus_id(remote_gpu_bdf);
+
+  // Same GPU across processes is not supported: the CONNECT would land in the
+  // inbox ring named after this endpoint's own BDF, which accept_local()
+  // deliberately skips, so the peer would wait forever. Fail fast instead.
+  if (!same_process && remote_bdf == gpu_bus_id_) {
+    std::cerr << "[connect_local] Error: same-GPU cross-process connection to "
+              << remote_bdf
+              << " is not supported (accept_local never reads its own-BDF "
+                 "ring); use same_process=true within one process"
+              << std::endl;
+    return false;
+  }
 
   Conn* conn = new Conn;
-  conn->remote_gpu_bdf_ = remote_gpu_bdf;
-  conn->remote_gpu_ordinal_ = visible_ordinal_of_bdf(remote_gpu_bdf);
+  conn->remote_gpu_bdf_ = remote_bdf;
+  conn->remote_gpu_ordinal_ = visible_ordinal_of_bdf(remote_bdf);
 
   if (same_process) {
     // Same process: use inbox_rings_ directly, no shm attach needed.
-    auto it = inbox_rings_.find(remote_gpu_bdf);
+    auto it = inbox_rings_.find(remote_bdf);
     if (it != inbox_rings_.end()) {
       conn->remote_inbox_ = it->second;
     }
     conn->shm_attached_ = false;
   } else {
     // cross process: attach remote inbox via shared memory
-    conn->remote_inbox_.shm_name = shm_ring_name(gpu_bus_id_, remote_gpu_bdf);
+    conn->remote_inbox_.shm_name = shm_ring_name(gpu_bus_id_, remote_bdf);
 
+    // The peer may be starting up (or replacing a stale ring), in which
+    // case attach reports "no live owner" until its engine is up. Retry
+    // until the deadline. EACCES is not transient and stops the loop.
     jring_t* ring = nullptr;
     int attempts = 0;
     int attach_errno = 0;
-    while (attempts < kMaxRetry) {
+    auto const deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(kAttachDeadlineMs);
+    for (;;) {
       errno = 0;
+      conn->remote_inbox_.shm_size = 0;  // re-detect every attempt
       ring = uccl::attach_shared_ring(conn->remote_inbox_.shm_name.c_str(),
                                       conn->remote_inbox_.shm_fd,
                                       conn->remote_inbox_.shm_size);
@@ -1491,6 +1513,9 @@ bool Endpoint::connect_local(std::string const& remote_gpu_bdf,
       // A permission error does not go away; only retry while the peer may
       // still be creating its ring.
       if (attach_errno == EACCES) {
+        break;
+      }
+      if (std::chrono::steady_clock::now() >= deadline) {
         break;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(kRetrySleepMs));
@@ -1536,8 +1561,18 @@ bool Endpoint::connect_local(std::string const& remote_gpu_bdf,
   return true;
 }
 
-bool Endpoint::accept_local(std::string& remote_gpu_bdf, uint64_t& conn_id) {
+bool Endpoint::accept_local(std::string& remote_gpu_bdf, uint64_t& conn_id,
+                            int64_t timeout_ms) {
   std::cout << "Waiting for local CONNECT..." << std::endl;
+
+  // Define the out-parameter before any failure return (timeout, shutdown):
+  // 0 is a valid conn id, so use the top of the range as the invalid handle.
+  conn_id = UINT64_MAX;
+
+  auto const deadline = timeout_ms < 0
+                            ? std::chrono::steady_clock::time_point::max()
+                            : std::chrono::steady_clock::now() +
+                                  std::chrono::milliseconds(timeout_ms);
 
   // recv CONNECT
   ShmMsg msg;
@@ -1550,6 +1585,17 @@ bool Endpoint::accept_local(std::string& remote_gpu_bdf, uint64_t& conn_id) {
         shm_ring_recv(handle.ring, msg);
         goto got;
       }
+    }
+    if (passive_accept_stop_.load(std::memory_order_acquire) ||
+        stop_.load(std::memory_order_acquire)) {
+      std::cout << "[accept_local] endpoint is stopping, giving up"
+                << std::endl;
+      return false;
+    }
+    if (std::chrono::steady_clock::now() >= deadline) {
+      std::cerr << "[accept_local] Error: timed out after " << timeout_ms
+                << " ms waiting for a local CONNECT" << std::endl;
+      return false;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
@@ -1577,6 +1623,12 @@ got:
     conn->remote_inbox_.ring = uccl::attach_shared_ring(
         conn->remote_inbox_.shm_name.c_str(), conn->remote_inbox_.shm_fd,
         conn->remote_inbox_.shm_size);
+    if (conn->remote_inbox_.ring == nullptr) {
+      std::cerr << "[accept_local] Error: failed to attach remote inbox "
+                << conn->remote_inbox_.shm_name << std::endl;
+      delete conn;
+      return false;
+    }
     conn->shm_attached_ = true;
   }
 

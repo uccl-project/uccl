@@ -1054,18 +1054,19 @@ NB_MODULE(p2p, m) {
           nb::arg("remote_gpu_bdf"))
       .def(
           "accept_local",
-          [](Endpoint& self) {
+          [](Endpoint& self, int64_t timeout_ms) {
             std::string remote_gpu_bdf;
             uint64_t conn_id;
             bool success;
             {
               nb::gil_scoped_release release;
               InsidePythonGuard guard;
-              success = self.accept_local(remote_gpu_bdf, conn_id);
+              success = self.accept_local(remote_gpu_bdf, conn_id, timeout_ms);
             }
             return nb::make_tuple(success, remote_gpu_bdf, conn_id);
           },
-          "Accept an incoming local connection via shared memory")
+          "Accept an incoming local connection via shared memory",
+          nb::arg("timeout_ms") = -1)
       .def(
           "write_ipc",
           [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size,
