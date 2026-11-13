@@ -103,7 +103,7 @@ std::string EpollClient::connect_to_server(std::string const& server_ip,
   conn.last_activity = std::chrono::steady_clock::now();
 
   auto entry = conns_.emplace(conn_key, std::move(conn)).first;
-  events_.emplace(ev.data.u64, entry);
+  events_.emplace(entry->second.event_id, entry);
 
   std::cout << "Connected to " << server_ip << ":" << server_port
             << " (fd=" << sock << ")\n";
