@@ -6,6 +6,7 @@
 #include "util/debug.h"
 #include "util/gpu_rt.h"
 #include "util/jring.h"
+#include "util/shm_ring.h"
 #include <arpa/inet.h>
 #include <infiniband/verbs.h>
 #include <linux/in.h>
@@ -34,6 +35,7 @@
 #include <pthread.h>
 #include <sched.h>
 #include <stdarg.h>
+#include <sys/file.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
@@ -578,127 +580,6 @@ static inline jring_t* create_ring(size_t element_size, size_t element_count) {
     exit(EXIT_FAILURE);
   }
   return ring;
-}
-
-// for consumer
-static inline jring_t* attach_shared_ring(char const* shm_name, int& shm_fd,
-                                          size_t& shm_size) {
-  shm_fd = shm_open(shm_name, O_RDWR, 0666);
-  if (shm_fd < 0) {
-    int const err = errno;
-    fprintf(stderr, "shm_open attach failed for %s: %s\n", shm_name,
-            strerror(err));
-    if (err == EACCES) {
-      // Name the owner: the usual cause is a ring left by another account.
-      struct stat st;
-      std::string const path = std::string("/dev/shm") + shm_name;
-      if (stat(path.c_str(), &st) == 0) {
-        fprintf(stderr,
-                "  %s is owned by uid %u with mode %o; this process runs as "
-                "uid %u\n",
-                path.c_str(), static_cast<unsigned>(st.st_uid),
-                static_cast<unsigned>(st.st_mode & 0777),
-                static_cast<unsigned>(geteuid()));
-      }
-    }
-    errno = err;
-    return nullptr;
-  }
-
-  // Auto-detect size from the shared memory object if not provided
-  if (shm_size == 0) {
-    struct stat st;
-    if (fstat(shm_fd, &st) < 0 || st.st_size == 0) {
-      perror("fstat shm failed");
-      close(shm_fd);
-      return nullptr;
-    }
-    shm_size = static_cast<size_t>(st.st_size);
-  }
-
-  void* ptr =
-      mmap(nullptr, shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
-
-  if (ptr == MAP_FAILED) {
-    perror("mmap attach failed");
-    close(shm_fd);
-    return nullptr;
-  }
-
-  return reinterpret_cast<jring_t*>(ptr);
-}
-
-// for creator
-static inline jring_t* create_shared_ring(char const* shm_name,
-                                          size_t element_size,
-                                          size_t element_count, int& shm_fd,
-                                          size_t& shm_size, bool* is_creator) {
-  shm_size = jring_get_buf_ring_size(element_size, element_count);
-
-  // try exclusive create
-  shm_fd = shm_open(shm_name, O_CREAT | O_EXCL | O_RDWR, 0666);
-
-  if (shm_fd >= 0) {
-    *is_creator = true;
-  } else {
-    if (errno != EEXIST) {
-      fprintf(stderr, "shm_open failed for %s: %s\n", shm_name,
-              strerror(errno));
-      return nullptr;
-    }
-
-    *is_creator = false;
-    return attach_shared_ring(shm_name, shm_fd, shm_size);
-  }
-
-  // creator does truncate
-  if (ftruncate(shm_fd, shm_size) < 0) {
-    perror("ftruncate failed");
-    close(shm_fd);
-    shm_unlink(shm_name);
-    return nullptr;
-  }
-
-  void* ptr =
-      mmap(nullptr, shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
-
-  if (ptr == MAP_FAILED) {
-    perror("mmap failed");
-    close(shm_fd);
-    shm_unlink(shm_name);
-    return nullptr;
-  }
-
-  auto* ring = reinterpret_cast<jring_t*>(ptr);
-
-  if (jring_init(ring, element_count, element_size, 1, 1) < 0) {
-    munmap(ptr, shm_size);
-    close(shm_fd);
-    shm_unlink(shm_name);
-    return nullptr;
-  }
-
-  return ring;
-}
-
-// for consumer
-static inline void detach_shared_ring(jring_t* ring, int shm_fd,
-                                      size_t shm_size) {
-  if (ring) {
-    munmap(reinterpret_cast<void*>(ring), shm_size);
-  }
-
-  if (shm_fd >= 0) {
-    close(shm_fd);
-  }
-}
-
-// for creator
-static inline void destroy_shared_ring(char const* shm_name, jring_t* ring,
-                                       int shm_fd, size_t shm_size) {
-  detach_shared_ring(ring, shm_fd, shm_size);
-
-  shm_unlink(shm_name);
 }
 
 static inline uint16_t ipv4_checksum(void const* data, size_t header_length) {

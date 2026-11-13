@@ -366,8 +366,12 @@ class Endpoint {
   bool connect_local(std::string const& remote_gpu_bdf, uint64_t& conn_id,
                      bool same_process = false);
 
-  /*Accept an incoming local connection via shared memory. */
-  bool accept_local(std::string& remote_gpu_bdf, uint64_t& conn_id);
+  /*Accept an incoming local connection via shared memory.
+   * timeout_ms >= 0 bounds the wait in milliseconds; timeout_ms < 0 waits
+   * forever. Returns false on timeout or when the endpoint is stopping;
+   * conn_id is set to UINT64_MAX when the call returns false. */
+  bool accept_local(std::string& remote_gpu_bdf, uint64_t& conn_id,
+                    int64_t timeout_ms = -1);
 
   /* One-sided write and read via IPC. */
   bool write_ipc(uint64_t conn_id, void const* data, size_t size,

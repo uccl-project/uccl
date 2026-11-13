@@ -18,7 +18,7 @@ LIBFABRIC_HOME ?= /opt/libfabric
 
 # The standalone topology test needs neither Python nor nanobind. Keep
 # discovery enabled for the default build and any invocation with other goals.
-HOST_TEST_TARGETS := test_gpu_topology
+HOST_TEST_TARGETS := test_gpu_topology test_shm_ring
 ifneq ($(filter-out $(HOST_TEST_TARGETS),$(or $(MAKECMDGOALS),all)),)
 NB_DIR ?= $(shell $(PYTHON) -c "import nanobind, os; print(os.path.dirname(nanobind.__file__))")
 NB_SRC_DIR := $(NB_DIR)/src
@@ -159,15 +159,26 @@ test_epoll_client: tests/test_epoll_client.cc util/epoll_client.cc util/epoll_cl
 test_gpu_topology: ../include/util/gpu_topology_test.cc ../include/util/gpu_topology.h
 	$(CXX) -std=c++17 -O2 -o $@ ../include/util/gpu_topology_test.cc
 
+# Local IPC inbox ring lifecycle and reclaim races; no GPU or RDMA device needed.
+test_shm_ring: ../include/util/shm_ring_test.cc ../include/util/shm_ring.h ../include/util/jring.h
+	$(CXX) -std=c++17 -O2 -I../include -o $@ ../include/util/shm_ring_test.cc
+
+# Review stress harness for the same rings (create races, create/destroy
+# collisions, attach-vs-reclaim, leaks). Not part of `make test`; run
+# explicitly: ./stress_shm_ring race 2000
+stress_shm_ring: ../include/util/shm_ring_stress_test.cc ../include/util/shm_ring.h ../include/util/jring.h
+	$(CXX) -std=c++17 -O2 -I../include -o $@ ../include/util/shm_ring_stress_test.cc
+
 notif_e2e: tests/test_notify_e2e.cc $(P2P_SHARED_LIB)
 	$(CXX) -std=c++17 -O2 $(CPPFLAGS) -o $@ tests/test_notify_e2e.cc \
 	  -L. -luccl_p2p $(DEVICE_LDLIBS) -Wl,-rpath,'$$ORIGIN'
 
-test: test_notify_serde test_epoll_server test_epoll_client test_gpu_topology all
+test: test_notify_serde test_epoll_server test_epoll_client test_gpu_topology test_shm_ring all
 	./test_notify_serde
 	./test_epoll_server
 	./test_epoll_client
 	./test_gpu_topology
+	./test_shm_ring
 	$(PYTHON) tests/test_engine_write.py
 
 install-deps:
