@@ -9,6 +9,15 @@
 #define NUM_BUFFER_ALIGNMENT_BYTES 128
 
 #define FINISHED_SUM_TAG 1024
+
+// NVL barrier signals: one int slot per NVL peer, then the barrier mode.
+#define BARRIER_MODE_SLOT NUM_MAX_NVL_PEERS
+#define NUM_BARRIER_SIGNAL_INTS (NUM_MAX_NVL_PEERS + 1)
+// Add/sub with peer atomics; needs native atomics over the peer link.
+#define BARRIER_MODE_ATOMIC 0
+// Single-writer epochs; needs only peer stores.
+#define BARRIER_MODE_EPOCH 1
+
 #define NUM_WAIT_NANOSECONDS 500
 
 // #define ENABLE_FAST_DEBUG

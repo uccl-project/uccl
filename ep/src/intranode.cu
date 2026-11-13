@@ -970,9 +970,9 @@ __global__ void __launch_bounds__(kNumThreads, 1)
               ld_nc_global(send_head + token_idx * kNumRanks + lane_id);
 
         auto start_time = clock64();
-        while (
-            __any_sync(WARP_MASK, channel_tail_idx[lane_id] <= expected_head and
-                                      expected_head >= 0)) {
+        while (__any_sync(WARP_MASK,
+                          expected_head >= 0 and
+                              channel_tail_idx[lane_id] <= expected_head)) {
           // Timeout check
           if (clock64() - start_time > NUM_TIMEOUT_CYCLES) {
             printf(
