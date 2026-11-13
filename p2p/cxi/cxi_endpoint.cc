@@ -176,9 +176,12 @@ CxiEndpoint::~CxiEndpoint() {
     inflight_ops_.clear();
   }
 
+  // Close in dependency order: the endpoint is bound to the AV and CQ, so they
+  // stay busy until it is closed, and a busy domain makes fi_close(fabric)
+  // corrupt libfabric's fabric list.
+  if (ep_) fi_close(&ep_->fid);
   if (av_) fi_close(&av_->fid);
   if (cq_) fi_close(&cq_->fid);
-  if (ep_) fi_close(&ep_->fid);
   if (domain_) fi_close(&domain_->fid);
   if (fabric_) fi_close(&fabric_->fid);
   if (info_) fi_freeinfo(info_);

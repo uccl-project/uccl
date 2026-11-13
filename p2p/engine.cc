@@ -467,6 +467,10 @@ Endpoint::~Endpoint() {
   {
     std::shared_lock<std::shared_mutex> lock(mr_mu_);
     for (auto& [mr_id, mr] : mr_id_to_mr_) {
+      // Deregister MRs the caller did not destroy: an MR left open keeps the
+      // transport's domain busy, so it could not be closed at teardown.
+      mr->mhandle_->compress_ctx.reset();
+      uccl_deregmr(ep_, mr->mhandle_);
       delete mr->mhandle_;
       delete mr;
     }
@@ -1639,9 +1643,8 @@ bool Endpoint::write_ipc(uint64_t conn_id, void const* data, size_t size,
         memcpy_kind, dst_streams[i]));
   }
 
-  // Wait for all streams to complete
-  for (auto& stream : dst_streams) {
-    GPU_RT_CHECK(gpuStreamSynchronize(stream));
+  for (int i = 0; i < num_streams; ++i) {
+    GPU_RT_CHECK(gpuStreamSynchronize(dst_streams[i]));
   }
 
   // Close the IPC memory handle
@@ -1700,9 +1703,8 @@ bool Endpoint::read_ipc(uint64_t conn_id, void* data, size_t size,
         memcpy_kind, src_streams[i]));
   }
 
-  // Wait for all streams to complete
-  for (auto& stream : src_streams) {
-    GPU_RT_CHECK(gpuStreamSynchronize(stream));
+  for (int i = 0; i < num_streams; ++i) {
+    GPU_RT_CHECK(gpuStreamSynchronize(src_streams[i]));
   }
 
   // Close the IPC memory handle
@@ -1725,14 +1727,16 @@ bool Endpoint::writev_ipc(uint64_t conn_id, std::vector<void const*> data_v,
     return false;
   }
 
+  if (num_iovs == 0) return true;
+
   int orig_device;
   GPU_RT_CHECK(gpuGetDevice(&orig_device));
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
   int ipc_dev_w = uccl::device::ipc_open_device(
-      local_gpu_idx_, ipc_owner_device(local_gpu_idx_, conn,
-                                       num_iovs > 0 ? info_v[0].gpu_idx : -1));
+      local_gpu_idx_,
+      ipc_owner_device(local_gpu_idx_, conn, info_v[0].gpu_idx));
   GPU_RT_CHECK(gpuSetDevice(ipc_dev_w));
   std::vector<gpuStream_t>& streams = get_ipc_streams(ipc_dev_w);
 
@@ -1741,6 +1745,7 @@ bool Endpoint::writev_ipc(uint64_t conn_id, std::vector<void const*> data_v,
   for (size_t iov = 0; iov < num_iovs; ++iov) {
     mappings.prepare(iov, info_v[iov].handle);
   }
+  int active_streams = 0;
   for (size_t iov = 0; iov < num_iovs; ++iov) {
     UCCL_CHECK(data_v[iov] != nullptr)
         << "writev_ipc: data_v[" << iov << "] is null";
@@ -1755,6 +1760,7 @@ bool Endpoint::writev_ipc(uint64_t conn_id, std::vector<void const*> data_v,
     size_t sz = size_v[iov];
     int num_streams = std::min(
         streams.size(), sz < kIpcSizePerEngine ? 1 : sz / kIpcSizePerEngine);
+    active_streams = std::max(active_streams, num_streams);
     size_t chunk_size = sz / num_streams;
 
     for (int i = 0; i < num_streams; ++i) {
@@ -1769,9 +1775,8 @@ bool Endpoint::writev_ipc(uint64_t conn_id, std::vector<void const*> data_v,
     }
   }
 
-  // Sync all streams, then close all handles.
-  for (auto& stream : streams) {
-    GPU_RT_CHECK(gpuStreamSynchronize(stream));
+  for (int i = 0; i < active_streams; ++i) {
+    GPU_RT_CHECK(gpuStreamSynchronize(streams[i]));
   }
   for (void* raw_ptr : mappings.raw_ptrs) {
     GPU_RT_CHECK(gpuIpcCloseMemHandle(raw_ptr));
@@ -1793,14 +1798,16 @@ bool Endpoint::readv_ipc(uint64_t conn_id, std::vector<void*> data_v,
     return false;
   }
 
+  if (num_iovs == 0) return true;
+
   int orig_device;
   GPU_RT_CHECK(gpuGetDevice(&orig_device));
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
   int ipc_dev_r = uccl::device::ipc_open_device(
-      local_gpu_idx_, ipc_owner_device(local_gpu_idx_, conn,
-                                       num_iovs > 0 ? info_v[0].gpu_idx : -1));
+      local_gpu_idx_,
+      ipc_owner_device(local_gpu_idx_, conn, info_v[0].gpu_idx));
   GPU_RT_CHECK(gpuSetDevice(ipc_dev_r));
   std::vector<gpuStream_t>& streams = get_ipc_streams(ipc_dev_r);
 
@@ -1809,6 +1816,7 @@ bool Endpoint::readv_ipc(uint64_t conn_id, std::vector<void*> data_v,
   for (size_t iov = 0; iov < num_iovs; ++iov) {
     mappings.prepare(iov, info_v[iov].handle);
   }
+  int active_streams = 0;
   for (size_t iov = 0; iov < num_iovs; ++iov) {
     UCCL_CHECK(data_v[iov] != nullptr)
         << "readv_ipc: data_v[" << iov << "] is null";
@@ -1823,6 +1831,7 @@ bool Endpoint::readv_ipc(uint64_t conn_id, std::vector<void*> data_v,
     size_t sz = size_v[iov];
     int num_streams = std::min(
         streams.size(), sz < kIpcSizePerEngine ? 1 : sz / kIpcSizePerEngine);
+    active_streams = std::max(active_streams, num_streams);
     size_t chunk_size = sz / num_streams;
 
     for (int i = 0; i < num_streams; ++i) {
@@ -1837,9 +1846,8 @@ bool Endpoint::readv_ipc(uint64_t conn_id, std::vector<void*> data_v,
     }
   }
 
-  // Sync all streams, then close all handles.
-  for (auto& stream : streams) {
-    GPU_RT_CHECK(gpuStreamSynchronize(stream));
+  for (int i = 0; i < active_streams; ++i) {
+    GPU_RT_CHECK(gpuStreamSynchronize(streams[i]));
   }
   for (void* raw_ptr : mappings.raw_ptrs) {
     GPU_RT_CHECK(gpuIpcCloseMemHandle(raw_ptr));
