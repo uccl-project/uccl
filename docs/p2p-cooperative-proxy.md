@@ -161,7 +161,8 @@ another stays active and that send/receive pins keep a shared MR alive.
 This is intentionally separate from compiling the full engine:
 stub declarations cannot prove compatibility with real transport headers. Build
 the normal P2P targets with the relevant SDKs as an additional integration check.
-The P2P Host Tests workflow runs the CPU checks without GPU runners.
+CI runs the two commands on its CPU target as the `p2p.cpu.cooperative_proxy`
+and `p2p.cpu.cooperative_proxy_sanitize` suites in `ci/config/tests.json`.
 
 ## Hardware verification still needed
 

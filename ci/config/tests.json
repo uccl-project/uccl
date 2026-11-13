@@ -570,6 +570,52 @@
       "command": "g++ -std=c++17 -O2 -pthread -Ip2p -Ip2p/util -Iinclude p2p/tests/test_epoll_server.cc p2p/util/epoll_server.cc -o \"$CI_ARTIFACTS/epoll_server\" && \"$CI_ARTIFACTS/epoll_server\""
     },
     {
+      "id": "p2p.cpu.cooperative_proxy",
+      "sources": [
+        "p2p/tests/test_proxy_scheduler.cc",
+        "p2p/tests/test_cooperative_proxy_adapter.py",
+        "p2p/tests/test_proxy_fairness_benchmark.py"
+      ],
+      "tier": "cpu",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "make -C p2p/tests test"
+    },
+    {
+      "id": "p2p.cpu.cooperative_proxy_sanitize",
+      "sources": [
+        "p2p/tests/test_proxy_scheduler.cc",
+        "p2p/tests/test_cooperative_proxy_adapter.py",
+        "p2p/tests/test_proxy_fairness_benchmark.py"
+      ],
+      "tier": "cpu",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "make -C p2p/tests sanitize"
+    },
+    {
       "id": "p2p.engine_read",
       "sources": [
         "p2p/tests/test_engine_read.py"
@@ -4082,6 +4128,17 @@
       "enabled": false,
       "tier": "performance",
       "reason": "Requires eight GPUs per node; the largest available node has four.",
+      "targets": [],
+      "requires": []
+    },
+    {
+      "id": "p2p.bench.proxy_fairness",
+      "sources": [
+        "p2p/benchmarks/benchmark_proxy_fairness.py"
+      ],
+      "enabled": false,
+      "tier": "performance",
+      "reason": "Manual A/B comparison: each arm starts two peer processes and one initiator in fresh processes, and no CI launcher runs them. The script's descriptor preflight is covered by p2p.cpu.cooperative_proxy.",
       "targets": [],
       "requires": []
     },
