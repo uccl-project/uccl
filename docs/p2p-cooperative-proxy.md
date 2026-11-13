@@ -86,9 +86,10 @@ prevents new acquisitions; its transport registration is released when the last
 owner finishes. These pins own registrations, **not the caller's data buffers**.
 They do not make freeing an in-flight buffer valid. A registration removed while
 a task is queued is detected before its first raw submission.
-Endpoint teardown is unchanged: registrations still in the registry when the
-Endpoint is destroyed are freed without a transport deregistration call, after
-the proxy threads have been joined.
+Registrations still in the registry when the Endpoint is destroyed are
+deregistered at that point, after the proxy threads have been joined. Each
+registration holds a reference to its transport, so the transport closes only
+after its last registration is released.
 
 On shutdown, admission stops and requests already owned by the scheduler are
 drained, including their unsent IOVs. Requests still in the input ring are outside

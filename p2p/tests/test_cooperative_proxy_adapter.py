@@ -426,21 +426,6 @@ void shared_mr_between_proxies() {
   assert(f.endpoint.transport.releases[1] == 2);
   assert(partial.status->done && !partial.status->success);
 }
-void null_handle_skips_transport_release() {
-  // Endpoint teardown frees handles itself and nulls them before the last
-  // owner drops the registration; the deleter must not touch the transport.
-  Fixture f;
-  f.add_mr(2);
-  {
-    std::unique_lock<std::shared_mutex> lock(f.endpoint.mr_mu_);
-    auto& mr = f.endpoint.mr_id_to_mr_.at(2);
-    delete mr->mhandle_;
-    mr->mhandle_ = nullptr;
-    f.endpoint.mr_id_to_mr_.erase(2);
-  }
-  assert(f.endpoint.transport.releases.count(2) == 0);
-  assert(f.endpoint.dereg(1) && f.endpoint.transport.releases[1] == 1);
-}
 std::pair<int, int> run_production_loop(bool enabled) {
   Fixture f;
   f.endpoint.simulate_blocking = true;
@@ -482,7 +467,6 @@ int main(int argc, char** argv) {
     case 7: independent_mr_release(); break;
     case 8: shared_mr_between_proxies(); break;
     case 9: production_loop_head_of_line(); break;
-    case 10: null_handle_skips_transport_release(); break;
     default: return 1;
   }
 }
@@ -538,7 +522,6 @@ class CooperativeProxyAdapterTests(unittest.TestCase):
             "independent MR releases and concurrent registration progress",
             "shared MR pins across proxies and failed pin acquisition",
             "production old/new send loops differ on head-of-line blocking",
-            "teardown-style null handle skips transport release",
         )
         for index, case in enumerate(cases):
             with self.subTest(case=case):

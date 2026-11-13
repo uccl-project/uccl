@@ -791,12 +791,9 @@ std::shared_ptr<MR> Endpoint::make_mr(uint64_t id, P2PMhandle* handle) {
   // Capture the transport by value so a deferred release never accesses a
   // destroyed Endpoint or transport. No registry lock is held during DMA.
   return std::shared_ptr<MR>(new MR{id, handle}, [transport = ep_](MR* mr) {
-    // Endpoint teardown frees the handle itself and leaves this null.
-    if (mr->mhandle_ != nullptr) {
-      mr->mhandle_->compress_ctx.reset();
-      uccl_deregmr(transport, mr->mhandle_);
-      delete mr->mhandle_;
-    }
+    mr->mhandle_->compress_ctx.reset();
+    uccl_deregmr(transport, mr->mhandle_);
+    delete mr->mhandle_;
     delete mr;
   });
 }
