@@ -530,8 +530,19 @@ def test_transfer():
         remote_descs = ep.deserialize_descs(remote_descs_serialized)
         print(f"[Client] Deserialized {len(remote_descs)} remote descriptor(s)")
 
-        # Start transfer (WRITE operation)
-        ok, transfer_id = ep.transfer(conn_id, "write", local_descs, remote_descs)
+        # The second advertised tensor is smaller than one local transfer.
+        for op in ("read", "write"):
+            for count in (1, 2):
+                try:
+                    ep.transfer(conn_id, op, local_descs * count, remote_descs[-count:])
+                except RuntimeError as exc:
+                    if str(exc) != f"Transfer exceeds remote descriptor at index {count - 1}":
+                        raise
+                else:
+                    raise RuntimeError("accepted a transfer past the remote tensor")
+
+        # The larger remote tensor accepts a shorter write.
+        ok, transfer_id = ep.transfer(conn_id, "write", local_descs, remote_descs[:1])
         assert ok, "Failed to start transfer"
         print(f"[Client] Started WRITE transfer")
 
@@ -576,8 +587,8 @@ def test_transfer():
 
         # Create destination tensor for receiving
         # Use uint8 to match source tensor
-        dst_tensor = torch.zeros(256, dtype=torch.uint8, device="cuda:0")
-        dst_tensors = [dst_tensor]
+        dst_tensor = torch.zeros(512, dtype=torch.uint8, device="cuda:0")
+        dst_tensors = [dst_tensor, torch.zeros(128, dtype=torch.uint8, device="cuda:0")]
         print(f"[Server] Created destination tensor for receiving")
 
         # Register remote memory
