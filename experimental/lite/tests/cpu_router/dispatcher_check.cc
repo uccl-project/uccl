@@ -37,7 +37,7 @@ int main() {
     t.identity = "host-only-dispatch-test";
     t.permittedCpusPerNode = {{0, 2}, {1, 2}};
     t.permittedCpuIds = {{0, {0, 1}}, {1, {2, 3}}};
-    std::array<std::array<uint16_t, 16>, 2> inputs{}, outputs{};
+    alignas(16) std::array<std::array<uint16_t, 16>, 2> inputs{}, outputs{};
     CollectiveCall call;
     call.count = 4;
     for (int r = 0; r < 2; ++r)
@@ -238,6 +238,65 @@ int main() {
                                          invalidWorkers);
           },
           "small AG progress limit is validated before CUDA initialization");
+    }
+    {
+      cpu_router::CpuRouterOptions ring;
+      ring.hostRingReduceScatter = true;
+      rejects(
+          [&] { CollectiveDispatcher invalid(t, autoPolicy, callback, ring); },
+          "host ring requires GPU arithmetic and progress before init");
+      ring.reduction = cpu_router::ReductionPlacement::Gpu;
+      ring.gpuProgress = true;
+      ring.smallReduceScatterGpuProgress = false;
+      CollectiveCall rs;
+      rs.collective = Collective::ReduceScatter;
+      rs.count = 8;
+      for (int r = 0; r < 2; ++r)
+        rs.ports.push_back({inputs[r].data(), outputs[r].data(), nullptr, r});
+      int ringFallback = 0;
+      auto fallback = [&](CollectiveCall const&) { ++ringFallback; };
+      CollectiveDispatcher ringAuto(t, autoPolicy, fallback, ring);
+      require(!ringAuto.prepare(rs).cpuRouter && !ringAuto.routerInitialized(),
+              "unmeasured host ring must preserve allocation-free fallback");
+      ringAuto.enqueue(rs);
+      require(ringFallback == 1,
+              "unmeasured host ring invokes caller fallback");
+      auto flatOptions = ring;
+      flatOptions.hostRingReduceScatter = false;
+      CollectiveDispatcher flat(t, autoPolicy, fallback, flatOptions);
+      require(ringAuto.topology().identity != flat.topology().identity,
+              "ring reduction order and schedule require separate calibration");
+      BackendPolicy oldEvidence;
+      oldEvidence.fallbackIdentity = "test-fallback";
+      oldEvidence.measurements.push_back({flat.topology().identity,
+                                          oldEvidence.fallbackIdentity,
+                                          rs.workload(),
+                                          {8, 9, 10},
+                                          {19, 20, 21},
+                                          3,
+                                          true});
+      CollectiveDispatcher ringOld(t, oldEvidence, fallback, ring);
+      require(!ringOld.prepare(rs).cpuRouter && !ringOld.routerInitialized(),
+              "ring cannot reuse flat-GPU calibration");
+      CollectiveDispatcher ringForce(t, policy, fallback, ring);
+      for (int unsupported = 0; unsupported < 5; ++unsupported) {
+        auto c = rs;
+        if (unsupported == 0) c.collective = Collective::AllReduce;
+        if (unsupported == 1) c.count = 7;
+        if (unsupported == 2) c.dtype = ScalarType::Float16;
+        if (unsupported == 3) c.ports[0].output = outputs[0].data() + 1;
+        if (unsupported == 4) {
+          c.inPlace = true;
+          for (int r = 0; r < 2; ++r)
+            c.ports[r].output = inputs[r].data() + r * c.count;
+        }
+        require(!ringAuto.prepare(c).cpuRouter && !ringAuto.routerInitialized(),
+                "unsupported ring workload falls back before allocation");
+        rejects([&] { ringForce.prepare(c); },
+                "forced unsupported ring workload rejects before allocation");
+        require(!ringForce.routerInitialized(),
+                "rejected ring remains uninitialized");
+      }
     }
     std::cout << "Dispatcher: " << checks
               << " checks passed; no GPU initialization needed\n";

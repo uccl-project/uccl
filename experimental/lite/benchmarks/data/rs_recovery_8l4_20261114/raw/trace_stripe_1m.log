@@ -1,0 +1,38 @@
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=262144 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=interleaved-destinations
+# ReduceScatter owner-only merge; active CPU<=4/node; scratch_stride=32768
+# BF16 8 GPUs op=1 AR-in-place AG/RS-out-of-place NCCL=22809 input-ready slowest-GPU-event timing CPU=47 idle_us=0 blocks=16 warmup=5 iterations=10 repeats=1
+# testbed=gpu; host-packet UCCL transport; NCCL P2P default
+kind,bytes,variant,repeat,iteration,us
+# implementation,1048576,rs-candidate,rs-candidate
+# RS candidate packet=262144 min=131072 workers=4 blocks=64 threads=256 cpu-grain=8192 transport-grain=16384 gpu=0 striped=1 direct=0
+sample,1048576,rs-candidate,0,0,382.528007
+sample,1048576,rs-candidate,0,1,420.320004
+sample,1048576,rs-candidate,0,2,372.832000
+sample,1048576,rs-candidate,0,3,401.535988
+sample,1048576,rs-candidate,0,4,395.552009
+sample,1048576,rs-candidate,0,5,373.887986
+sample,1048576,rs-candidate,0,6,377.887994
+sample,1048576,rs-candidate,0,7,392.895997
+sample,1048576,rs-candidate,0,8,506.464005
+sample,1048576,rs-candidate,0,9,389.887989
+median,1048576,rs-candidate,0,-1,391.391993
+profile GPU0 consumer ready0 128.4 copy0 7.7 total 266.3 us
+profile GPU1 consumer ready0 116.0 copy0 8.0 total 253.2 us
+profile GPU2 consumer ready0 136.7 copy0 7.4 total 274.0 us
+profile GPU3 consumer ready0 103.4 copy0 7.5 total 239.4 us
+profile GPU4 consumer ready0 123.3 copy0 51.1 total 239.7 us
+profile GPU5 consumer ready0 77.1 copy0 53.8 total 216.7 us
+profile GPU6 consumer ready0 109.5 copy0 51.4 total 249.1 us
+profile GPU7 consumer ready0 103.5 copy0 65.4 total 242.4 us
+Collecting data...
+Generating '/tmp/nsys-report-e719.qdstrm'
+[1/1] [0%                          ] trace_stripe_1m.nsys-rep[1/1] [0%                          ] trace_stripe_1m.nsys-rep[1/1] [5%                          ] trace_stripe_1m.nsys-rep[1/1] [6%                          ] trace_stripe_1m.nsys-rep[1/1] [7%                          ] trace_stripe_1m.nsys-rep[1/1] [=16%                        ] trace_stripe_1m.nsys-rep[1/1] [====27%                     ] trace_stripe_1m.nsys-rep[1/1] [=======37%                  ] trace_stripe_1m.nsys-rep[1/1] [==========47%               ] trace_stripe_1m.nsys-rep[1/1] [============56%             ] trace_stripe_1m.nsys-rep[1/1] [========================100%] trace_stripe_1m.nsys-rep[1/1] [========================100%] trace_stripe_1m.nsys-rep
+Generated:
+	/home/wxzheng/uccl-zhongjie-dev/experimental/lite/build/rs_recovery_8l4_20261114/trace_stripe_1m.nsys-rep

@@ -1,0 +1,52 @@
+{
+  "base_commit": "5b9a7f86f13302353ce878b640e23e4e79660dd9",
+  "source_manifest": "final_source_hashes.json",
+  "benchmarked_binary_sha256": "f6e80074af2c70e625932743f6af343b4a161e50cc7fc63d5b9517a02a94a45d",
+  "dtype": "BF16",
+  "placement": "out_of_place",
+  "input_bytes_per_gpu": [
+    1024,
+    2048,
+    4096,
+    8192,
+    16384,
+    32768,
+    65536,
+    131072,
+    262144,
+    524288,
+    1048576,
+    2097152,
+    4194304,
+    8388608,
+    16777216,
+    33554432,
+    67108864,
+    134217728,
+    268435456,
+    536870912,
+    1073741824
+  ],
+  "modes": [
+    "gpu",
+    "shm"
+  ],
+  "repetitions": 3,
+  "warmups_per_repetition": 5,
+  "timed_calls_per_repetition": 10,
+  "sweeps_per_mode": 2,
+  "timing": "Input-ready slowest-GPU CUDA events including submission gaps; preparation and validation excluded",
+  "per_size_best_variant": false,
+  "selection": "Fixed ring at 1/2/4/8 MiB; previous selection elsewhere",
+  "summary_sha256": "2eda94ad5e60ef2b49f87b2a70bc9d1435be6ca33c0f5c332a6827def4f92f2c",
+  "raw_selection": "confirm_{gpu,shm}_rs_{a,b}; excludes every screening and interrupted run",
+  "library_default_enabled": false,
+  "figures": [
+    "docs/assets/collectives-8l4-reducescatter-overview.svg",
+    "docs/assets/collectives-8l4-shm-reducescatter-overview.svg"
+  ],
+  "control_validation": "control_validation.json",
+  "correctness_manifest": "correctness.json",
+  "source_control": "Implementation source state is identified by final_source_hashes.json in the containing commit.",
+  "original_binary_validation": "original_binary_validation.json"
+}

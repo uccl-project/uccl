@@ -1,8 +1,10 @@
 # Eight-L4 GPU and SHM overview figures
 
-All six ordinary-call figures now use **fresh 1 KiB–1 GiB measurements** from
-[the full refresh](../full_refresh_8l4_20261114/README.md). There are no historical
-tails or reused GPU/SHM UCCL curves. BF16; AllReduce in place, AllGather and
+All six ordinary-call figures use **complete 1 KiB–1 GiB measurements**.
+AR/AG retain [the full refresh](../full_refresh_8l4_20261114/README.md);
+RS uses the subsequent [ring recovery confirmation](../rs_recovery_8l4_20261114/README.md)
+at every size, including freshly paired NCCL controls. There are no mixed-run
+tails within a curve or reused GPU/SHM UCCL curves. BF16; AllReduce in place, AllGather and
 ReduceScatter out of place. Sizes denote complete AR/RS input or AG output per
 GPU. Each figure has 1-KiB–1-MiB latency and 1-MiB–1-GiB bus-throughput panels;
 both panels include 1 MiB.
@@ -15,7 +17,8 @@ sweep reverses testbed, operation, size and initial backend order. All producer
 streams finish before timing. The timer is the slowest-GPU CUDA-event interval,
 including host submission gaps. Every output element and guard is checked on
 every warmup and timed call. The base router is also measured and retained in
-the underlying dataset, but does not replace a losing current candidate.
+the original AR/AG dataset, but does not replace a losing current candidate.
+RS pairs the previous fixed selection, the revised selection, and NCCL.
 
 Both testbeds use the same fixed UCCL schedule:
 
@@ -26,7 +29,10 @@ Both testbeds use the same fixed UCCL schedule:
 | AG | 1–128 KiB | Tuned packet router with GPU progress |
 | AG | 256 KiB–1 MiB | Mini-host cooperative kernel, 16 blocks |
 | AG | 2 MiB–1 GiB | Full per-source GPU-progress packet router, 64-block cap |
-| RS | 1 KiB–1 GiB | GPU reduction/progress through 64 KiB and at 128 KiB; CPU NUMA reduction thereafter, with four active workers at 256 KiB–1 MiB |
+| RS | 1–128 KiB | GPU reduction/progress |
+| RS | 256–512 KiB | CPU NUMA reduction, four active workers |
+| RS | 1–8 MiB | Opt-in mapped-host BF16 ring, 16 CTAs, GPU reduction/progress |
+| RS | 16 MiB–1 GiB | Existing CPU NUMA reduction |
 
 This schedule was fixed before the full sweeps; it is not a per-size minimum or
 an automatic-routing policy. The report retains regressions against the base
@@ -49,12 +55,15 @@ resident result is extrapolated to 1 GiB.
 
 ## Reproduction
 
-[summary.csv](summary.csv) contains exactly **126 fresh points**, including
-implementation labels and the common source path. First run
+[summary.csv](summary.csv) contains exactly **126 points**, including
+implementation labels and per-collective source paths. AR/AG measurements
+remain tied to their earlier source; they are not revalidation of this revision.
+First run
 `python3 scripts/summarize_full_8l4.py` from the Lite root; it rejects missing
 runs, samples, or size points. Then run:
 
 ```bash
+python3 scripts/summarize_rs_recovery.py
 python3 benchmarks/data/overview_8l4_20261114/build.py
 python3 benchmarks/data/overview_8l4_20261114/plot.py --preview
 ```

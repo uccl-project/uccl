@@ -34,6 +34,7 @@ namespace uccl_lite::cpu_router {
 namespace {
 
 constexpr int kSlots = 2;
+constexpr int kRingBlocks = 128;
 
 constexpr size_t kQueueDepth = 128;
 void check(cudaError_t error, char const* expression) {
@@ -98,7 +99,10 @@ struct alignas(16) Transport {
   uint16_t const* results[kSlots];
   Flags* flags;
   Flags* readerFlags;
-  Flags* const* peerFlags;
+  union {
+    Flags* const* peerFlags;
+    Word* const* ringProgress;
+  };
   GridState* grid;
   PacketProgram plan;
   size_t packetElements;
@@ -592,6 +596,65 @@ __device__ void runTransport(Transport const& p, size_t firstTile,
   }
   if (p.profile && block == 0 && threadIdx.x == 0) state->times[5] = timer();
 }
+// CTA-local credits keep each 16-byte vector in the same lane across
+// changing extents. Every peer uses the same fixed block/thread geometry.
+// CTA barriers carry all writers' data to the leader's system release; a
+// per-thread system fence would duplicate this ordering and serialize PCIe.
+__device__ uint4 ringLoad(uint16_t const* p) {
+  uint4 v;
+  asm volatile("ld.global.cg.v4.u32 {%0,%1,%2,%3}, [%4];"
+               : "=r"(v.x), "=r"(v.y), "=r"(v.z), "=r"(v.w)
+               : "l"(p)
+               : "memory");
+  return v;
+}
+__device__ uint32_t ringAdd(uint32_t a, uint32_t b) {
+  __nv_bfloat162_raw x{uint16_t(a), uint16_t(a >> 16)};
+  __nv_bfloat162_raw y{uint16_t(b), uint16_t(b >> 16)};
+  __nv_bfloat162_raw out = __hadd2(__nv_bfloat162(x), __nv_bfloat162(y));
+  return uint32_t(out.x) | (uint32_t(out.y) << 16);
+}
+__device__ void runRingScatter(Transport const& p) {
+  int ranks = p.plan.ranks, prev = (p.rank + ranks - 1) % ranks,
+      next = (p.rank + 1) % ranks;
+  size_t shard = p.plan.inputElements / ranks;
+  size_t tid = size_t(blockIdx.x) * blockDim.x + threadIdx.x,
+         stride = size_t(gridDim.x) * blockDim.x;
+  auto* own = &p.ringProgress[p.rank][blockIdx.x].value;
+  auto* reader = &p.ringProgress[next][blockIdx.x].value;
+  auto* writer = &p.ringProgress[prev][blockIdx.x].value;
+  uint32_t base = p.firstSequence - 1;
+  if (threadIdx.x == 0 && base)
+    while (acquireSys(reader) < base) __nanosleep(64);
+  __syncthreads();
+  for (size_t i = tid; i < shard / 8; i += stride)
+    DeviceChannel::put16(p.uploads[0] + i * 8,
+                         ringLoad(p.input + size_t(prev) * shard + i * 8));
+  __syncthreads();
+  if (threadIdx.x == 0) releaseSys(own, base + 1);
+  for (int step = 0; step < ranks - 1; ++step) {
+    uint32_t seq = base + step + 1;
+    bool final = step == ranks - 2;
+    if (threadIdx.x == 0) {
+      while (acquireSys(writer) < seq) __nanosleep(64);
+      // The next rank's publication acknowledges its preceding input read.
+      if (!final && step)
+        while (acquireSys(reader) < seq) __nanosleep(64);
+    }
+    __syncthreads();
+    int chunk = (p.rank + ranks - step - 2) % ranks, slot = step & 1;
+    auto* output = final ? p.output : p.uploads[slot ^ 1];
+    for (size_t i = tid; i < shard / 8; i += stride) {
+      auto a = ringLoad(p.sources[slot][prev] + i * 8);
+      auto b = ringLoad(p.input + size_t(chunk) * shard + i * 8);
+      DeviceChannel::put16(output + i * 8,
+                           make_uint4(ringAdd(a.x, b.x), ringAdd(a.y, b.y),
+                                      ringAdd(a.z, b.z), ringAdd(a.w, b.w)));
+    }
+    __syncthreads();
+    if (threadIdx.x == 0) releaseSys(own, seq + 1);
+  }
+}
 template <int GpuReduction = -1, int VectorBytes = 0>
 __global__ void dispatchTransport(Command const* commands, Dispatch* dispatch,
                                   size_t firstTile = 0, size_t endTile = 0,
@@ -611,18 +674,23 @@ __global__ void dispatchTransport(Command const* commands, Dispatch* dispatch,
     storage[i] = DeviceChannel::get16(source + i);
   __syncthreads();
   auto const& p = *reinterpret_cast<Transport*>(storage);
-  if (!endTile)
-    endTile = (p.plan.inputElements + p.packetElements - 1) / p.packetElements;
-  if (gridDim.x == 1) {
-    // Both logical crews have one CTA. Completing each read before beginning
-    // the next upload preserves slot credits without a software grid barrier.
-    for (size_t tile = firstTile; tile < endTile; ++tile) {
-      runTransport<GpuReduction, VectorBytes>(p, tile, tile + 1, 0);
-      runTransport<GpuReduction, VectorBytes>(p, tile, tile + 1,
-                                              p.producerBlocks);
-    }
-  } else
-    runTransport<GpuReduction, VectorBytes>(p, firstTile, endTile);
+  if constexpr (GpuReduction == 2) {
+    runRingScatter(p);
+  } else {
+    if (!endTile)
+      endTile =
+          (p.plan.inputElements + p.packetElements - 1) / p.packetElements;
+    if (gridDim.x == 1) {
+      // Both logical crews have one CTA. Completing each read before beginning
+      // the next upload preserves slot credits without a software grid barrier.
+      for (size_t tile = firstTile; tile < endTile; ++tile) {
+        runTransport<GpuReduction, VectorBytes>(p, tile, tile + 1, 0);
+        runTransport<GpuReduction, VectorBytes>(p, tile, tile + 1,
+                                                p.producerBlocks);
+      }
+    } else
+      runTransport<GpuReduction, VectorBytes>(p, firstTile, endTile);
+  }
   __syncthreads();
   if (threadIdx.x == 0 &&
       atomicAdd(&dispatch->finishedBlocks, 1) == gridDim.x - 1) {
@@ -636,7 +704,8 @@ __global__ void dispatchTransport(Command const* commands, Dispatch* dispatch,
     }
   }
 }
-void* transportKernel(bool gpuReduction, int vectorBytes) {
+void* transportKernel(bool gpuReduction, int vectorBytes, bool ring = false) {
+  if (ring) return reinterpret_cast<void*>(dispatchTransport<2, 16>);
   if (vectorBytes == 32)
     return gpuReduction ? reinterpret_cast<void*>(dispatchTransport<1, 32>)
                         : reinterpret_cast<void*>(dispatchTransport<0, 32>);
@@ -1154,6 +1223,7 @@ struct PacketPipeline::Impl {
   std::array<std::array<uint32_t, 2>, kMaxRanks> barrierPhases{};
   std::array<RegisteredMemory, kMaxRanks> deviceGrids, deviceDispatch;
   std::array<RegisteredMemory, kMaxRanks> deviceSources, devicePeerFlags;
+  std::array<RegisteredMemory, kMaxRanks> ringSignals, deviceRingPointers;
   std::array<RegisteredMemory, kMaxRanks> dmaState, dmaRetained;
   std::array<std::unique_ptr<Channel>, kMaxRanks> channels;
   std::array<cudaStream_t, kMaxRanks> uploadStreams{}, downloadStreams{};
@@ -1215,6 +1285,13 @@ struct PacketPipeline::Impl {
   bool profile = std::getenv("UCCL_LITE_ROUTER_PROFILE") != nullptr;
 
   explicit Impl(PacketPipelineOptions o) : options(o) {
+    if (options.hostRingReduceScatter &&
+        (options.backend != TransportBackend::GpuKernel ||
+         options.reduction != ReductionPlacement::Gpu || !options.gpuProgress ||
+         options.interleaveScatter || options.concurrentProducer ||
+         options.transportBlocks > kRingBlocks || options.singleCtaBytes ||
+         options.transportVectorBytes != 16))
+      throw std::invalid_argument("invalid standalone host-ring options");
     if (options.reduction != ReductionPlacement::Cpu &&
         options.reduction != ReductionPlacement::Gpu)
       throw std::invalid_argument("invalid reduction placement");
@@ -1402,6 +1479,10 @@ struct PacketPipeline::Impl {
             temporaryStride * 2 * options.workersPerNode, nodeIds[node], false);
       }
     }
+    if (options.hostRingReduceScatter)
+      for (int r = 0; r < ranks; ++r)
+        ringSignals[r].allocate(sizeof(Word) * kRingBlocks,
+                                nodeIds[rankGroup[r]]);
     for (int rank = 0; rank < ranks; ++rank) {
       devices[rank] = ports[rank].device;
       CUDA(cudaSetDevice(devices[rank]));
@@ -1419,7 +1500,8 @@ struct PacketPipeline::Impl {
             &active,
             options.concurrentProducer
                 ? reinterpret_cast<void*>(dispatchTransport<>)
-                : transportKernel(kind, options.transportVectorBytes),
+                : transportKernel(kind, options.transportVectorBytes,
+                                  options.hostRingReduceScatter),
             options.transportThreads, 0));
         int limit = std::min(options.transportBlocks, active * sms);
         if (options.concurrentProducer) {
@@ -1502,6 +1584,16 @@ struct PacketPipeline::Impl {
             reinterpret_cast<void**>(&mappedOutputs[slot][rank]),
             outputs[slot][rankGroup[rank]].data(), 0));
       }
+      if (options.hostRingReduceScatter) {
+        std::array<Word*, kMaxRanks> pointers{};
+        for (int r = 0; r < ranks; ++r)
+          pointers[r] = static_cast<Word*>(
+              ringSignals[r].span().gpuAddress(devices[rank]));
+        deviceRingPointers[rank] =
+            RegisteredMemory::gpu(sizeof(pointers), devices[rank]);
+        CUDA(cudaMemcpy(deviceRingPointers[rank].data(), pointers.data(),
+                        sizeof(pointers), cudaMemcpyHostToDevice));
+      }
       // These port mappings never change after prepare. Keep them on-device
       // instead of transferring all 32-rank pointer tables with every command.
       std::array<std::array<uint16_t const*, kMaxRanks>, kSlots> sourceTable{};
@@ -1519,6 +1611,16 @@ struct PacketPipeline::Impl {
                         mappedPeerFlags[rank].data(),
                         sizeof(mappedPeerFlags[rank]), cudaMemcpyHostToDevice));
       }
+    }
+    if (options.hostRingReduceScatter) {
+      int common = options.transportBlocks;
+      for (int r = 0; r < ranks; ++r)
+        common = std::min(common, maxBlocksByKind[r][1]);
+      for (int r = 0; r < ranks; ++r) maxBlocksByKind[r][1] = common;
+      std::fprintf(
+          stderr,
+          "# ReduceScatter host ring; BF16 per-hop rounding; fixed CTAs=%d\n",
+          common);
     }
     for (int group = 0; group < nodes; ++group) {
       std::fprintf(stderr, "# NUMA group%d host_node=%d ranks=", group,
@@ -2096,6 +2198,17 @@ struct PacketPipeline::Impl {
         plan.layout == PacketLayout::Concatenate ? size_t(ranks) * 2 : 2;
     if (plan.inputElements > options.maxTensorBytes / multiplier)
       throw std::invalid_argument("router tensor too large");
+    if (options.hostRingReduceScatter &&
+        (fusedGemm || (binding && binding->producerElements) || ranks < 2 ||
+         plan.layout != PacketLayout::Scatter ||
+         plan.transform != PacketTransform::Sum ||
+         plan.sources != rankMask(ranks) ||
+         plan.destinations != rankMask(ranks) ||
+         plan.inputElements % (size_t(ranks) * 8) ||
+         plan.inputElements / ranks > options.packetBytes / 2))
+      throw std::invalid_argument(
+          "host ring requires complete aligned RS shards within packet "
+          "capacity");
     for (int rank = 0; rank < ranks; ++rank) {
       if (fusedGemm &&
           !gemm->matches(plan, rank, ports[rank].input, ports[rank].output))
@@ -2112,6 +2225,16 @@ struct PacketPipeline::Impl {
         throw std::invalid_argument("null router input");
       if ((plan.destinations & (1U << rank)) && !ports[rank].output)
         throw std::invalid_argument("null router output");
+      if (options.hostRingReduceScatter) {
+        uintptr_t in = reinterpret_cast<uintptr_t>(ports[rank].input),
+                  out = reinterpret_cast<uintptr_t>(ports[rank].output);
+        size_t inBytes = plan.inputElements * 2, outBytes = inBytes / ranks;
+        if (((in | out) & 15) || in > UINTPTR_MAX - inBytes ||
+            out > UINTPTR_MAX - outBytes ||
+            (in < out + outBytes && out < in + inBytes))
+          throw std::invalid_argument(
+              "host ring requires aligned non-overlapping buffers");
+      }
       if (!publishOnly) {
         // Default/legacy streams refer to the current device. Keep capture
         // validation here, before any command or CPU callback is published.
@@ -2186,6 +2309,11 @@ struct PacketPipeline::Impl {
       size_t stripe = capacity / ranks, shard = plan.inputElements / ranks;
       tiles = (shard + stripe - 1) / stripe;
     }
+    if (options.hostRingReduceScatter) {
+      capacity = plan.inputElements / ranks;
+      tiles =
+          size_t(ranks);  // Reserve all progress states, including completion.
+    }
     if (tiles > UINT32_MAX - sequence)
       throw std::runtime_error("router sequence exhausted");
     uint32_t first = sequence;
@@ -2196,7 +2324,8 @@ struct PacketPipeline::Impl {
                      !options.concurrentProducer &&
                      options.backend == TransportBackend::GpuKernel;
     int kernelKind = int(gpuReduce);
-    void* kernel = transportKernel(gpuReduce, options.transportVectorBytes);
+    void* kernel = transportKernel(gpuReduce, options.transportVectorBytes,
+                                   options.hostRingReduceScatter);
     std::array<int, kMaxRanks> producerBlocks{}, consumerBlocks{};
     for (int rank = 0; rank < ranks; ++rank) {
       int limit =
@@ -2234,6 +2363,10 @@ struct PacketPipeline::Impl {
         consumerBlocks[rank] =
             std::min(consumerBlocks[rank], limit - producerBlocks[rank]);
       if (singleCta) producerBlocks[rank] = consumerBlocks[rank] = 1;
+      if (options.hostRingReduceScatter) {
+        producerBlocks[rank] = limit;
+        consumerBlocks[rank] = 0;
+      }
       int blocks = singleCta ? 1 : producerBlocks[rank] + consumerBlocks[rank];
       if (blocks > kMaxTransportBlocks)
         throw std::invalid_argument("router graph grid limit exceeded");
@@ -2393,6 +2526,9 @@ struct PacketPipeline::Impl {
       p.readerFlags = mappedReaderFlags[rank];
       if (options.gpuProgress)
         p.peerFlags = static_cast<Flags* const*>(devicePeerFlags[rank].data());
+      if (options.hostRingReduceScatter)
+        p.ringProgress =
+            static_cast<Word* const*>(deviceRingPointers[rank].data());
       p.grid = grids[rank];
       p.plan = plan;
       p.packetElements = capacity;
@@ -2691,8 +2827,9 @@ void PacketPipeline::prepareGemm(int m, int n, int k,
                                  std::vector<MemorySpan> const& b,
                                  std::vector<MemorySpan> const& partial,
                                  PacketLayout layout) {
-  if (!impl_->initialized || impl_->gemm || m <= 0 || n <= 0 || k <= 0 ||
-      n % 8 || k % 8 || impl_->options.backend != TransportBackend::GpuKernel ||
+  if (impl_->options.hostRingReduceScatter || !impl_->initialized ||
+      impl_->gemm || m <= 0 || n <= 0 || k <= 0 || n % 8 || k % 8 ||
+      impl_->options.backend != TransportBackend::GpuKernel ||
       impl_->options.transportThreads != 256)
     throw std::invalid_argument(
         "invalid resident GEMM shape, transport or preparation order");
@@ -2785,8 +2922,9 @@ void PacketPipeline::prepareAllGatherGemm(
     std::vector<MemorySpan> const& gatheredA, std::vector<MemorySpan> const& b,
     std::vector<MemorySpan> const& output) {
   int ranks = impl_->ranks;
-  if (!impl_->initialized || localM <= 0 || n <= 0 || k <= 0 ||
-      localM > INT_MAX / ranks || localA.size() != size_t(ranks))
+  if (impl_->options.hostRingReduceScatter || !impl_->initialized ||
+      localM <= 0 || n <= 0 || k <= 0 || localM > INT_MAX / ranks ||
+      localA.size() != size_t(ranks))
     throw std::invalid_argument("invalid AllGather GEMM shape");
   for (int r = 0; r < ranks; ++r)
     if (!localA[r].address || localA[r].kind != MemoryKind::Gpu ||

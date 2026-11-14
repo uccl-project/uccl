@@ -1,0 +1,10 @@
+{
+  "command": [
+    "/home/wxzheng/uccl-zhongjie-dev/experimental/lite/build/rs_recovery_8l4_20261114/uccl_lite_dispatcher_check"
+  ],
+  "cwd": "/home/wxzheng/uccl-zhongjie-dev/experimental/lite",
+  "binary_sha256": "f31991d140999fb97a4a498340c99588c3b83d665b452e4bd179c86eef1e95f8",
+  "returncode": 0,
+  "started_utc": "2026-11-14T08:14:13.222940+00:00",
+  "scope": "host-only checks; no GPU initialization; external GPU workload active"
+}

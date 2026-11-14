@@ -207,16 +207,19 @@ ordinary-call measurements now cover **every power of two from 1 KiB to 1 GiB**
 for all three operations. Every point is freshly measured, with no historical
 tail. Input-ready, slowest-GPU CUDA events include submission gaps: five
 warmups, three rotated repetitions of ten checked calls, and two reversed
-sweeps, with paired NCCL and base-router controls.
+sweeps, with paired NCCL controls. AR/AG retain the full-refresh measurements;
+RS uses the subsequent ring-recovery rerun at every size.
 [Data and settings](benchmarks/data/overview_8l4_20261114/README.md).
 
 AR uses compact CPU crews through 4 MiB and the regular crew/grid above it;
-RS retains its size-limited GPU progress and CPU worker caps. AG uses the tuned router
+RS uses an opt-in mapped-host BF16 ring at 1–8 MiB and retains the earlier
+implementations elsewhere. AG uses the tuned router
 through 128 KiB, the new mini-host kernel at 256 KiB–1 MiB, and the existing
 full GPU-progress router at 2 MiB–1 GiB. Each point retains its paired NCCL control.
 This measured size-range schedule is not an automatic dispatch policy. Parallel
 submission helps these dense calls but regresses after 5 ms of idle.
 [Full refresh, controls and regressions](benchmarks/data/full_refresh_8l4_20261114/README.md).
+[RS recovery, paired previous-code controls and validation](benchmarks/data/rs_recovery_8l4_20261114/README.md).
 
 ##### AllReduce on single 8xL4 GPU
 

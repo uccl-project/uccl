@@ -1,0 +1,10 @@
+{
+  "command": [
+    "/home/wxzheng/uccl-zhongjie-dev/experimental/lite/build/rs_recovery_8l4_20261114/uccl_lite_router_policy_check"
+  ],
+  "cwd": "/home/wxzheng/uccl-zhongjie-dev/experimental/lite",
+  "binary_sha256": "7f8331a30a39d792d80c7f650038b5fc13c80308e3928d39152455af3b64d844",
+  "returncode": 0,
+  "started_utc": "2026-11-14T08:14:13.218850+00:00",
+  "scope": "host-only checks; no GPU initialization; external GPU workload active"
+}

@@ -1,0 +1,20 @@
+{
+  "command": [
+    "/usr/local/cuda-12.9/bin/compute-sanitizer",
+    "--tool",
+    "memcheck",
+    "--kernel-name",
+    "kns=dispatchTransport",
+    "--launch-count",
+    "4",
+    "--error-exitcode",
+    "99",
+    "/ssd1/wxzheng/rs-recovery-20261114/build/uccl_lite_host_ring_check",
+    "4"
+  ],
+  "binary_sha256": "545523edc9a3e9436be75316920caa4e2278fad42e018a4d000ecd31e429e851",
+  "started_utc": "2026-11-14T17:39:04.613383+00:00",
+  "returncode": 0,
+  "seconds": 1.6787494085729122,
+  "gpu_users_after": []
+}

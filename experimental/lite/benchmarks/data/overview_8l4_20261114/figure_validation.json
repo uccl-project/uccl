@@ -1,8 +1,10 @@
 {
-  "fresh_points": 126,
-  "historical_points": 0,
+  "points": 126,
+  "rs_recovery_points": 42,
+  "retained_full_refresh_ar_ag_points": 84,
   "all_paired_source_rows_verified": true,
-  "raw_samples_validated": 22680,
-  "warmups_checked": 11340,
-  "visual_inspection": "all six GPU/SHM figures; RS regressions visible"
+  "rs_checked_timed_calls": 7560,
+  "rs_checked_warmups": 3780,
+  "ar_ag_figures_unchanged": true,
+  "visual_inspection": "Both revised RS previews inspected; legends, complete size ranges, latency and throughput axes visible."
 }

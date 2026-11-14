@@ -128,7 +128,7 @@ include src/cpu_router/module.mk
 
 .PHONY: compact-collectives
 compact-collectives: $(BUILD)/uccl_lite_compact_collectives
-$(BUILD)/uccl_lite_compact_collectives: benchmarks/cpu_router/compact_collectives.cu benchmarks/cpu_router/compact_transport.cuh $(ROUTER_STATIC) | $(BUILD)
+$(BUILD)/uccl_lite_compact_collectives: benchmarks/cpu_router/compact_collectives.cu benchmarks/cpu_router/compact_transport.cuh benchmarks/cpu_router/host_ring.cuh $(ROUTER_STATIC) | $(BUILD)
 	$(NVCC) $(NVCC_FLAGS) -std=c++17 $(ROUTER_INC) -I$(NCCL_HOME)/include $< $(ROUTER_STATIC) -o $@ -L$(NCCL_HOME)/lib -lnccl -Xlinker -rpath=$(NCCL_HOME)/lib -Xcompiler=-pthread -ldl
 
 -include $(wildcard $(BUILD)/*.d)

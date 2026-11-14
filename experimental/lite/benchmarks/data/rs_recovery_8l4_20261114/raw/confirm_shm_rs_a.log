@@ -1,0 +1,3357 @@
+# BF16 8 GPUs op=1 AR-in-place AG/RS-out-of-place NCCL=22809 input-ready slowest-GPU-event timing CPU=47 idle_us=0 blocks=16 warmup=5 iterations=10 repeats=3
+# testbed=shm; host-packet UCCL transport; NCCL P2P disabled
+kind,bytes,variant,repeat,iteration,us
+# implementation,1024,nccl,nccl
+sample,1024,nccl,0,0,121.855997
+sample,1024,nccl,0,1,113.664001
+sample,1024,nccl,0,2,120.832004
+sample,1024,nccl,0,3,108.543999
+sample,1024,nccl,0,4,102.399997
+sample,1024,nccl,0,5,109.503999
+sample,1024,nccl,0,6,108.543999
+sample,1024,nccl,0,7,92.160001
+sample,1024,nccl,0,8,102.399997
+sample,1024,nccl,0,9,94.208002
+median,1024,nccl,0,-1,108.543999
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,1024,previous,router-tuned
+sample,1024,previous,0,0,51.199999
+sample,1024,previous,0,1,56.320000
+sample,1024,previous,0,2,51.199999
+sample,1024,previous,0,3,53.247999
+sample,1024,previous,0,4,64.511999
+sample,1024,previous,0,5,52.223999
+sample,1024,previous,0,6,53.247999
+sample,1024,previous,0,7,52.223999
+sample,1024,previous,0,8,55.296000
+sample,1024,previous,0,9,50.175998
+median,1024,previous,0,-1,52.735999
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,1024,current,router-tuned
+sample,1024,current,0,0,51.199999
+sample,1024,current,0,1,53.247999
+sample,1024,current,0,2,51.199999
+sample,1024,current,0,3,53.247999
+sample,1024,current,0,4,51.199999
+sample,1024,current,0,5,53.151999
+sample,1024,current,0,6,49.152002
+sample,1024,current,0,7,58.368001
+sample,1024,current,0,8,75.776003
+sample,1024,current,0,9,51.199999
+median,1024,current,0,-1,52.175999
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,1024,previous,router-tuned
+sample,1024,previous,1,0,63.487999
+sample,1024,previous,1,1,55.296000
+sample,1024,previous,1,2,50.175998
+sample,1024,previous,1,3,48.128001
+sample,1024,previous,1,4,63.487999
+sample,1024,previous,1,5,54.272000
+sample,1024,previous,1,6,50.175998
+sample,1024,previous,1,7,50.175998
+sample,1024,previous,1,8,50.175998
+sample,1024,previous,1,9,51.199999
+median,1024,previous,1,-1,50.687999
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,1024,current,router-tuned
+sample,1024,current,1,0,51.199999
+sample,1024,current,1,1,60.416002
+sample,1024,current,1,2,63.487999
+sample,1024,current,1,3,64.511999
+sample,1024,current,1,4,48.128001
+sample,1024,current,1,5,55.296000
+sample,1024,current,1,6,51.199999
+sample,1024,current,1,7,61.439998
+sample,1024,current,1,8,69.632001
+sample,1024,current,1,9,54.272000
+median,1024,current,1,-1,57.856001
+# implementation,1024,nccl,nccl
+sample,1024,nccl,1,0,105.471998
+sample,1024,nccl,1,1,94.144002
+sample,1024,nccl,1,2,129.023999
+sample,1024,nccl,1,3,99.327996
+sample,1024,nccl,1,4,95.232002
+sample,1024,nccl,1,5,98.304003
+sample,1024,nccl,1,6,97.280003
+sample,1024,nccl,1,7,94.112001
+sample,1024,nccl,1,8,99.327996
+sample,1024,nccl,1,9,90.112001
+median,1024,nccl,1,-1,97.792003
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,1024,current,router-tuned
+sample,1024,current,2,0,51.199999
+sample,1024,current,2,1,49.152002
+sample,1024,current,2,2,53.247999
+sample,1024,current,2,3,51.199999
+sample,1024,current,2,4,50.175998
+sample,1024,current,2,5,52.223999
+sample,1024,current,2,6,51.199999
+sample,1024,current,2,7,49.152002
+sample,1024,current,2,8,61.439998
+sample,1024,current,2,9,51.199999
+median,1024,current,2,-1,51.199999
+# implementation,1024,nccl,nccl
+sample,1024,nccl,2,0,110.592000
+sample,1024,nccl,2,1,99.327996
+sample,1024,nccl,2,2,100.351997
+sample,1024,nccl,2,3,89.120001
+sample,1024,nccl,2,4,91.136001
+sample,1024,nccl,2,5,105.471998
+sample,1024,nccl,2,6,116.736002
+sample,1024,nccl,2,7,94.208002
+sample,1024,nccl,2,8,94.208002
+sample,1024,nccl,2,9,94.208002
+median,1024,nccl,2,-1,96.767999
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,1024,previous,router-tuned
+sample,1024,previous,2,0,51.199999
+sample,1024,previous,2,1,52.223999
+sample,1024,previous,2,2,61.439998
+sample,1024,previous,2,3,67.584001
+sample,1024,previous,2,4,48.128001
+sample,1024,previous,2,5,54.272000
+sample,1024,previous,2,6,52.159999
+sample,1024,previous,2,7,52.223999
+sample,1024,previous,2,8,61.439998
+sample,1024,previous,2,9,52.223999
+median,1024,previous,2,-1,52.223999
+# implementation,2048,nccl,nccl
+sample,2048,nccl,0,0,125.952005
+sample,2048,nccl,0,1,96.256003
+sample,2048,nccl,0,2,93.184002
+sample,2048,nccl,0,3,117.760003
+sample,2048,nccl,0,4,89.088000
+sample,2048,nccl,0,5,108.543999
+sample,2048,nccl,0,6,101.375997
+sample,2048,nccl,0,7,88.064000
+sample,2048,nccl,0,8,96.256003
+sample,2048,nccl,0,9,103.423998
+median,2048,nccl,0,-1,98.816000
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,2048,previous,router-tuned
+sample,2048,previous,0,0,76.800004
+sample,2048,previous,0,1,54.207999
+sample,2048,previous,0,2,51.199999
+sample,2048,previous,0,3,53.247999
+sample,2048,previous,0,4,52.223999
+sample,2048,previous,0,5,55.296000
+sample,2048,previous,0,6,51.199999
+sample,2048,previous,0,7,52.223999
+sample,2048,previous,0,8,50.175998
+sample,2048,previous,0,9,52.223999
+median,2048,previous,0,-1,52.223999
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,2048,current,router-tuned
+sample,2048,current,0,0,54.207999
+sample,2048,current,0,1,54.272000
+sample,2048,current,0,2,54.272000
+sample,2048,current,0,3,51.167998
+sample,2048,current,0,4,52.223999
+sample,2048,current,0,5,63.487999
+sample,2048,current,0,6,52.223999
+sample,2048,current,0,7,53.247999
+sample,2048,current,0,8,51.199999
+sample,2048,current,0,9,51.199999
+median,2048,current,0,-1,52.735999
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,2048,previous,router-tuned
+sample,2048,previous,1,0,54.272000
+sample,2048,previous,1,1,50.175998
+sample,2048,previous,1,2,53.247999
+sample,2048,previous,1,3,55.296000
+sample,2048,previous,1,4,53.247999
+sample,2048,previous,1,5,68.608001
+sample,2048,previous,1,6,50.175998
+sample,2048,previous,1,7,58.368001
+sample,2048,previous,1,8,49.152002
+sample,2048,previous,1,9,52.127998
+median,2048,previous,1,-1,53.247999
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,2048,current,router-tuned
+sample,2048,current,1,0,52.191999
+sample,2048,current,1,1,50.175998
+sample,2048,current,1,2,51.199999
+sample,2048,current,1,3,50.175998
+sample,2048,current,1,4,52.223999
+sample,2048,current,1,5,53.247999
+sample,2048,current,1,6,51.199999
+sample,2048,current,1,7,52.223999
+sample,2048,current,1,8,52.223999
+sample,2048,current,1,9,68.608001
+median,2048,current,1,-1,52.207999
+# implementation,2048,nccl,nccl
+sample,2048,nccl,1,0,107.519999
+sample,2048,nccl,1,1,100.351997
+sample,2048,nccl,1,2,100.351997
+sample,2048,nccl,1,3,119.808003
+sample,2048,nccl,1,4,103.327997
+sample,2048,nccl,1,5,100.351997
+sample,2048,nccl,1,6,98.208003
+sample,2048,nccl,1,7,100.351997
+sample,2048,nccl,1,8,105.471998
+sample,2048,nccl,1,9,99.327996
+median,2048,nccl,1,-1,100.351997
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,2048,current,router-tuned
+sample,2048,current,2,0,50.175998
+sample,2048,current,2,1,60.416002
+sample,2048,current,2,2,52.223999
+sample,2048,current,2,3,55.296000
+sample,2048,current,2,4,50.175998
+sample,2048,current,2,5,53.247999
+sample,2048,current,2,6,55.296000
+sample,2048,current,2,7,51.199999
+sample,2048,current,2,8,50.239999
+sample,2048,current,2,9,53.247999
+median,2048,current,2,-1,52.735999
+# implementation,2048,nccl,nccl
+sample,2048,nccl,2,0,89.088000
+sample,2048,nccl,2,1,117.760003
+sample,2048,nccl,2,2,103.423998
+sample,2048,nccl,2,3,91.136001
+sample,2048,nccl,2,4,92.160001
+sample,2048,nccl,2,5,104.447998
+sample,2048,nccl,2,6,93.184002
+sample,2048,nccl,2,7,95.232002
+sample,2048,nccl,2,8,89.088000
+sample,2048,nccl,2,9,90.112001
+median,2048,nccl,2,-1,92.672002
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,2048,previous,router-tuned
+sample,2048,previous,2,0,51.199999
+sample,2048,previous,2,1,51.167998
+sample,2048,previous,2,2,53.247999
+sample,2048,previous,2,3,52.159999
+sample,2048,previous,2,4,51.199999
+sample,2048,previous,2,5,56.320000
+sample,2048,previous,2,6,53.247999
+sample,2048,previous,2,7,51.199999
+sample,2048,previous,2,8,53.247999
+sample,2048,previous,2,9,54.272000
+median,2048,previous,2,-1,52.703999
+# implementation,4096,nccl,nccl
+sample,4096,nccl,0,0,97.184002
+sample,4096,nccl,0,1,89.088000
+sample,4096,nccl,0,2,93.184002
+sample,4096,nccl,0,3,122.879997
+sample,4096,nccl,0,4,89.088000
+sample,4096,nccl,0,5,98.272003
+sample,4096,nccl,0,6,108.543999
+sample,4096,nccl,0,7,91.136001
+sample,4096,nccl,0,8,91.104001
+sample,4096,nccl,0,9,88.064000
+median,4096,nccl,0,-1,92.160001
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,4096,previous,router-tuned
+sample,4096,previous,0,0,51.199999
+sample,4096,previous,0,1,55.296000
+sample,4096,previous,0,2,54.272000
+sample,4096,previous,0,3,52.191999
+sample,4096,previous,0,4,51.199999
+sample,4096,previous,0,5,57.344001
+sample,4096,previous,0,6,51.199999
+sample,4096,previous,0,7,51.199999
+sample,4096,previous,0,8,52.223999
+sample,4096,previous,0,9,53.183999
+median,4096,previous,0,-1,52.207999
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,4096,current,router-tuned
+sample,4096,current,0,0,50.175998
+sample,4096,current,0,1,52.223999
+sample,4096,current,0,2,52.223999
+sample,4096,current,0,3,51.199999
+sample,4096,current,0,4,51.199999
+sample,4096,current,0,5,52.223999
+sample,4096,current,0,6,52.223999
+sample,4096,current,0,7,50.175998
+sample,4096,current,0,8,51.199999
+sample,4096,current,0,9,67.584001
+median,4096,current,0,-1,51.711999
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,4096,previous,router-tuned
+sample,4096,previous,1,0,52.223999
+sample,4096,previous,1,1,51.199999
+sample,4096,previous,1,2,52.223999
+sample,4096,previous,1,3,52.223999
+sample,4096,previous,1,4,53.247999
+sample,4096,previous,1,5,54.272000
+sample,4096,previous,1,6,51.199999
+sample,4096,previous,1,7,52.223999
+sample,4096,previous,1,8,51.199999
+sample,4096,previous,1,9,52.223999
+median,4096,previous,1,-1,52.223999
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,4096,current,router-tuned
+sample,4096,current,1,0,52.223999
+sample,4096,current,1,1,52.223999
+sample,4096,current,1,2,53.247999
+sample,4096,current,1,3,54.272000
+sample,4096,current,1,4,53.247999
+sample,4096,current,1,5,100.351997
+sample,4096,current,1,6,50.175998
+sample,4096,current,1,7,50.175998
+sample,4096,current,1,8,50.175998
+sample,4096,current,1,9,51.199999
+median,4096,current,1,-1,52.223999
+# implementation,4096,nccl,nccl
+sample,4096,nccl,1,0,96.256003
+sample,4096,nccl,1,1,98.304003
+sample,4096,nccl,1,2,89.088000
+sample,4096,nccl,1,3,94.208002
+sample,4096,nccl,1,4,90.112001
+sample,4096,nccl,1,5,88.992000
+sample,4096,nccl,1,6,93.184002
+sample,4096,nccl,1,7,89.088000
+sample,4096,nccl,1,8,95.232002
+sample,4096,nccl,1,9,101.375997
+median,4096,nccl,1,-1,93.696002
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,4096,current,router-tuned
+sample,4096,current,2,0,50.175998
+sample,4096,current,2,1,51.199999
+sample,4096,current,2,2,52.223999
+sample,4096,current,2,3,51.167998
+sample,4096,current,2,4,51.199999
+sample,4096,current,2,5,53.247999
+sample,4096,current,2,6,54.272000
+sample,4096,current,2,7,50.175998
+sample,4096,current,2,8,53.247999
+sample,4096,current,2,9,72.704002
+median,4096,current,2,-1,51.711999
+# implementation,4096,nccl,nccl
+sample,4096,nccl,2,0,110.560000
+sample,4096,nccl,2,1,95.232002
+sample,4096,nccl,2,2,90.048000
+sample,4096,nccl,2,3,91.104001
+sample,4096,nccl,2,4,99.327996
+sample,4096,nccl,2,5,93.184002
+sample,4096,nccl,2,6,87.040000
+sample,4096,nccl,2,7,104.447998
+sample,4096,nccl,2,8,89.088000
+sample,4096,nccl,2,9,90.112001
+median,4096,nccl,2,-1,92.144001
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,4096,previous,router-tuned
+sample,4096,previous,2,0,53.247999
+sample,4096,previous,2,1,51.199999
+sample,4096,previous,2,2,55.296000
+sample,4096,previous,2,3,52.223999
+sample,4096,previous,2,4,51.199999
+sample,4096,previous,2,5,51.199999
+sample,4096,previous,2,6,53.247999
+sample,4096,previous,2,7,52.223999
+sample,4096,previous,2,8,51.199999
+sample,4096,previous,2,9,52.223999
+median,4096,previous,2,-1,52.223999
+# implementation,8192,nccl,nccl
+sample,8192,nccl,0,0,93.184002
+sample,8192,nccl,0,1,94.208002
+sample,8192,nccl,0,2,100.351997
+sample,8192,nccl,0,3,105.407998
+sample,8192,nccl,0,4,91.072001
+sample,8192,nccl,0,5,95.232002
+sample,8192,nccl,0,6,91.136001
+sample,8192,nccl,0,7,98.304003
+sample,8192,nccl,0,8,93.184002
+sample,8192,nccl,0,9,95.232002
+median,8192,nccl,0,-1,94.720002
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,8192,previous,router-tuned
+sample,8192,previous,0,0,52.223999
+sample,8192,previous,0,1,51.199999
+sample,8192,previous,0,2,53.247999
+sample,8192,previous,0,3,51.199999
+sample,8192,previous,0,4,51.199999
+sample,8192,previous,0,5,51.199999
+sample,8192,previous,0,6,53.215999
+sample,8192,previous,0,7,52.223999
+sample,8192,previous,0,8,53.247999
+sample,8192,previous,0,9,50.175998
+median,8192,previous,0,-1,51.711999
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,8192,current,router-tuned
+sample,8192,current,0,0,56.320000
+sample,8192,current,0,1,53.247999
+sample,8192,current,0,2,53.247999
+sample,8192,current,0,3,50.175998
+sample,8192,current,0,4,53.247999
+sample,8192,current,0,5,53.247999
+sample,8192,current,0,6,54.272000
+sample,8192,current,0,7,53.183999
+sample,8192,current,0,8,52.223999
+sample,8192,current,0,9,52.223999
+median,8192,current,0,-1,53.247999
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,8192,previous,router-tuned
+sample,8192,previous,1,0,50.175998
+sample,8192,previous,1,1,50.175998
+sample,8192,previous,1,2,52.223999
+sample,8192,previous,1,3,50.175998
+sample,8192,previous,1,4,53.247999
+sample,8192,previous,1,5,51.199999
+sample,8192,previous,1,6,53.247999
+sample,8192,previous,1,7,57.344001
+sample,8192,previous,1,8,52.223999
+sample,8192,previous,1,9,55.296000
+median,8192,previous,1,-1,52.223999
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,8192,current,router-tuned
+sample,8192,current,1,0,54.272000
+sample,8192,current,1,1,54.272000
+sample,8192,current,1,2,51.199999
+sample,8192,current,1,3,53.247999
+sample,8192,current,1,4,51.199999
+sample,8192,current,1,5,54.272000
+sample,8192,current,1,6,50.175998
+sample,8192,current,1,7,50.175998
+sample,8192,current,1,8,52.223999
+sample,8192,current,1,9,53.247999
+median,8192,current,1,-1,52.735999
+# implementation,8192,nccl,nccl
+sample,8192,nccl,1,0,92.160001
+sample,8192,nccl,1,1,126.975998
+sample,8192,nccl,1,2,101.375997
+sample,8192,nccl,1,3,94.208002
+sample,8192,nccl,1,4,95.232002
+sample,8192,nccl,1,5,107.519999
+sample,8192,nccl,1,6,92.160001
+sample,8192,nccl,1,7,100.351997
+sample,8192,nccl,1,8,90.112001
+sample,8192,nccl,1,9,92.160001
+median,8192,nccl,1,-1,94.720002
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,8192,current,router-tuned
+sample,8192,current,2,0,50.175998
+sample,8192,current,2,1,51.199999
+sample,8192,current,2,2,52.223999
+sample,8192,current,2,3,50.175998
+sample,8192,current,2,4,50.175998
+sample,8192,current,2,5,52.223999
+sample,8192,current,2,6,52.159999
+sample,8192,current,2,7,52.223999
+sample,8192,current,2,8,49.152002
+sample,8192,current,2,9,49.152002
+median,8192,current,2,-1,50.687999
+# implementation,8192,nccl,nccl
+sample,8192,nccl,2,0,122.879997
+sample,8192,nccl,2,1,91.136001
+sample,8192,nccl,2,2,112.640001
+sample,8192,nccl,2,3,92.160001
+sample,8192,nccl,2,4,95.232002
+sample,8192,nccl,2,5,109.568000
+sample,8192,nccl,2,6,94.304003
+sample,8192,nccl,2,7,87.040000
+sample,8192,nccl,2,8,89.184001
+sample,8192,nccl,2,9,90.112001
+median,8192,nccl,2,-1,93.232002
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,8192,previous,router-tuned
+sample,8192,previous,2,0,54.175999
+sample,8192,previous,2,1,53.247999
+sample,8192,previous,2,2,54.175999
+sample,8192,previous,2,3,53.247999
+sample,8192,previous,2,4,54.272000
+sample,8192,previous,2,5,53.247999
+sample,8192,previous,2,6,53.247999
+sample,8192,previous,2,7,58.368001
+sample,8192,previous,2,8,54.272000
+sample,8192,previous,2,9,52.223999
+median,8192,previous,2,-1,53.711999
+# implementation,16384,nccl,nccl
+sample,16384,nccl,0,0,105.407998
+sample,16384,nccl,0,1,95.232002
+sample,16384,nccl,0,2,97.280003
+sample,16384,nccl,0,3,95.232002
+sample,16384,nccl,0,4,97.280003
+sample,16384,nccl,0,5,98.304003
+sample,16384,nccl,0,6,94.208002
+sample,16384,nccl,0,7,94.208002
+sample,16384,nccl,0,8,115.712002
+sample,16384,nccl,0,9,98.304003
+median,16384,nccl,0,-1,97.280003
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,16384,previous,router-tuned
+sample,16384,previous,0,0,52.159999
+sample,16384,previous,0,1,51.199999
+sample,16384,previous,0,2,54.272000
+sample,16384,previous,0,3,53.247999
+sample,16384,previous,0,4,55.296000
+sample,16384,previous,0,5,54.272000
+sample,16384,previous,0,6,51.199999
+sample,16384,previous,0,7,53.247999
+sample,16384,previous,0,8,51.199999
+sample,16384,previous,0,9,52.223999
+median,16384,previous,0,-1,52.735999
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,16384,current,router-tuned
+sample,16384,current,0,0,54.272000
+sample,16384,current,0,1,52.159999
+sample,16384,current,0,2,53.247999
+sample,16384,current,0,3,59.392001
+sample,16384,current,0,4,52.223999
+sample,16384,current,0,5,54.272000
+sample,16384,current,0,6,54.272000
+sample,16384,current,0,7,55.296000
+sample,16384,current,0,8,52.223999
+sample,16384,current,0,9,54.272000
+median,16384,current,0,-1,54.272000
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,16384,previous,router-tuned
+sample,16384,previous,1,0,57.344001
+sample,16384,previous,1,1,65.536000
+sample,16384,previous,1,2,54.272000
+sample,16384,previous,1,3,56.320000
+sample,16384,previous,1,4,56.320000
+sample,16384,previous,1,5,57.344001
+sample,16384,previous,1,6,53.247999
+sample,16384,previous,1,7,55.296000
+sample,16384,previous,1,8,56.320000
+sample,16384,previous,1,9,56.320000
+median,16384,previous,1,-1,56.320000
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,16384,current,router-tuned
+sample,16384,current,1,0,57.344001
+sample,16384,current,1,1,53.247999
+sample,16384,current,1,2,55.296000
+sample,16384,current,1,3,57.344001
+sample,16384,current,1,4,53.247999
+sample,16384,current,1,5,60.416002
+sample,16384,current,1,6,53.247999
+sample,16384,current,1,7,54.272000
+sample,16384,current,1,8,54.272000
+sample,16384,current,1,9,54.272000
+median,16384,current,1,-1,54.272000
+# implementation,16384,nccl,nccl
+sample,16384,nccl,1,0,99.327996
+sample,16384,nccl,1,1,103.423998
+sample,16384,nccl,1,2,110.592000
+sample,16384,nccl,1,3,92.160001
+sample,16384,nccl,1,4,101.375997
+sample,16384,nccl,1,5,99.327996
+sample,16384,nccl,1,6,98.304003
+sample,16384,nccl,1,7,96.256003
+sample,16384,nccl,1,8,96.256003
+sample,16384,nccl,1,9,94.208002
+median,16384,nccl,1,-1,98.816000
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,16384,current,router-tuned
+sample,16384,current,2,0,53.247999
+sample,16384,current,2,1,54.272000
+sample,16384,current,2,2,56.320000
+sample,16384,current,2,3,54.272000
+sample,16384,current,2,4,54.272000
+sample,16384,current,2,5,55.296000
+sample,16384,current,2,6,55.296000
+sample,16384,current,2,7,52.223999
+sample,16384,current,2,8,53.247999
+sample,16384,current,2,9,54.272000
+median,16384,current,2,-1,54.272000
+# implementation,16384,nccl,nccl
+sample,16384,nccl,2,0,137.216002
+sample,16384,nccl,2,1,112.640001
+sample,16384,nccl,2,2,96.224003
+sample,16384,nccl,2,3,98.304003
+sample,16384,nccl,2,4,95.232002
+sample,16384,nccl,2,5,97.280003
+sample,16384,nccl,2,6,94.208002
+sample,16384,nccl,2,7,94.208002
+sample,16384,nccl,2,8,108.543999
+sample,16384,nccl,2,9,96.256003
+median,16384,nccl,2,-1,96.768003
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,16384,previous,router-tuned
+sample,16384,previous,2,0,59.392001
+sample,16384,previous,2,1,56.224000
+sample,16384,previous,2,2,69.600001
+sample,16384,previous,2,3,55.296000
+sample,16384,previous,2,4,56.320000
+sample,16384,previous,2,5,57.344001
+sample,16384,previous,2,6,54.272000
+sample,16384,previous,2,7,54.272000
+sample,16384,previous,2,8,55.296000
+sample,16384,previous,2,9,55.296000
+median,16384,previous,2,-1,55.760000
+# implementation,32768,nccl,nccl
+sample,32768,nccl,0,0,133.120000
+sample,32768,nccl,0,1,164.864004
+sample,32768,nccl,0,2,128.000006
+sample,32768,nccl,0,3,106.495999
+sample,32768,nccl,0,4,108.543999
+sample,32768,nccl,0,5,110.528000
+sample,32768,nccl,0,6,105.471998
+sample,32768,nccl,0,7,103.423998
+sample,32768,nccl,0,8,109.568000
+sample,32768,nccl,0,9,103.423998
+median,32768,nccl,0,-1,109.056000
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,32768,previous,router-tuned
+sample,32768,previous,0,0,57.344001
+sample,32768,previous,0,1,59.392001
+sample,32768,previous,0,2,58.368001
+sample,32768,previous,0,3,58.336001
+sample,32768,previous,0,4,57.344001
+sample,32768,previous,0,5,58.368001
+sample,32768,previous,0,6,57.344001
+sample,32768,previous,0,7,58.368001
+sample,32768,previous,0,8,58.368001
+sample,32768,previous,0,9,59.392001
+median,32768,previous,0,-1,58.368001
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,32768,current,router-tuned
+sample,32768,current,0,0,58.368001
+sample,32768,current,0,1,56.288000
+sample,32768,current,0,2,58.368001
+sample,32768,current,0,3,57.344001
+sample,32768,current,0,4,56.320000
+sample,32768,current,0,5,63.487999
+sample,32768,current,0,6,57.344001
+sample,32768,current,0,7,58.368001
+sample,32768,current,0,8,56.320000
+sample,32768,current,0,9,59.392001
+median,32768,current,0,-1,57.856001
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,32768,previous,router-tuned
+sample,32768,previous,1,0,55.296000
+sample,32768,previous,1,1,57.344001
+sample,32768,previous,1,2,58.368001
+sample,32768,previous,1,3,63.487999
+sample,32768,previous,1,4,56.320000
+sample,32768,previous,1,5,56.320000
+sample,32768,previous,1,6,55.296000
+sample,32768,previous,1,7,55.296000
+sample,32768,previous,1,8,55.296000
+sample,32768,previous,1,9,57.344001
+median,32768,previous,1,-1,56.320000
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,32768,current,router-tuned
+sample,32768,current,1,0,57.344001
+sample,32768,current,1,1,54.272000
+sample,32768,current,1,2,56.320000
+sample,32768,current,1,3,64.447999
+sample,32768,current,1,4,61.439998
+sample,32768,current,1,5,61.439998
+sample,32768,current,1,6,56.288000
+sample,32768,current,1,7,57.344001
+sample,32768,current,1,8,57.344001
+sample,32768,current,1,9,56.320000
+median,32768,current,1,-1,57.344001
+# implementation,32768,nccl,nccl
+sample,32768,nccl,1,0,103.423998
+sample,32768,nccl,1,1,111.616001
+sample,32768,nccl,1,2,117.760003
+sample,32768,nccl,1,3,109.568000
+sample,32768,nccl,1,4,107.519999
+sample,32768,nccl,1,5,104.447998
+sample,32768,nccl,1,6,145.408005
+sample,32768,nccl,1,7,111.616001
+sample,32768,nccl,1,8,105.471998
+sample,32768,nccl,1,9,108.543999
+median,32768,nccl,1,-1,109.056000
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,32768,current,router-tuned
+sample,32768,current,2,0,55.296000
+sample,32768,current,2,1,58.336001
+sample,32768,current,2,2,57.344001
+sample,32768,current,2,3,58.336001
+sample,32768,current,2,4,57.344001
+sample,32768,current,2,5,59.392001
+sample,32768,current,2,6,55.296000
+sample,32768,current,2,7,56.320000
+sample,32768,current,2,8,56.320000
+sample,32768,current,2,9,58.368001
+median,32768,current,2,-1,57.344001
+# implementation,32768,nccl,nccl
+sample,32768,nccl,2,0,101.375997
+sample,32768,nccl,2,1,104.447998
+sample,32768,nccl,2,2,105.471998
+sample,32768,nccl,2,3,106.495999
+sample,32768,nccl,2,4,148.479998
+sample,32768,nccl,2,5,115.712002
+sample,32768,nccl,2,6,100.351997
+sample,32768,nccl,2,7,102.399997
+sample,32768,nccl,2,8,105.471998
+sample,32768,nccl,2,9,102.367997
+median,32768,nccl,2,-1,104.959998
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,32768,previous,router-tuned
+sample,32768,previous,2,0,56.320000
+sample,32768,previous,2,1,58.272000
+sample,32768,previous,2,2,57.344001
+sample,32768,previous,2,3,61.439998
+sample,32768,previous,2,4,57.344001
+sample,32768,previous,2,5,60.416002
+sample,32768,previous,2,6,57.312001
+sample,32768,previous,2,7,58.368001
+sample,32768,previous,2,8,57.312001
+sample,32768,previous,2,9,56.320000
+median,32768,previous,2,-1,57.344001
+# implementation,65536,nccl,nccl
+sample,65536,nccl,0,0,163.839996
+sample,65536,nccl,0,1,120.832004
+sample,65536,nccl,0,2,113.664001
+sample,65536,nccl,0,3,111.616001
+sample,65536,nccl,0,4,116.736002
+sample,65536,nccl,0,5,113.664001
+sample,65536,nccl,0,6,114.688002
+sample,65536,nccl,0,7,115.712002
+sample,65536,nccl,0,8,110.592000
+sample,65536,nccl,0,9,113.664001
+median,65536,nccl,0,-1,114.176001
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,65536,previous,router-tuned
+sample,65536,previous,0,0,71.680002
+sample,65536,previous,0,1,83.967999
+sample,65536,previous,0,2,74.752003
+sample,65536,previous,0,3,73.728003
+sample,65536,previous,0,4,71.680002
+sample,65536,previous,0,5,72.704002
+sample,65536,previous,0,6,71.680002
+sample,65536,previous,0,7,71.680002
+sample,65536,previous,0,8,74.752003
+sample,65536,previous,0,9,70.656002
+median,65536,previous,0,-1,72.192002
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,65536,current,router-tuned
+sample,65536,current,0,0,72.704002
+sample,65536,current,0,1,73.728003
+sample,65536,current,0,2,74.752003
+sample,65536,current,0,3,71.680002
+sample,65536,current,0,4,93.184002
+sample,65536,current,0,5,76.704003
+sample,65536,current,0,6,81.919998
+sample,65536,current,0,7,79.871997
+sample,65536,current,0,8,83.967999
+sample,65536,current,0,9,74.752003
+median,65536,current,0,-1,75.728003
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,65536,previous,router-tuned
+sample,65536,previous,1,0,71.680002
+sample,65536,previous,1,1,73.728003
+sample,65536,previous,1,2,72.704002
+sample,65536,previous,1,3,72.576001
+sample,65536,previous,1,4,70.656002
+sample,65536,previous,1,5,73.728003
+sample,65536,previous,1,6,72.704002
+sample,65536,previous,1,7,71.680002
+sample,65536,previous,1,8,71.680002
+sample,65536,previous,1,9,72.704002
+median,65536,previous,1,-1,72.640002
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,65536,current,router-tuned
+sample,65536,current,1,0,70.656002
+sample,65536,current,1,1,92.160001
+sample,65536,current,1,2,71.680002
+sample,65536,current,1,3,72.704002
+sample,65536,current,1,4,72.704002
+sample,65536,current,1,5,73.728003
+sample,65536,current,1,6,80.895998
+sample,65536,current,1,7,72.704002
+sample,65536,current,1,8,73.664002
+sample,65536,current,1,9,70.656002
+median,65536,current,1,-1,72.704002
+# implementation,65536,nccl,nccl
+sample,65536,nccl,1,0,116.736002
+sample,65536,nccl,1,1,169.983998
+sample,65536,nccl,1,2,123.903997
+sample,65536,nccl,1,3,126.975998
+sample,65536,nccl,1,4,116.736002
+sample,65536,nccl,1,5,121.855997
+sample,65536,nccl,1,6,131.072000
+sample,65536,nccl,1,7,113.664001
+sample,65536,nccl,1,8,116.736002
+sample,65536,nccl,1,9,134.143993
+median,65536,nccl,1,-1,122.879997
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,65536,current,router-tuned
+sample,65536,current,2,0,72.704002
+sample,65536,current,2,1,74.752003
+sample,65536,current,2,2,73.728003
+sample,65536,current,2,3,73.728003
+sample,65536,current,2,4,73.728003
+sample,65536,current,2,5,74.752003
+sample,65536,current,2,6,71.680002
+sample,65536,current,2,7,69.632001
+sample,65536,current,2,8,74.688002
+sample,65536,current,2,9,74.752003
+median,65536,current,2,-1,73.728003
+# implementation,65536,nccl,nccl
+sample,65536,nccl,2,0,117.760003
+sample,65536,nccl,2,1,129.023999
+sample,65536,nccl,2,2,112.544000
+sample,65536,nccl,2,3,113.664001
+sample,65536,nccl,2,4,123.903997
+sample,65536,nccl,2,5,113.664001
+sample,65536,nccl,2,6,125.952005
+sample,65536,nccl,2,7,112.640001
+sample,65536,nccl,2,8,110.592000
+sample,65536,nccl,2,9,129.023999
+median,65536,nccl,2,-1,115.712002
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,65536,previous,router-tuned
+sample,65536,previous,2,0,75.776003
+sample,65536,previous,2,1,89.088000
+sample,65536,previous,2,2,72.704002
+sample,65536,previous,2,3,71.680002
+sample,65536,previous,2,4,73.728003
+sample,65536,previous,2,5,75.776003
+sample,65536,previous,2,6,73.728003
+sample,65536,previous,2,7,72.704002
+sample,65536,previous,2,8,74.752003
+sample,65536,previous,2,9,71.680002
+median,65536,previous,2,-1,73.728003
+# implementation,131072,nccl,nccl
+sample,131072,nccl,0,0,157.695994
+sample,131072,nccl,0,1,203.776002
+sample,131072,nccl,0,2,140.287995
+sample,131072,nccl,0,3,142.335996
+sample,131072,nccl,0,4,139.264002
+sample,131072,nccl,0,5,134.143993
+sample,131072,nccl,0,6,137.216002
+sample,131072,nccl,0,7,145.408005
+sample,131072,nccl,0,8,162.816003
+sample,131072,nccl,0,9,140.287995
+median,131072,nccl,0,-1,141.311996
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,131072,previous,router-tuned
+sample,131072,previous,0,0,105.375998
+sample,131072,previous,0,1,108.479999
+sample,131072,previous,0,2,107.519999
+sample,131072,previous,0,3,105.471998
+sample,131072,previous,0,4,107.423998
+sample,131072,previous,0,5,111.616001
+sample,131072,previous,0,6,108.511999
+sample,131072,previous,0,7,106.495999
+sample,131072,previous,0,8,108.543999
+sample,131072,previous,0,9,105.471998
+median,131072,previous,0,-1,107.471999
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,131072,current,router-tuned
+sample,131072,current,0,0,108.543999
+sample,131072,current,0,1,105.471998
+sample,131072,current,0,2,115.712002
+sample,131072,current,0,3,104.415998
+sample,131072,current,0,4,105.471998
+sample,131072,current,0,5,107.519999
+sample,131072,current,0,6,106.495999
+sample,131072,current,0,7,106.495999
+sample,131072,current,0,8,108.543999
+sample,131072,current,0,9,105.471998
+median,131072,current,0,-1,106.495999
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,131072,previous,router-tuned
+sample,131072,previous,1,0,107.519999
+sample,131072,previous,1,1,106.495999
+sample,131072,previous,1,2,106.495999
+sample,131072,previous,1,3,109.568000
+sample,131072,previous,1,4,105.471998
+sample,131072,previous,1,5,104.447998
+sample,131072,previous,1,6,107.519999
+sample,131072,previous,1,7,106.495999
+sample,131072,previous,1,8,107.519999
+sample,131072,previous,1,9,105.471998
+median,131072,previous,1,-1,106.495999
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,131072,current,router-tuned
+sample,131072,current,1,0,106.495999
+sample,131072,current,1,1,105.471998
+sample,131072,current,1,2,106.495999
+sample,131072,current,1,3,105.471998
+sample,131072,current,1,4,108.543999
+sample,131072,current,1,5,110.592000
+sample,131072,current,1,6,105.471998
+sample,131072,current,1,7,104.447998
+sample,131072,current,1,8,107.519999
+sample,131072,current,1,9,106.495999
+median,131072,current,1,-1,106.495999
+# implementation,131072,nccl,nccl
+sample,131072,nccl,1,0,147.456005
+sample,131072,nccl,1,1,137.216002
+sample,131072,nccl,1,2,148.479998
+sample,131072,nccl,1,3,149.504006
+sample,131072,nccl,1,4,141.312003
+sample,131072,nccl,1,5,136.191994
+sample,131072,nccl,1,6,135.168001
+sample,131072,nccl,1,7,144.383997
+sample,131072,nccl,1,8,139.231995
+sample,131072,nccl,1,9,138.239995
+median,131072,nccl,1,-1,140.271999
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,131072,current,router-tuned
+sample,131072,current,2,0,109.568000
+sample,131072,current,2,1,106.495999
+sample,131072,current,2,2,108.543999
+sample,131072,current,2,3,105.471998
+sample,131072,current,2,4,110.592000
+sample,131072,current,2,5,107.519999
+sample,131072,current,2,6,106.495999
+sample,131072,current,2,7,107.519999
+sample,131072,current,2,8,106.495999
+sample,131072,current,2,9,105.471998
+median,131072,current,2,-1,107.007999
+# implementation,131072,nccl,nccl
+sample,131072,nccl,2,0,139.264002
+sample,131072,nccl,2,1,146.336004
+sample,131072,nccl,2,2,139.264002
+sample,131072,nccl,2,3,145.408005
+sample,131072,nccl,2,4,135.168001
+sample,131072,nccl,2,5,145.408005
+sample,131072,nccl,2,6,138.239995
+sample,131072,nccl,2,7,137.216002
+sample,131072,nccl,2,8,143.360004
+sample,131072,nccl,2,9,140.287995
+median,131072,nccl,2,-1,139.775999
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,131072,previous,router-tuned
+sample,131072,previous,2,0,108.543999
+sample,131072,previous,2,1,104.447998
+sample,131072,previous,2,2,111.616001
+sample,131072,previous,2,3,106.495999
+sample,131072,previous,2,4,108.543999
+sample,131072,previous,2,5,106.495999
+sample,131072,previous,2,6,107.519999
+sample,131072,previous,2,7,106.495999
+sample,131072,previous,2,8,108.543999
+sample,131072,previous,2,9,107.455999
+median,131072,previous,2,-1,107.487999
+# implementation,262144,nccl,nccl
+sample,262144,nccl,0,0,196.608007
+sample,262144,nccl,0,1,185.343996
+sample,262144,nccl,0,2,184.320003
+sample,262144,nccl,0,3,185.343996
+sample,262144,nccl,0,4,189.439997
+sample,262144,nccl,0,5,211.968005
+sample,262144,nccl,0,6,185.343996
+sample,262144,nccl,0,7,188.416004
+sample,262144,nccl,0,8,184.320003
+sample,262144,nccl,0,9,183.295995
+median,262144,nccl,0,-1,185.343996
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=131072 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=16384
+# implementation,262144,previous,router-tuned
+sample,262144,previous,0,0,150.527999
+sample,262144,previous,0,1,148.479998
+sample,262144,previous,0,2,141.312003
+sample,262144,previous,0,3,143.360004
+sample,262144,previous,0,4,142.335996
+sample,262144,previous,0,5,144.383997
+sample,262144,previous,0,6,148.479998
+sample,262144,previous,0,7,139.264002
+sample,262144,previous,0,8,147.456005
+sample,262144,previous,0,9,142.335996
+median,262144,previous,0,-1,143.872000
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=131072 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=16384
+# implementation,262144,current,router-tuned
+sample,262144,current,0,0,195.583999
+sample,262144,current,0,1,155.647993
+sample,262144,current,0,2,167.935997
+sample,262144,current,0,3,146.431997
+sample,262144,current,0,4,158.623993
+sample,262144,current,0,5,143.263996
+sample,262144,current,0,6,139.264002
+sample,262144,current,0,7,143.360004
+sample,262144,current,0,8,141.312003
+sample,262144,current,0,9,139.264002
+median,262144,current,0,-1,144.896001
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=131072 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=16384
+# implementation,262144,previous,router-tuned
+sample,262144,previous,1,0,148.479998
+sample,262144,previous,1,1,147.456005
+sample,262144,previous,1,2,155.647993
+sample,262144,previous,1,3,141.312003
+sample,262144,previous,1,4,140.287995
+sample,262144,previous,1,5,143.360004
+sample,262144,previous,1,6,142.271996
+sample,262144,previous,1,7,138.239995
+sample,262144,previous,1,8,142.335996
+sample,262144,previous,1,9,146.431997
+median,262144,previous,1,-1,142.848000
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=131072 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=16384
+# implementation,262144,current,router-tuned
+sample,262144,current,1,0,156.672001
+sample,262144,current,1,1,151.552007
+sample,262144,current,1,2,143.360004
+sample,262144,current,1,3,154.624000
+sample,262144,current,1,4,140.287995
+sample,262144,current,1,5,146.431997
+sample,262144,current,1,6,143.360004
+sample,262144,current,1,7,139.264002
+sample,262144,current,1,8,140.287995
+sample,262144,current,1,9,144.383997
+median,262144,current,1,-1,143.872000
+# implementation,262144,nccl,nccl
+sample,262144,nccl,1,0,190.400004
+sample,262144,nccl,1,1,209.920004
+sample,262144,nccl,1,2,198.655993
+sample,262144,nccl,1,3,183.295995
+sample,262144,nccl,1,4,188.416004
+sample,262144,nccl,1,5,190.464005
+sample,262144,nccl,1,6,188.416004
+sample,262144,nccl,1,7,188.383996
+sample,262144,nccl,1,8,185.343996
+sample,262144,nccl,1,9,188.416004
+median,262144,nccl,1,-1,188.416004
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=131072 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=16384
+# implementation,262144,current,router-tuned
+sample,262144,current,2,0,142.335996
+sample,262144,current,2,1,145.408005
+sample,262144,current,2,2,145.408005
+sample,262144,current,2,3,141.312003
+sample,262144,current,2,4,139.264002
+sample,262144,current,2,5,141.312003
+sample,262144,current,2,6,139.264002
+sample,262144,current,2,7,138.239995
+sample,262144,current,2,8,140.287995
+sample,262144,current,2,9,137.216002
+median,262144,current,2,-1,140.799999
+# implementation,262144,nccl,nccl
+sample,262144,nccl,2,0,189.439997
+sample,262144,nccl,2,1,206.783995
+sample,262144,nccl,2,2,186.368003
+sample,262144,nccl,2,3,203.776002
+sample,262144,nccl,2,4,186.368003
+sample,262144,nccl,2,5,184.320003
+sample,262144,nccl,2,6,185.248002
+sample,262144,nccl,2,7,185.343996
+sample,262144,nccl,2,8,197.632000
+sample,262144,nccl,2,9,187.327996
+median,262144,nccl,2,-1,186.848000
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=131072 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=16384
+# implementation,262144,previous,router-tuned
+sample,262144,previous,2,0,146.431997
+sample,262144,previous,2,1,147.456005
+sample,262144,previous,2,2,147.456005
+sample,262144,previous,2,3,142.335996
+sample,262144,previous,2,4,141.312003
+sample,262144,previous,2,5,141.312003
+sample,262144,previous,2,6,147.456005
+sample,262144,previous,2,7,139.264002
+sample,262144,previous,2,8,140.287995
+sample,262144,previous,2,9,157.695994
+median,262144,previous,2,-1,144.383997
+# implementation,524288,nccl,nccl
+sample,524288,nccl,0,0,314.368010
+sample,524288,nccl,0,1,256.000012
+sample,524288,nccl,0,2,253.856003
+sample,524288,nccl,0,3,256.000012
+sample,524288,nccl,0,4,246.784002
+sample,524288,nccl,0,5,262.143999
+sample,524288,nccl,0,6,247.807994
+sample,524288,nccl,0,7,264.191985
+sample,524288,nccl,0,8,252.927989
+sample,524288,nccl,0,9,246.784002
+median,524288,nccl,0,-1,254.928008
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=131072 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=16384
+# implementation,524288,previous,router-tuned
+sample,524288,previous,0,0,197.632000
+sample,524288,previous,0,1,195.583999
+sample,524288,previous,0,2,191.487998
+sample,524288,previous,0,3,196.608007
+sample,524288,previous,0,4,190.464005
+sample,524288,previous,0,5,188.416004
+sample,524288,previous,0,6,196.608007
+sample,524288,previous,0,7,189.439997
+sample,524288,previous,0,8,194.560006
+sample,524288,previous,0,9,189.439997
+median,524288,previous,0,-1,193.024002
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=131072 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=16384
+# implementation,524288,current,router-tuned
+sample,524288,current,0,0,197.632000
+sample,524288,current,0,1,197.632000
+sample,524288,current,0,2,196.608007
+sample,524288,current,0,3,193.535998
+sample,524288,current,0,4,205.824003
+sample,524288,current,0,5,191.487998
+sample,524288,current,0,6,192.512006
+sample,524288,current,0,7,203.776002
+sample,524288,current,0,8,198.655993
+sample,524288,current,0,9,191.487998
+median,524288,current,0,-1,197.120003
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=131072 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=16384
+# implementation,524288,previous,router-tuned
+sample,524288,previous,1,0,190.464005
+sample,524288,previous,1,1,197.632000
+sample,524288,previous,1,2,193.535998
+sample,524288,previous,1,3,203.776002
+sample,524288,previous,1,4,192.512006
+sample,524288,previous,1,5,191.487998
+sample,524288,previous,1,6,192.512006
+sample,524288,previous,1,7,187.391996
+sample,524288,previous,1,8,190.464005
+sample,524288,previous,1,9,185.343996
+median,524288,previous,1,-1,192.000002
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=131072 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=16384
+# implementation,524288,current,router-tuned
+sample,524288,current,1,0,200.703993
+sample,524288,current,1,1,192.512006
+sample,524288,current,1,2,197.632000
+sample,524288,current,1,3,187.391996
+sample,524288,current,1,4,187.391996
+sample,524288,current,1,5,186.368003
+sample,524288,current,1,6,200.703993
+sample,524288,current,1,7,189.439997
+sample,524288,current,1,8,189.439997
+sample,524288,current,1,9,188.416004
+median,524288,current,1,-1,189.439997
+# implementation,524288,nccl,nccl
+sample,524288,nccl,1,0,248.832002
+sample,524288,nccl,1,1,248.832002
+sample,524288,nccl,1,2,244.736001
+sample,524288,nccl,1,3,276.544005
+sample,524288,nccl,1,4,253.951997
+sample,524288,nccl,1,5,264.191985
+sample,524288,nccl,1,6,250.880003
+sample,524288,nccl,1,7,251.904011
+sample,524288,nccl,1,8,245.759994
+sample,524288,nccl,1,9,257.023990
+median,524288,nccl,1,-1,251.392007
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=131072 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=16384
+# implementation,524288,current,router-tuned
+sample,524288,current,2,0,197.632000
+sample,524288,current,2,1,203.776002
+sample,524288,current,2,2,199.680001
+sample,524288,current,2,3,190.464005
+sample,524288,current,2,4,196.544006
+sample,524288,current,2,5,191.487998
+sample,524288,current,2,6,191.487998
+sample,524288,current,2,7,189.439997
+sample,524288,current,2,8,204.799995
+sample,524288,current,2,9,189.439997
+median,524288,current,2,-1,194.016002
+# implementation,524288,nccl,nccl
+sample,524288,nccl,2,0,242.688000
+sample,524288,nccl,2,1,249.855995
+sample,524288,nccl,2,2,263.072014
+sample,524288,nccl,2,3,246.784002
+sample,524288,nccl,2,4,249.855995
+sample,524288,nccl,2,5,249.855995
+sample,524288,nccl,2,6,250.880003
+sample,524288,nccl,2,7,245.759994
+sample,524288,nccl,2,8,246.784002
+sample,524288,nccl,2,9,248.832002
+median,524288,nccl,2,-1,249.343999
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=131072 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=16384
+# implementation,524288,previous,router-tuned
+sample,524288,previous,2,0,196.608007
+sample,524288,previous,2,1,188.416004
+sample,524288,previous,2,2,194.560006
+sample,524288,previous,2,3,195.583999
+sample,524288,previous,2,4,192.415997
+sample,524288,previous,2,5,186.368003
+sample,524288,previous,2,6,189.439997
+sample,524288,previous,2,7,188.416004
+sample,524288,previous,2,8,190.464005
+sample,524288,previous,2,9,193.535998
+median,524288,previous,2,-1,191.440001
+# implementation,1048576,nccl,nccl
+sample,1048576,nccl,0,0,344.063997
+sample,1048576,nccl,0,1,331.775993
+sample,1048576,nccl,0,2,334.847987
+sample,1048576,nccl,0,3,331.775993
+sample,1048576,nccl,0,4,335.871994
+sample,1048576,nccl,0,5,348.159999
+sample,1048576,nccl,0,6,355.327994
+sample,1048576,nccl,0,7,325.632006
+sample,1048576,nccl,0,8,328.704000
+sample,1048576,nccl,0,9,330.751985
+median,1048576,nccl,0,-1,333.311990
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=131072 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=16384
+# implementation,1048576,previous,router-tuned
+sample,1048576,previous,0,0,316.415995
+sample,1048576,previous,0,1,329.728007
+sample,1048576,previous,0,2,313.344002
+sample,1048576,previous,0,3,301.055998
+sample,1048576,previous,0,4,303.104013
+sample,1048576,previous,0,5,305.151999
+sample,1048576,previous,0,6,306.176007
+sample,1048576,previous,0,7,303.039998
+sample,1048576,previous,0,8,308.223993
+sample,1048576,previous,0,9,312.319994
+median,1048576,previous,0,-1,307.200000
+# ReduceScatter host ring; BF16 per-hop rounding; fixed CTAs=16
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=131072 slots=2 blocks<=16 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,1048576,current,router-ring
+sample,1048576,current,0,0,283.648014
+sample,1048576,current,0,1,276.479989
+sample,1048576,current,0,2,284.671992
+sample,1048576,current,0,3,278.528005
+sample,1048576,current,0,4,286.720008
+sample,1048576,current,0,5,273.407996
+sample,1048576,current,0,6,283.648014
+sample,1048576,current,0,7,276.479989
+sample,1048576,current,0,8,282.624006
+sample,1048576,current,0,9,281.599998
+median,1048576,current,0,-1,282.112002
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=131072 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=16384
+# implementation,1048576,previous,router-tuned
+sample,1048576,previous,1,0,320.511997
+sample,1048576,previous,1,1,301.055998
+sample,1048576,previous,1,2,316.415995
+sample,1048576,previous,1,3,299.008012
+sample,1048576,previous,1,4,309.248000
+sample,1048576,previous,1,5,309.248000
+sample,1048576,previous,1,6,296.959996
+sample,1048576,previous,1,7,308.223993
+sample,1048576,previous,1,8,316.415995
+sample,1048576,previous,1,9,317.440003
+median,1048576,previous,1,-1,309.248000
+# ReduceScatter host ring; BF16 per-hop rounding; fixed CTAs=16
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=131072 slots=2 blocks<=16 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,1048576,current,router-ring
+sample,1048576,current,1,0,280.575991
+sample,1048576,current,1,1,271.360010
+sample,1048576,current,1,2,284.671992
+sample,1048576,current,1,3,273.407996
+sample,1048576,current,1,4,283.648014
+sample,1048576,current,1,5,273.407996
+sample,1048576,current,1,6,286.720008
+sample,1048576,current,1,7,271.360010
+sample,1048576,current,1,8,285.696000
+sample,1048576,current,1,9,272.383988
+median,1048576,current,1,-1,276.991993
+# implementation,1048576,nccl,nccl
+sample,1048576,nccl,1,0,338.943988
+sample,1048576,nccl,1,1,337.920010
+sample,1048576,nccl,1,2,361.472011
+sample,1048576,nccl,1,3,338.943988
+sample,1048576,nccl,1,4,333.824009
+sample,1048576,nccl,1,5,344.063997
+sample,1048576,nccl,1,6,330.751985
+sample,1048576,nccl,1,7,334.847987
+sample,1048576,nccl,1,8,342.016011
+sample,1048576,nccl,1,9,347.135991
+median,1048576,nccl,1,-1,338.943988
+# ReduceScatter host ring; BF16 per-hop rounding; fixed CTAs=16
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=131072 slots=2 blocks<=16 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,1048576,current,router-ring
+sample,1048576,current,2,0,285.696000
+sample,1048576,current,2,1,278.495997
+sample,1048576,current,2,2,282.624006
+sample,1048576,current,2,3,277.503997
+sample,1048576,current,2,4,288.767993
+sample,1048576,current,2,5,274.432003
+sample,1048576,current,2,6,284.671992
+sample,1048576,current,2,7,278.528005
+sample,1048576,current,2,8,285.696000
+sample,1048576,current,2,9,277.440012
+median,1048576,current,2,-1,280.576006
+# implementation,1048576,nccl,nccl
+sample,1048576,nccl,2,0,339.967996
+sample,1048576,nccl,2,1,359.423995
+sample,1048576,nccl,2,2,335.871994
+sample,1048576,nccl,2,3,344.063997
+sample,1048576,nccl,2,4,335.871994
+sample,1048576,nccl,2,5,328.704000
+sample,1048576,nccl,2,6,329.728007
+sample,1048576,nccl,2,7,336.896002
+sample,1048576,nccl,2,8,348.159999
+sample,1048576,nccl,2,9,344.063997
+median,1048576,nccl,2,-1,338.431999
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=131072 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=16384
+# implementation,1048576,previous,router-tuned
+sample,1048576,previous,2,0,309.248000
+sample,1048576,previous,2,1,309.248000
+sample,1048576,previous,2,2,316.415995
+sample,1048576,previous,2,3,302.080005
+sample,1048576,previous,2,4,306.176007
+sample,1048576,previous,2,5,301.055998
+sample,1048576,previous,2,6,304.127991
+sample,1048576,previous,2,7,303.104013
+sample,1048576,previous,2,8,300.031990
+sample,1048576,previous,2,9,302.080005
+median,1048576,previous,2,-1,303.616002
+# implementation,2097152,nccl,nccl
+sample,2097152,nccl,0,0,570.367992
+sample,2097152,nccl,0,1,582.624018
+sample,2097152,nccl,0,2,563.199997
+sample,2097152,nccl,0,3,620.544016
+sample,2097152,nccl,0,4,577.535987
+sample,2097152,nccl,0,5,565.248013
+sample,2097152,nccl,0,6,573.440015
+sample,2097152,nccl,0,7,562.175989
+sample,2097152,nccl,0,8,586.751997
+sample,2097152,nccl,0,9,578.559995
+median,2097152,nccl,0,-1,575.488001
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=131072 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=16384
+# implementation,2097152,previous,router-tuned
+sample,2097152,previous,0,0,577.503979
+sample,2097152,previous,0,1,559.104025
+sample,2097152,previous,0,2,553.983986
+sample,2097152,previous,0,3,535.552025
+sample,2097152,previous,0,4,547.807992
+sample,2097152,previous,0,5,545.791984
+sample,2097152,previous,0,6,540.672004
+sample,2097152,previous,0,7,556.032002
+sample,2097152,previous,0,8,559.104025
+sample,2097152,previous,0,9,535.552025
+median,2097152,previous,0,-1,550.895989
+# ReduceScatter host ring; BF16 per-hop rounding; fixed CTAs=16
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=262144 slots=2 blocks<=16 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,2097152,current,router-ring
+sample,2097152,current,0,0,473.087996
+sample,2097152,current,0,1,470.016003
+sample,2097152,current,0,2,471.040010
+sample,2097152,current,0,3,457.727998
+sample,2097152,current,0,4,468.991995
+sample,2097152,current,0,5,463.871986
+sample,2097152,current,0,6,467.967987
+sample,2097152,current,0,7,466.944009
+sample,2097152,current,0,8,466.944009
+sample,2097152,current,0,9,463.871986
+median,2097152,current,0,-1,467.455998
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=131072 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=16384
+# implementation,2097152,previous,router-tuned
+sample,2097152,previous,1,0,544.767976
+sample,2097152,previous,1,1,536.575973
+sample,2097152,previous,1,2,563.199997
+sample,2097152,previous,1,3,541.696012
+sample,2097152,previous,1,4,545.791984
+sample,2097152,previous,1,5,537.599981
+sample,2097152,previous,1,6,580.608010
+sample,2097152,previous,1,7,560.127974
+sample,2097152,previous,1,8,533.504009
+sample,2097152,previous,1,9,549.888015
+median,2097152,previous,1,-1,545.279980
+# ReduceScatter host ring; BF16 per-hop rounding; fixed CTAs=16
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=262144 slots=2 blocks<=16 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,2097152,current,router-ring
+sample,2097152,current,1,0,472.063988
+sample,2097152,current,1,1,462.848008
+sample,2097152,current,1,2,470.016003
+sample,2097152,current,1,3,460.799992
+sample,2097152,current,1,4,471.040010
+sample,2097152,current,1,5,468.991995
+sample,2097152,current,1,6,463.871986
+sample,2097152,current,1,7,463.871986
+sample,2097152,current,1,8,461.824000
+sample,2097152,current,1,9,461.824000
+median,2097152,current,1,-1,463.871986
+# implementation,2097152,nccl,nccl
+sample,2097152,nccl,1,0,567.296028
+sample,2097152,nccl,1,1,567.296028
+sample,2097152,nccl,1,2,574.464023
+sample,2097152,nccl,1,3,563.199997
+sample,2097152,nccl,1,4,553.951979
+sample,2097152,nccl,1,5,583.679974
+sample,2097152,nccl,1,6,558.080018
+sample,2097152,nccl,1,7,578.559995
+sample,2097152,nccl,1,8,562.175989
+sample,2097152,nccl,1,9,561.151981
+median,2097152,nccl,1,-1,565.248013
+# ReduceScatter host ring; BF16 per-hop rounding; fixed CTAs=16
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=262144 slots=2 blocks<=16 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,2097152,current,router-ring
+sample,2097152,current,2,0,465.920001
+sample,2097152,current,2,1,458.752006
+sample,2097152,current,2,2,468.991995
+sample,2097152,current,2,3,460.799992
+sample,2097152,current,2,4,472.063988
+sample,2097152,current,2,5,464.895993
+sample,2097152,current,2,6,472.063988
+sample,2097152,current,2,7,451.584011
+sample,2097152,current,2,8,471.040010
+sample,2097152,current,2,9,460.799992
+median,2097152,current,2,-1,465.407997
+# implementation,2097152,nccl,nccl
+sample,2097152,nccl,2,0,604.160011
+sample,2097152,nccl,2,1,581.632018
+sample,2097152,nccl,2,2,588.800013
+sample,2097152,nccl,2,3,572.416008
+sample,2097152,nccl,2,4,575.487971
+sample,2097152,nccl,2,5,556.032002
+sample,2097152,nccl,2,6,571.392000
+sample,2097152,nccl,2,7,582.656026
+sample,2097152,nccl,2,8,573.440015
+sample,2097152,nccl,2,9,563.199997
+median,2097152,nccl,2,-1,574.463993
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=131072 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=16384
+# implementation,2097152,previous,router-tuned
+sample,2097152,previous,2,0,551.935971
+sample,2097152,previous,2,1,557.056010
+sample,2097152,previous,2,2,555.007994
+sample,2097152,previous,2,3,536.575973
+sample,2097152,previous,2,4,570.367992
+sample,2097152,previous,2,5,542.720020
+sample,2097152,previous,2,6,532.480001
+sample,2097152,previous,2,7,547.839999
+sample,2097152,previous,2,8,544.767976
+sample,2097152,previous,2,9,548.864007
+median,2097152,previous,2,-1,548.352003
+# implementation,4194304,nccl,nccl
+sample,4194304,nccl,0,0,1050.624013
+sample,4194304,nccl,0,1,1022.976041
+sample,4194304,nccl,0,2,994.304001
+sample,4194304,nccl,0,3,1030.112028
+sample,4194304,nccl,0,4,1037.248015
+sample,4194304,nccl,0,5,1037.312031
+sample,4194304,nccl,0,6,1042.431951
+sample,4194304,nccl,0,7,1016.800046
+sample,4194304,nccl,0,8,1015.807986
+sample,4194304,nccl,0,9,1033.216000
+median,4194304,nccl,0,-1,1031.664014
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=131072 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=16384
+# implementation,4194304,previous,router-tuned
+sample,4194304,previous,0,0,942.080021
+sample,4194304,previous,0,1,928.767979
+sample,4194304,previous,0,2,932.864010
+sample,4194304,previous,0,3,934.912026
+sample,4194304,previous,0,4,948.224008
+sample,4194304,previous,0,5,948.224008
+sample,4194304,previous,0,6,924.672008
+sample,4194304,previous,0,7,968.703985
+sample,4194304,previous,0,8,937.983990
+sample,4194304,previous,0,9,926.720023
+median,4194304,previous,0,-1,936.448008
+# ReduceScatter host ring; BF16 per-hop rounding; fixed CTAs=16
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=16 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,4194304,current,router-ring
+sample,4194304,current,0,0,838.656008
+sample,4194304,current,0,1,830.464005
+sample,4194304,current,0,2,840.704024
+sample,4194304,current,0,3,828.415990
+sample,4194304,current,0,4,838.656008
+sample,4194304,current,0,5,828.415990
+sample,4194304,current,0,6,845.824003
+sample,4194304,current,0,7,841.727972
+sample,4194304,current,0,8,834.559977
+sample,4194304,current,0,9,835.583985
+median,4194304,current,0,-1,837.119997
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=131072 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=16384
+# implementation,4194304,previous,router-tuned
+sample,4194304,previous,1,0,908.288002
+sample,4194304,previous,1,1,912.383974
+sample,4194304,previous,1,2,941.056013
+sample,4194304,previous,1,3,917.504013
+sample,4194304,previous,1,4,915.455997
+sample,4194304,previous,1,5,934.912026
+sample,4194304,previous,1,6,950.272024
+sample,4194304,previous,1,7,907.263994
+sample,4194304,previous,1,8,936.959982
+sample,4194304,previous,1,9,920.575976
+median,4194304,previous,1,-1,919.039994
+# ReduceScatter host ring; BF16 per-hop rounding; fixed CTAs=16
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=16 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,4194304,current,router-ring
+sample,4194304,current,1,0,838.656008
+sample,4194304,current,1,1,828.415990
+sample,4194304,current,1,2,832.512021
+sample,4194304,current,1,3,829.407990
+sample,4194304,current,1,4,836.607993
+sample,4194304,current,1,5,839.680016
+sample,4194304,current,1,6,836.607993
+sample,4194304,current,1,7,829.375982
+sample,4194304,current,1,8,833.536029
+sample,4194304,current,1,9,831.488013
+median,4194304,current,1,-1,833.024025
+# implementation,4194304,nccl,nccl
+sample,4194304,nccl,1,0,1085.440040
+sample,4194304,nccl,1,1,1076.223969
+sample,4194304,nccl,1,2,1093.631983
+sample,4194304,nccl,1,3,1029.119968
+sample,4194304,nccl,1,4,1045.503974
+sample,4194304,nccl,1,5,1025.024056
+sample,4194304,nccl,1,6,1031.167984
+sample,4194304,nccl,1,7,1025.024056
+sample,4194304,nccl,1,8,1016.831994
+sample,4194304,nccl,1,9,1024.000049
+median,4194304,nccl,1,-1,1030.143976
+# ReduceScatter host ring; BF16 per-hop rounding; fixed CTAs=16
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=16 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,4194304,current,router-ring
+sample,4194304,current,2,0,834.559977
+sample,4194304,current,2,1,820.223987
+sample,4194304,current,2,2,835.583985
+sample,4194304,current,2,3,826.367974
+sample,4194304,current,2,4,839.680016
+sample,4194304,current,2,5,830.464005
+sample,4194304,current,2,6,828.383982
+sample,4194304,current,2,7,830.464005
+sample,4194304,current,2,8,837.599993
+sample,4194304,current,2,9,830.464005
+median,4194304,current,2,-1,830.464005
+# implementation,4194304,nccl,nccl
+sample,4194304,nccl,2,0,1011.711955
+sample,4194304,nccl,2,1,1011.711955
+sample,4194304,nccl,2,2,1030.143976
+sample,4194304,nccl,2,3,1145.823956
+sample,4194304,nccl,2,4,1025.024056
+sample,4194304,nccl,2,5,1030.143976
+sample,4194304,nccl,2,6,1014.783978
+sample,4194304,nccl,2,7,1034.240007
+sample,4194304,nccl,2,8,1025.024056
+sample,4194304,nccl,2,9,1021.952033
+median,4194304,nccl,2,-1,1025.024056
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=131072 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=16384
+# implementation,4194304,previous,router-tuned
+sample,4194304,previous,2,0,916.480005
+sample,4194304,previous,2,1,932.864010
+sample,4194304,previous,2,2,917.504013
+sample,4194304,previous,2,3,926.720023
+sample,4194304,previous,2,4,943.104029
+sample,4194304,previous,2,5,918.528020
+sample,4194304,previous,2,6,931.840003
+sample,4194304,previous,2,7,924.672008
+sample,4194304,previous,2,8,930.815995
+sample,4194304,previous,2,9,924.672008
+median,4194304,previous,2,-1,925.696015
+# implementation,8388608,nccl,nccl
+sample,8388608,nccl,0,0,2039.743900
+sample,8388608,nccl,0,1,1946.624041
+sample,8388608,nccl,0,2,1935.359955
+sample,8388608,nccl,0,3,1937.407970
+sample,8388608,nccl,0,4,1916.928053
+sample,8388608,nccl,0,5,1905.663967
+sample,8388608,nccl,0,6,1938.431978
+sample,8388608,nccl,0,7,1931.264043
+sample,8388608,nccl,0,8,1927.168012
+sample,8388608,nccl,0,9,1923.071980
+median,8388608,nccl,0,-1,1933.311999
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,8388608,previous,router-tuned
+sample,8388608,previous,0,0,1685.503960
+sample,8388608,previous,0,1,1672.191978
+sample,8388608,previous,0,2,1691.648006
+sample,8388608,previous,0,3,1652.735949
+sample,8388608,previous,0,4,1691.648006
+sample,8388608,previous,0,5,1667.072058
+sample,8388608,previous,0,6,1689.599991
+sample,8388608,previous,0,7,1676.288009
+sample,8388608,previous,0,8,1686.527967
+sample,8388608,previous,0,9,1689.599991
+median,8388608,previous,0,-1,1686.015964
+# ReduceScatter host ring; BF16 per-hop rounding; fixed CTAs=16
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=1048576 slots=2 blocks<=16 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,8388608,current,router-ring
+sample,8388608,current,0,0,1571.840048
+sample,8388608,current,0,1,1580.031991
+sample,8388608,current,0,2,1585.152030
+sample,8388608,current,0,3,1568.768024
+sample,8388608,current,0,4,1570.816040
+sample,8388608,current,0,5,1575.935960
+sample,8388608,current,0,6,1566.720009
+sample,8388608,current,0,7,1570.816040
+sample,8388608,current,0,8,1569.792032
+sample,8388608,current,0,9,1567.744017
+median,8388608,current,0,-1,1570.816040
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,8388608,previous,router-tuned
+sample,8388608,previous,1,0,1679.360032
+sample,8388608,previous,1,1,1672.191978
+sample,8388608,previous,1,2,1686.527967
+sample,8388608,previous,1,3,1689.599991
+sample,8388608,previous,1,4,1687.551975
+sample,8388608,previous,1,5,1675.264001
+sample,8388608,previous,1,6,1683.455944
+sample,8388608,previous,1,7,1653.759956
+sample,8388608,previous,1,8,1685.472012
+sample,8388608,previous,1,9,1668.095946
+median,8388608,previous,1,-1,1681.407988
+# ReduceScatter host ring; BF16 per-hop rounding; fixed CTAs=16
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=1048576 slots=2 blocks<=16 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,8388608,current,router-ring
+sample,8388608,current,1,0,1588.224053
+sample,8388608,current,1,1,1565.696001
+sample,8388608,current,1,2,1568.768024
+sample,8388608,current,1,3,1568.768024
+sample,8388608,current,1,4,1585.152030
+sample,8388608,current,1,5,1571.840048
+sample,8388608,current,1,6,1571.840048
+sample,8388608,current,1,7,1576.959968
+sample,8388608,current,1,8,1567.744017
+sample,8388608,current,1,9,1565.696001
+median,8388608,current,1,-1,1570.304036
+# implementation,8388608,nccl,nccl
+sample,8388608,nccl,1,0,1916.928053
+sample,8388608,nccl,1,1,1966.079950
+sample,8388608,nccl,1,2,1952.736020
+sample,8388608,nccl,1,3,1903.615952
+sample,8388608,nccl,1,4,1935.359955
+sample,8388608,nccl,1,5,2020.351887
+sample,8388608,nccl,1,6,1934.335947
+sample,8388608,nccl,1,7,1954.815984
+sample,8388608,nccl,1,8,1943.552017
+sample,8388608,nccl,1,9,1944.576025
+median,8388608,nccl,1,-1,1944.064021
+# ReduceScatter host ring; BF16 per-hop rounding; fixed CTAs=16
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=1048576 slots=2 blocks<=16 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,8388608,current,router-ring
+sample,8388608,current,2,0,1572.864056
+sample,8388608,current,2,1,1580.031991
+sample,8388608,current,2,2,1579.007983
+sample,8388608,current,2,3,1560.544014
+sample,8388608,current,2,4,1563.743949
+sample,8388608,current,2,5,1558.527946
+sample,8388608,current,2,6,1565.696001
+sample,8388608,current,2,7,1564.671993
+sample,8388608,current,2,8,1567.744017
+sample,8388608,current,2,9,1566.720009
+median,8388608,current,2,-1,1566.208005
+# implementation,8388608,nccl,nccl
+sample,8388608,nccl,2,0,1974.272013
+sample,8388608,nccl,2,1,2027.519941
+sample,8388608,nccl,2,2,1986.559987
+sample,8388608,nccl,2,3,1951.743960
+sample,8388608,nccl,2,4,1950.719953
+sample,8388608,nccl,2,5,1935.359955
+sample,8388608,nccl,2,6,1929.216027
+sample,8388608,nccl,2,7,1935.328007
+sample,8388608,nccl,2,8,1917.951941
+sample,8388608,nccl,2,9,1907.711983
+median,8388608,nccl,2,-1,1943.039954
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,8388608,previous,router-tuned
+sample,8388608,previous,2,0,1670.143962
+sample,8388608,previous,2,1,1677.312016
+sample,8388608,previous,2,2,1679.360032
+sample,8388608,previous,2,3,1659.904003
+sample,8388608,previous,2,4,1698.815942
+sample,8388608,previous,2,5,1686.527967
+sample,8388608,previous,2,6,1683.455944
+sample,8388608,previous,2,7,1690.623999
+sample,8388608,previous,2,8,1692.672014
+sample,8388608,previous,2,9,1687.551975
+median,8388608,previous,2,-1,1684.991956
+# implementation,16777216,nccl,nccl
+sample,16777216,nccl,0,0,3773.439884
+sample,16777216,nccl,0,1,3917.824030
+sample,16777216,nccl,0,2,3735.552073
+sample,16777216,nccl,0,3,3752.959967
+sample,16777216,nccl,0,4,3743.743896
+sample,16777216,nccl,0,5,3746.815920
+sample,16777216,nccl,0,6,3763.200045
+sample,16777216,nccl,0,7,3721.215963
+sample,16777216,nccl,0,8,3775.487900
+sample,16777216,nccl,0,9,3762.176037
+median,16777216,nccl,0,-1,3757.568002
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,16777216,previous,router-tuned
+sample,16777216,previous,0,0,3043.328047
+sample,16777216,previous,0,1,3010.560036
+sample,16777216,previous,0,2,3050.496101
+sample,16777216,previous,0,3,3014.656067
+sample,16777216,previous,0,4,2982.912064
+sample,16777216,previous,0,5,3014.656067
+sample,16777216,previous,0,6,3038.208008
+sample,16777216,previous,0,7,3032.063961
+sample,16777216,previous,0,8,3035.135984
+sample,16777216,previous,0,9,3033.087969
+median,16777216,previous,0,-1,3032.575965
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,16777216,current,router-tuned
+sample,16777216,current,0,0,3050.496101
+sample,16777216,current,0,1,3027.967930
+sample,16777216,current,0,2,3046.400070
+sample,16777216,current,0,3,2995.199919
+sample,16777216,current,0,4,2967.551947
+sample,16777216,current,0,5,3024.895906
+sample,16777216,current,0,6,2970.623970
+sample,16777216,current,0,7,3043.328047
+sample,16777216,current,0,8,3045.376062
+sample,16777216,current,0,9,3024.895906
+median,16777216,current,0,-1,3026.431918
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,16777216,previous,router-tuned
+sample,16777216,previous,1,0,3063.807964
+sample,16777216,previous,1,1,2958.336115
+sample,16777216,previous,1,2,3060.735941
+sample,16777216,previous,1,3,2965.503931
+sample,16777216,previous,1,4,2969.599962
+sample,16777216,previous,1,5,2990.080118
+sample,16777216,previous,1,6,2966.527939
+sample,16777216,previous,1,7,3035.135984
+sample,16777216,previous,1,8,2956.288099
+sample,16777216,previous,1,9,2961.407900
+median,16777216,previous,1,-1,2968.063951
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,16777216,current,router-tuned
+sample,16777216,current,1,0,2966.527939
+sample,16777216,current,1,1,2996.223927
+sample,16777216,current,1,2,2976.768017
+sample,16777216,current,1,3,3025.919914
+sample,16777216,current,1,4,3021.823883
+sample,16777216,current,1,5,3033.087969
+sample,16777216,current,1,6,2958.336115
+sample,16777216,current,1,7,3028.991938
+sample,16777216,current,1,8,2988.032103
+sample,16777216,current,1,9,3033.087969
+median,16777216,current,1,-1,3009.023905
+# implementation,16777216,nccl,nccl
+sample,16777216,nccl,1,0,3759.104013
+sample,16777216,nccl,1,1,3725.311995
+sample,16777216,nccl,1,2,3923.968077
+sample,16777216,nccl,1,3,3752.959967
+sample,16777216,nccl,1,4,3726.336002
+sample,16777216,nccl,1,5,3748.863935
+sample,16777216,nccl,1,6,3769.311905
+sample,16777216,nccl,1,7,3784.640074
+sample,16777216,nccl,1,8,3750.911951
+sample,16777216,nccl,1,9,3762.176037
+median,16777216,nccl,1,-1,3756.031990
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,16777216,current,router-tuned
+sample,16777216,current,2,0,2974.720001
+sample,16777216,current,2,1,2950.144053
+sample,16777216,current,2,2,3084.287882
+sample,16777216,current,2,3,3016.704082
+sample,16777216,current,2,4,2995.199919
+sample,16777216,current,2,5,3097.599983
+sample,16777216,current,2,6,3041.280031
+sample,16777216,current,2,7,3039.232016
+sample,16777216,current,2,8,3044.352055
+sample,16777216,current,2,9,3035.135984
+median,16777216,current,2,-1,3037.184000
+# implementation,16777216,nccl,nccl
+sample,16777216,nccl,2,0,3961.855888
+sample,16777216,nccl,2,1,3787.775993
+sample,16777216,nccl,2,2,3716.095924
+sample,16777216,nccl,2,3,3760.128021
+sample,16777216,nccl,2,4,3765.248060
+sample,16777216,nccl,2,5,3691.519976
+sample,16777216,nccl,2,6,3737.600088
+sample,16777216,nccl,2,7,3780.607939
+sample,16777216,nccl,2,8,3727.360010
+sample,16777216,nccl,2,9,3775.487900
+median,16777216,nccl,2,-1,3762.688041
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,16777216,previous,router-tuned
+sample,16777216,previous,2,0,3042.304039
+sample,16777216,previous,2,1,3014.656067
+sample,16777216,previous,2,2,3065.855980
+sample,16777216,previous,2,3,3033.087969
+sample,16777216,previous,2,4,2944.000006
+sample,16777216,previous,2,5,2958.336115
+sample,16777216,previous,2,6,2976.768017
+sample,16777216,previous,2,7,3045.376062
+sample,16777216,previous,2,8,2969.599962
+sample,16777216,previous,2,9,3023.839951
+median,16777216,previous,2,-1,3019.248009
+# implementation,33554432,nccl,nccl
+sample,33554432,nccl,0,0,7554.048061
+sample,33554432,nccl,0,1,7353.343964
+sample,33554432,nccl,0,2,7437.312126
+sample,33554432,nccl,0,3,7432.191849
+sample,33554432,nccl,0,4,7323.647976
+sample,33554432,nccl,0,5,7372.799873
+sample,33554432,nccl,0,6,7414.783955
+sample,33554432,nccl,0,7,7487.487793
+sample,33554432,nccl,0,8,7407.616138
+sample,33554432,nccl,0,9,7447.552204
+median,33554432,nccl,0,-1,7423.487902
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,33554432,previous,router-tuned
+sample,33554432,previous,0,0,5684.224129
+sample,33554432,previous,0,1,5738.495827
+sample,33554432,previous,0,2,5772.287846
+sample,33554432,previous,0,3,5745.664120
+sample,33554432,previous,0,4,5768.191814
+sample,33554432,previous,0,5,5769.216061
+sample,33554432,previous,0,6,5745.664120
+sample,33554432,previous,0,7,5680.128098
+sample,33554432,previous,0,8,5756.927967
+sample,33554432,previous,0,9,5722.112179
+median,33554432,previous,0,-1,5745.664120
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,33554432,current,router-tuned
+sample,33554432,current,0,0,5569.536209
+sample,33554432,current,0,1,5791.744232
+sample,33554432,current,0,2,5643.263817
+sample,33554432,current,0,3,5753.856182
+sample,33554432,current,0,4,5721.087933
+sample,33554432,current,0,5,5686.272144
+sample,33554432,current,0,6,5731.328011
+sample,33554432,current,0,7,5728.256226
+sample,33554432,current,0,8,5741.568089
+sample,33554432,current,0,9,5542.912006
+median,33554432,current,0,-1,5724.672079
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,33554432,previous,router-tuned
+sample,33554432,previous,1,0,5576.704025
+sample,33554432,previous,1,1,5728.256226
+sample,33554432,previous,1,2,5594.111919
+sample,33554432,previous,1,3,5738.495827
+sample,33554432,previous,1,4,5618.688107
+sample,33554432,previous,1,5,5704.703808
+sample,33554432,previous,1,6,5630.976200
+sample,33554432,previous,1,7,5695.487976
+sample,33554432,previous,1,8,5550.079823
+sample,33554432,previous,1,9,5719.039917
+median,33554432,previous,1,-1,5663.232088
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,33554432,current,router-tuned
+sample,33554432,current,1,0,5757.952213
+sample,33554432,current,1,1,5709.824085
+sample,33554432,current,1,2,5694.464207
+sample,33554432,current,1,3,5764.095783
+sample,33554432,current,1,4,5739.520073
+sample,33554432,current,1,5,5720.064163
+sample,33554432,current,1,6,5796.864033
+sample,33554432,current,1,7,5748.735905
+sample,33554432,current,1,8,5748.735905
+sample,33554432,current,1,9,5713.920116
+median,33554432,current,1,-1,5744.127989
+# implementation,33554432,nccl,nccl
+sample,33554432,nccl,1,0,7726.079941
+sample,33554432,nccl,1,1,7345.056057
+sample,33554432,nccl,1,2,7440.383911
+sample,33554432,nccl,1,3,7370.751858
+sample,33554432,nccl,1,4,7400.447845
+sample,33554432,nccl,1,5,7448.575974
+sample,33554432,nccl,1,6,7491.583824
+sample,33554432,nccl,1,7,7506.944180
+sample,33554432,nccl,1,8,7502.848148
+sample,33554432,nccl,1,9,7398.399830
+median,33554432,nccl,1,-1,7444.479942
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,33554432,current,router-tuned
+sample,33554432,current,2,0,5729.279995
+sample,33554432,current,2,1,5768.191814
+sample,33554432,current,2,2,5716.991901
+sample,33554432,current,2,3,5713.920116
+sample,33554432,current,2,4,5581.823826
+sample,33554432,current,2,5,5784.575939
+sample,33554432,current,2,6,5698.560238
+sample,33554432,current,2,7,5561.344147
+sample,33554432,current,2,8,5724.160194
+sample,33554432,current,2,9,5709.824085
+median,33554432,current,2,-1,5715.456009
+# implementation,33554432,nccl,nccl
+sample,33554432,nccl,2,0,7587.840080
+sample,33554432,nccl,2,1,7386.112213
+sample,33554432,nccl,2,2,7370.751858
+sample,33554432,nccl,2,3,7432.191849
+sample,33554432,nccl,2,4,7404.543877
+sample,33554432,nccl,2,5,7461.887836
+sample,33554432,nccl,2,6,7321.599960
+sample,33554432,nccl,2,7,7362.559795
+sample,33554432,nccl,2,8,7426.047802
+sample,33554432,nccl,2,9,7449.600220
+median,33554432,nccl,2,-1,7415.295839
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,33554432,previous,router-tuned
+sample,33554432,previous,2,0,5806.079865
+sample,33554432,previous,2,1,5716.991901
+sample,33554432,previous,2,2,5637.119770
+sample,33554432,previous,2,3,5703.680038
+sample,33554432,previous,2,4,5735.424042
+sample,33554432,previous,2,5,5736.447811
+sample,33554432,previous,2,6,5773.312092
+sample,33554432,previous,2,7,5617.663860
+sample,33554432,previous,2,8,5615.615845
+sample,33554432,previous,2,9,5749.760151
+median,33554432,previous,2,-1,5726.207972
+# implementation,67108864,nccl,nccl
+sample,67108864,nccl,0,0,14735.360146
+sample,67108864,nccl,0,1,14659.584045
+sample,67108864,nccl,0,2,14679.039955
+sample,67108864,nccl,0,3,14603.263855
+sample,67108864,nccl,0,4,14647.295952
+sample,67108864,nccl,0,5,14870.528221
+sample,67108864,nccl,0,6,14715.904236
+sample,67108864,nccl,0,7,14647.295952
+sample,67108864,nccl,0,8,14759.936333
+sample,67108864,nccl,0,9,14714.879990
+median,67108864,nccl,0,-1,14696.959972
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,67108864,previous,router-tuned
+sample,67108864,previous,0,0,11108.351707
+sample,67108864,previous,0,1,11011.072159
+sample,67108864,previous,0,2,10792.960167
+sample,67108864,previous,0,3,11071.488380
+sample,67108864,previous,0,4,10793.984413
+sample,67108864,previous,0,5,11038.720131
+sample,67108864,previous,0,6,10871.775627
+sample,67108864,previous,0,7,11116.512299
+sample,67108864,previous,0,8,11107.328415
+sample,67108864,previous,0,9,20190.208435
+median,67108864,previous,0,-1,11055.104256
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,67108864,current,router-tuned
+sample,67108864,current,0,0,11201.536179
+sample,67108864,current,0,1,10780.672073
+sample,67108864,current,0,2,10984.448433
+sample,67108864,current,0,3,10905.599594
+sample,67108864,current,0,4,11183.103561
+sample,67108864,current,0,5,11070.464134
+sample,67108864,current,0,6,10936.320305
+sample,67108864,current,0,7,10938.367844
+sample,67108864,current,0,8,10998.784065
+sample,67108864,current,0,9,10925.056458
+median,67108864,current,0,-1,10961.408138
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,67108864,previous,router-tuned
+sample,67108864,previous,1,0,10918.911934
+sample,67108864,previous,1,1,10888.192177
+sample,67108864,previous,1,2,10878.975868
+sample,67108864,previous,1,3,10911.744118
+sample,67108864,previous,1,4,10865.663528
+sample,67108864,previous,1,5,10853.376389
+sample,67108864,previous,1,6,10930.175781
+sample,67108864,previous,1,7,10987.520218
+sample,67108864,previous,1,8,10964.991570
+sample,67108864,previous,1,9,10927.103996
+median,67108864,previous,1,-1,10915.328026
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,67108864,current,router-tuned
+sample,67108864,current,1,0,11056.127548
+sample,67108864,current,1,1,10956.800461
+sample,67108864,current,1,2,11082.752228
+sample,67108864,current,1,3,11034.624100
+sample,67108864,current,1,4,10984.448433
+sample,67108864,current,1,5,10985.471725
+sample,67108864,current,1,6,11086.848259
+sample,67108864,current,1,7,10883.071899
+sample,67108864,current,1,8,10944.512367
+sample,67108864,current,1,9,11048.959732
+median,67108864,current,1,-1,11010.047913
+# implementation,67108864,nccl,nccl
+sample,67108864,nccl,1,0,14664.704323
+sample,67108864,nccl,1,1,14763.008118
+sample,67108864,nccl,1,2,14681.088448
+sample,67108864,nccl,1,3,14796.799660
+sample,67108864,nccl,1,4,14584.832191
+sample,67108864,nccl,1,5,14594.047546
+sample,67108864,nccl,1,6,14651.391983
+sample,67108864,nccl,1,7,14635.007858
+sample,67108864,nccl,1,8,14754.816055
+sample,67108864,nccl,1,9,14665.727615
+median,67108864,nccl,1,-1,14665.215969
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,67108864,current,router-tuned
+sample,67108864,current,2,0,10952.704430
+sample,67108864,current,2,1,10966.015816
+sample,67108864,current,2,2,10928.128242
+sample,67108864,current,2,3,11091.967583
+sample,67108864,current,2,4,10871.808052
+sample,67108864,current,2,5,10898.431778
+sample,67108864,current,2,6,10909.695625
+sample,67108864,current,2,7,10864.640236
+sample,67108864,current,2,8,11072.511673
+sample,67108864,current,2,9,10977.279663
+median,67108864,current,2,-1,10940.416336
+# implementation,67108864,nccl,nccl
+sample,67108864,nccl,2,0,14726.143837
+sample,67108864,nccl,2,1,14784.511566
+sample,67108864,nccl,2,2,14547.967911
+sample,67108864,nccl,2,3,14676.992416
+sample,67108864,nccl,2,4,14706.687927
+sample,67108864,nccl,2,5,14696.448326
+sample,67108864,nccl,2,6,14623.744011
+sample,67108864,nccl,2,7,14631.936073
+sample,67108864,nccl,2,8,14519.295692
+sample,67108864,nccl,2,9,14624.768257
+median,67108864,nccl,2,-1,14654.464245
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,67108864,previous,router-tuned
+sample,67108864,previous,2,0,10954.751968
+sample,67108864,previous,2,1,10815.487862
+sample,67108864,previous,2,2,11045.887947
+sample,67108864,previous,2,3,11028.479576
+sample,67108864,previous,2,4,10975.232124
+sample,67108864,previous,2,5,11044.863701
+sample,67108864,previous,2,6,10889.216423
+sample,67108864,previous,2,7,10939.392090
+sample,67108864,previous,2,8,10964.991570
+sample,67108864,previous,2,9,11116.543770
+median,67108864,previous,2,-1,10970.111847
+# implementation,134217728,nccl,nccl
+sample,134217728,nccl,0,0,29107.200623
+sample,134217728,nccl,0,1,29195.264816
+sample,134217728,nccl,0,2,29128.704071
+sample,134217728,nccl,0,3,29021.184921
+sample,134217728,nccl,0,4,29111.295700
+sample,134217728,nccl,0,5,29128.704071
+sample,134217728,nccl,0,6,29185.024261
+sample,134217728,nccl,0,7,28992.511749
+sample,134217728,nccl,0,8,29023.231506
+sample,134217728,nccl,0,9,29160.448074
+median,134217728,nccl,0,-1,29119.999886
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,134217728,previous,router-tuned
+sample,134217728,previous,0,0,21941.247940
+sample,134217728,previous,0,1,21853.183746
+sample,134217728,previous,0,2,21652.479172
+sample,134217728,previous,0,3,21910.528183
+sample,134217728,previous,0,4,21620.735168
+sample,134217728,previous,0,5,21804.031372
+sample,134217728,previous,0,6,21660.671234
+sample,134217728,previous,0,7,21489.664078
+sample,134217728,previous,0,8,21925.888062
+sample,134217728,previous,0,9,21881.856918
+median,134217728,previous,0,-1,21828.607559
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,134217728,current,router-tuned
+sample,134217728,current,0,0,21443.584442
+sample,134217728,current,0,1,21837.791443
+sample,134217728,current,0,2,21660.671234
+sample,134217728,current,0,3,21517.311096
+sample,134217728,current,0,4,21332.992554
+sample,134217728,current,0,5,21525.503159
+sample,134217728,current,0,6,21588.991165
+sample,134217728,current,0,7,21637.119293
+sample,134217728,current,0,8,21811.199188
+sample,134217728,current,0,9,21681.152344
+median,134217728,current,0,-1,21613.055229
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,134217728,previous,router-tuned
+sample,134217728,previous,1,0,21653.503418
+sample,134217728,previous,1,1,21459.968567
+sample,134217728,previous,1,2,21368.831635
+sample,134217728,previous,1,3,21404.672623
+sample,134217728,previous,1,4,21681.152344
+sample,134217728,previous,1,5,21368.831635
+sample,134217728,previous,1,6,21618.688583
+sample,134217728,previous,1,7,21385.215759
+sample,134217728,previous,1,8,21390.335083
+sample,134217728,previous,1,9,21533.695221
+median,134217728,previous,1,-1,21432.320595
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,134217728,current,router-tuned
+sample,134217728,current,1,0,21638.143539
+sample,134217728,current,1,1,21702.655792
+sample,134217728,current,1,2,21649.408340
+sample,134217728,current,1,3,21298.175812
+sample,134217728,current,1,4,21483.520508
+sample,134217728,current,1,5,21247.999191
+sample,134217728,current,1,6,21680.128098
+sample,134217728,current,1,7,21431.295395
+sample,134217728,current,1,8,21592.063904
+sample,134217728,current,1,9,21686.271667
+median,134217728,current,1,-1,21615.103722
+# implementation,134217728,nccl,nccl
+sample,134217728,nccl,1,0,28812.288284
+sample,134217728,nccl,1,1,29272.064209
+sample,134217728,nccl,1,2,29093.887329
+sample,134217728,nccl,1,3,28952.575684
+sample,134217728,nccl,1,4,29054.975510
+sample,134217728,nccl,1,5,29103.103638
+sample,134217728,nccl,1,6,29223.936081
+sample,134217728,nccl,1,7,29059.072495
+sample,134217728,nccl,1,8,29064.191818
+sample,134217728,nccl,1,9,28781.568527
+median,134217728,nccl,1,-1,29061.632156
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,134217728,current,router-tuned
+sample,134217728,current,2,0,21805.055618
+sample,134217728,current,2,1,21864.448547
+sample,134217728,current,2,2,21657.600403
+sample,134217728,current,2,3,21738.496780
+sample,134217728,current,2,4,21741.567612
+sample,134217728,current,2,5,21643.264771
+sample,134217728,current,2,6,21649.408340
+sample,134217728,current,2,7,21477.376938
+sample,134217728,current,2,8,21737.472534
+sample,134217728,current,2,9,21775.360107
+median,134217728,current,2,-1,21737.984657
+# implementation,134217728,nccl,nccl
+sample,134217728,nccl,2,0,29345.792770
+sample,134217728,nccl,2,1,29400.064468
+sample,134217728,nccl,2,2,29108.224869
+sample,134217728,nccl,2,3,29148.160934
+sample,134217728,nccl,2,4,29314.048767
+sample,134217728,nccl,2,5,28900.352478
+sample,134217728,nccl,2,6,28947.456360
+sample,134217728,nccl,2,7,29208.576202
+sample,134217728,nccl,2,8,29030.399323
+sample,134217728,nccl,2,9,29067.264557
+median,134217728,nccl,2,-1,29128.192902
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,134217728,previous,router-tuned
+sample,134217728,previous,2,0,21426.176071
+sample,134217728,previous,2,1,21317.632675
+sample,134217728,previous,2,2,21608.448029
+sample,134217728,previous,2,3,21379.072189
+sample,134217728,previous,2,4,21736.448288
+sample,134217728,previous,2,5,21792.768478
+sample,134217728,previous,2,6,21806.079865
+sample,134217728,previous,2,7,21768.192291
+sample,134217728,previous,2,8,21350.400925
+sample,134217728,previous,2,9,21712.896347
+median,134217728,previous,2,-1,21660.672188
+# implementation,268435456,nccl,nccl
+sample,268435456,nccl,0,0,57653.247833
+sample,268435456,nccl,0,1,58018.817902
+sample,268435456,nccl,0,2,58051.582336
+sample,268435456,nccl,0,3,57570.304871
+sample,268435456,nccl,0,4,57638.912201
+sample,268435456,nccl,0,5,57655.296326
+sample,268435456,nccl,0,6,57504.768372
+sample,268435456,nccl,0,7,58079.231262
+sample,268435456,nccl,0,8,57771.007538
+sample,268435456,nccl,0,9,57929.729462
+median,268435456,nccl,0,-1,57713.151932
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,268435456,previous,router-tuned
+sample,268435456,previous,0,0,43223.041534
+sample,268435456,previous,0,1,43005.950928
+sample,268435456,previous,0,2,43321.342468
+sample,268435456,previous,0,3,43092.990875
+sample,268435456,previous,0,4,43358.207703
+sample,268435456,previous,0,5,42952.705383
+sample,268435456,previous,0,6,43006.977081
+sample,268435456,previous,0,7,43395.072937
+sample,268435456,previous,0,8,43160.575867
+sample,268435456,previous,0,9,43577.342987
+median,268435456,previous,0,-1,43191.808701
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,268435456,current,router-tuned
+sample,268435456,current,0,0,43223.041534
+sample,268435456,current,0,1,43051.006317
+sample,268435456,current,0,2,43092.990875
+sample,268435456,current,0,3,43025.409698
+sample,268435456,current,0,4,43274.238586
+sample,268435456,current,0,5,43260.929108
+sample,268435456,current,0,6,43166.721344
+sample,268435456,current,0,7,43212.799072
+sample,268435456,current,0,8,42745.857239
+sample,268435456,current,0,9,43197.441101
+median,268435456,current,0,-1,43182.081223
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,268435456,previous,router-tuned
+sample,268435456,previous,1,0,43244.544983
+sample,268435456,previous,1,1,42776.576996
+sample,268435456,previous,1,2,42881.023407
+sample,268435456,previous,1,3,43303.936005
+sample,268435456,previous,1,4,43292.671204
+sample,268435456,previous,1,5,42748.897552
+sample,268435456,previous,1,6,43120.639801
+sample,268435456,previous,1,7,43394.046783
+sample,268435456,previous,1,8,43032.577515
+sample,268435456,previous,1,9,43286.529541
+median,268435456,previous,1,-1,43182.592392
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,268435456,current,router-tuned
+sample,268435456,current,1,0,43482.112885
+sample,268435456,current,1,1,43397.121429
+sample,268435456,current,1,2,43533.313751
+sample,268435456,current,1,3,43453.441620
+sample,268435456,current,1,4,43597.824097
+sample,268435456,current,1,5,43202.560425
+sample,268435456,current,1,6,43415.550232
+sample,268435456,current,1,7,43398.143768
+sample,268435456,current,1,8,43539.455414
+sample,268435456,current,1,9,43111.423492
+median,268435456,current,1,-1,43434.495926
+# implementation,268435456,nccl,nccl
+sample,268435456,nccl,1,0,57816.032410
+sample,268435456,nccl,1,1,57691.135406
+sample,268435456,nccl,1,2,57971.710205
+sample,268435456,nccl,1,3,57648.128510
+sample,268435456,nccl,1,4,57597.953796
+sample,268435456,nccl,1,5,57502.719879
+sample,268435456,nccl,1,6,57936.897278
+sample,268435456,nccl,1,7,57781.246185
+sample,268435456,nccl,1,8,57285.633087
+sample,268435456,nccl,1,9,57367.553711
+median,268435456,nccl,1,-1,57669.631958
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,268435456,current,router-tuned
+sample,268435456,current,2,0,43039.745331
+sample,268435456,current,2,1,42952.705383
+sample,268435456,current,2,2,43242.496490
+sample,268435456,current,2,3,42909.694672
+sample,268435456,current,2,4,43148.288727
+sample,268435456,current,2,5,43202.560425
+sample,268435456,current,2,6,43311.103821
+sample,268435456,current,2,7,43006.977081
+sample,268435456,current,2,8,43124.736786
+sample,268435456,current,2,9,43065.345764
+median,268435456,current,2,-1,43095.041275
+# implementation,268435456,nccl,nccl
+sample,268435456,nccl,2,0,57764.865875
+sample,268435456,nccl,2,1,57952.255249
+sample,268435456,nccl,2,2,57449.470520
+sample,268435456,nccl,2,3,58030.078888
+sample,268435456,nccl,2,4,57306.110382
+sample,268435456,nccl,2,5,57741.310120
+sample,268435456,nccl,2,6,57885.696411
+sample,268435456,nccl,2,7,57732.097626
+sample,268435456,nccl,2,8,58156.032562
+sample,268435456,nccl,2,9,57824.256897
+median,268435456,nccl,2,-1,57794.561386
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,268435456,previous,router-tuned
+sample,268435456,previous,2,0,43249.664307
+sample,268435456,previous,2,1,43283.454895
+sample,268435456,previous,2,2,43588.607788
+sample,268435456,previous,2,3,43196.414948
+sample,268435456,previous,2,4,43160.575867
+sample,268435456,previous,2,5,43370.494843
+sample,268435456,previous,2,6,43105.281830
+sample,268435456,previous,2,7,43166.721344
+sample,268435456,previous,2,8,43278.335571
+sample,268435456,previous,2,9,43584.510803
+median,268435456,previous,2,-1,43263.999939
+# implementation,536870912,nccl,nccl
+sample,536870912,nccl,0,0,114868.225098
+sample,536870912,nccl,0,1,114574.333191
+sample,536870912,nccl,0,2,114595.840454
+sample,536870912,nccl,0,3,114310.142517
+sample,536870912,nccl,0,4,114179.069519
+sample,536870912,nccl,0,5,115166.206360
+sample,536870912,nccl,0,6,115187.713623
+sample,536870912,nccl,0,7,114665.405273
+sample,536870912,nccl,0,8,114952.194214
+sample,536870912,nccl,0,9,115001.342773
+median,536870912,nccl,0,-1,114766.815186
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,536870912,previous,router-tuned
+sample,536870912,previous,0,0,86782.974243
+sample,536870912,previous,0,1,86359.039307
+sample,536870912,previous,0,2,86889.472961
+sample,536870912,previous,0,3,86777.854919
+sample,536870912,previous,0,4,86331.390381
+sample,536870912,previous,0,5,86493.186951
+sample,536870912,previous,0,6,86586.364746
+sample,536870912,previous,0,7,86797.309875
+sample,536870912,previous,0,8,86483.970642
+sample,536870912,previous,0,9,86376.449585
+median,536870912,previous,0,-1,86539.775848
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,536870912,current,router-tuned
+sample,536870912,current,0,0,86134.780884
+sample,536870912,current,0,1,84602.882385
+sample,536870912,current,0,2,86137.855530
+sample,536870912,current,0,3,85824.508667
+sample,536870912,current,0,4,86412.284851
+sample,536870912,current,0,5,86190.078735
+sample,536870912,current,0,6,86035.453796
+sample,536870912,current,0,7,86100.990295
+sample,536870912,current,0,8,86244.354248
+sample,536870912,current,0,9,86057.983398
+median,536870912,current,0,-1,86117.885590
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,536870912,previous,router-tuned
+sample,536870912,previous,1,0,85710.845947
+sample,536870912,previous,1,1,86913.024902
+sample,536870912,previous,1,2,86235.137939
+sample,536870912,previous,1,3,86523.902893
+sample,536870912,previous,1,4,86039.550781
+sample,536870912,previous,1,5,86660.095215
+sample,536870912,previous,1,6,86070.274353
+sample,536870912,previous,1,7,86148.094177
+sample,536870912,previous,1,8,85754.882812
+sample,536870912,previous,1,9,86788.093567
+median,536870912,previous,1,-1,86191.616058
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,536870912,current,router-tuned
+sample,536870912,current,1,0,86076.416016
+sample,536870912,current,1,1,86609.916687
+sample,536870912,current,1,2,85985.282898
+sample,536870912,current,1,3,85957.633972
+sample,536870912,current,1,4,86285.308838
+sample,536870912,current,1,5,86730.751038
+sample,536870912,current,1,6,86622.207642
+sample,536870912,current,1,7,85974.014282
+sample,536870912,current,1,8,86490.112305
+sample,536870912,current,1,9,86629.379272
+median,536870912,current,1,-1,86387.710571
+# implementation,536870912,nccl,nccl
+sample,536870912,nccl,1,0,114669.570923
+sample,536870912,nccl,1,1,115201.026917
+sample,536870912,nccl,1,2,114606.048584
+sample,536870912,nccl,1,3,114949.119568
+sample,536870912,nccl,1,4,114293.762207
+sample,536870912,nccl,1,5,114824.188232
+sample,536870912,nccl,1,6,115079.170227
+sample,536870912,nccl,1,7,114426.879883
+sample,536870912,nccl,1,8,114751.426697
+sample,536870912,nccl,1,9,114688.003540
+median,536870912,nccl,1,-1,114719.715118
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,536870912,current,router-tuned
+sample,536870912,current,2,0,86874.114990
+sample,536870912,current,2,1,87170.051575
+sample,536870912,current,2,2,86647.804260
+sample,536870912,current,2,3,86433.792114
+sample,536870912,current,2,4,86821.891785
+sample,536870912,current,2,5,86839.294434
+sample,536870912,current,2,6,86633.468628
+sample,536870912,current,2,7,86670.333862
+sample,536870912,current,2,8,86533.119202
+sample,536870912,current,2,9,87060.478210
+median,536870912,current,2,-1,86746.112823
+# implementation,536870912,nccl,nccl
+sample,536870912,nccl,2,0,114468.864441
+sample,536870912,nccl,2,1,114981.887817
+sample,536870912,nccl,2,2,114921.470642
+sample,536870912,nccl,2,3,114557.952881
+sample,536870912,nccl,2,4,114649.055481
+sample,536870912,nccl,2,5,115236.862183
+sample,536870912,nccl,2,6,115497.985840
+sample,536870912,nccl,2,7,115109.886169
+sample,536870912,nccl,2,8,115057.662964
+sample,536870912,nccl,2,9,114905.090332
+median,536870912,nccl,2,-1,114951.679230
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,536870912,previous,router-tuned
+sample,536870912,previous,2,0,86267.906189
+sample,536870912,previous,2,1,86200.317383
+sample,536870912,previous,2,2,87440.383911
+sample,536870912,previous,2,3,86920.188904
+sample,536870912,previous,2,4,86750.205994
+sample,536870912,previous,2,5,86986.755371
+sample,536870912,previous,2,6,86226.943970
+sample,536870912,previous,2,7,86981.628418
+sample,536870912,previous,2,8,86773.757935
+sample,536870912,previous,2,9,86517.761230
+median,536870912,previous,2,-1,86761.981964
+# implementation,1073741824,nccl,nccl
+sample,1073741824,nccl,0,0,230081.542969
+sample,1073741824,nccl,0,1,229159.942627
+sample,1073741824,nccl,0,2,226945.022583
+sample,1073741824,nccl,0,3,228945.922852
+sample,1073741824,nccl,0,4,228318.176270
+sample,1073741824,nccl,0,5,227332.092285
+sample,1073741824,nccl,0,6,227844.100952
+sample,1073741824,nccl,0,7,229287.933350
+sample,1073741824,nccl,0,8,229498.886108
+sample,1073741824,nccl,0,9,229226.501465
+median,1073741824,nccl,0,-1,229052.932739
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,1073741824,previous,router-tuned
+sample,1073741824,previous,0,0,173430.786133
+sample,1073741824,previous,0,1,172467.193604
+sample,1073741824,previous,0,2,174042.114258
+sample,1073741824,previous,0,3,173146.118164
+sample,1073741824,previous,0,4,173838.333130
+sample,1073741824,previous,0,5,173706.237793
+sample,1073741824,previous,0,6,172991.485596
+sample,1073741824,previous,0,7,173970.428467
+sample,1073741824,previous,0,8,172971.008301
+sample,1073741824,previous,0,9,174136.322021
+median,1073741824,previous,0,-1,173568.511963
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,1073741824,current,router-tuned
+sample,1073741824,current,0,0,173703.170776
+sample,1073741824,current,0,1,173533.187866
+sample,1073741824,current,0,2,173359.100342
+sample,1073741824,current,0,3,173131.774902
+sample,1073741824,current,0,4,173541.381836
+sample,1073741824,current,0,5,172715.011597
+sample,1073741824,current,0,6,173390.853882
+sample,1073741824,current,0,7,171755.523682
+sample,1073741824,current,0,8,173739.013672
+sample,1073741824,current,0,9,172987.396240
+median,1073741824,current,0,-1,173374.977112
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,1073741824,previous,router-tuned
+sample,1073741824,previous,1,0,170256.378174
+sample,1073741824,previous,1,1,171506.683350
+sample,1073741824,previous,1,2,172487.686157
+sample,1073741824,previous,1,3,173016.067505
+sample,1073741824,previous,1,4,172734.466553
+sample,1073741824,previous,1,5,172348.419189
+sample,1073741824,previous,1,6,172496.902466
+sample,1073741824,previous,1,7,172940.292358
+sample,1073741824,previous,1,8,173090.820312
+sample,1073741824,previous,1,9,173374.465942
+median,1073741824,previous,1,-1,172615.684509
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,1073741824,current,router-tuned
+sample,1073741824,current,1,0,173509.628296
+sample,1073741824,current,1,1,174703.613281
+sample,1073741824,current,1,2,173550.598145
+sample,1073741824,current,1,3,174042.114258
+sample,1073741824,current,1,4,172097.534180
+sample,1073741824,current,1,5,172693.496704
+sample,1073741824,current,1,6,173284.347534
+sample,1073741824,current,1,7,171896.835327
+sample,1073741824,current,1,8,173959.167480
+sample,1073741824,current,1,9,172780.548096
+median,1073741824,current,1,-1,173396.987915
+# implementation,1073741824,nccl,nccl
+sample,1073741824,nccl,1,0,228221.954346
+sample,1073741824,nccl,1,1,227789.825439
+sample,1073741824,nccl,1,2,228458.496094
+sample,1073741824,nccl,1,3,229752.838135
+sample,1073741824,nccl,1,4,229771.270752
+sample,1073741824,nccl,1,5,229341.186523
+sample,1073741824,nccl,1,6,227273.727417
+sample,1073741824,nccl,1,7,228735.992432
+sample,1073741824,nccl,1,8,229282.821655
+sample,1073741824,nccl,1,9,229601.272583
+median,1073741824,nccl,1,-1,229009.407043
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,1073741824,current,router-tuned
+sample,1073741824,current,2,0,172734.466553
+sample,1073741824,current,2,1,173817.855835
+sample,1073741824,current,2,2,173308.929443
+sample,1073741824,current,2,3,173558.776855
+sample,1073741824,current,2,4,173190.139771
+sample,1073741824,current,2,5,173669.372559
+sample,1073741824,current,2,6,173060.089111
+sample,1073741824,current,2,7,172357.635498
+sample,1073741824,current,2,8,173492.218018
+sample,1073741824,current,2,9,173449.218750
+median,1073741824,current,2,-1,173379.074097
+# implementation,1073741824,nccl,nccl
+sample,1073741824,nccl,2,0,228733.947754
+sample,1073741824,nccl,2,1,227173.370361
+sample,1073741824,nccl,2,2,228722.686768
+sample,1073741824,nccl,2,3,228604.934692
+sample,1073741824,nccl,2,4,228948.989868
+sample,1073741824,nccl,2,5,226781.188965
+sample,1073741824,nccl,2,6,228615.173340
+sample,1073741824,nccl,2,7,228690.948486
+sample,1073741824,nccl,2,8,228070.404053
+sample,1073741824,nccl,2,9,228191.238403
+median,1073741824,nccl,2,-1,228610.054016
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=cpu routing_cpu_workers=46
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=cpu
+# scatter_packet_order=flat
+# ReduceScatter owner-only merge; active CPU<=16/node; scratch_stride=65536
+# implementation,1073741824,previous,router-tuned
+sample,1073741824,previous,2,0,174345.214844
+sample,1073741824,previous,2,1,172724.227905
+sample,1073741824,previous,2,2,173319.168091
+sample,1073741824,previous,2,3,173844.482422
+sample,1073741824,previous,2,4,173212.677002
+sample,1073741824,previous,2,5,173640.701294
+sample,1073741824,previous,2,6,173658.111572
+sample,1073741824,previous,2,7,172917.755127
+sample,1073741824,previous,2,8,173901.794434
+sample,1073741824,previous,2,9,173251.586914
+median,1073741824,previous,2,-1,173479.934692

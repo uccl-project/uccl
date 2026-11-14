@@ -1,5 +1,6 @@
 // Paired experimental BF16 mini-host/resident/router/NCCL benchmark.
 #include "compact_transport.cuh"
+#include "host_ring.cuh"
 #include "uccl_lite/collective_dispatch.hpp"
 #include <algorithm>
 #include <cmath>
@@ -351,6 +352,10 @@ int main(int argc, char** argv) {
         idle = 0;
     size_t begin = 1024, end = 1UL << 20;
     bool host = false, checking = false, reverse = false, shmOnly = false;
+    size_t rsPacket = 128UL << 10, rsMinPacket = 128UL << 10;
+    size_t rsGrain = 8192, rsTransportGrain = 16UL << 10;
+    int rsWorkers = 4, rsBlocks = 64, rsThreads = 256;
+    bool rsGpu = false, rsInterleave = false, rsDirect = false;
     auto variants = split("nccl,router-tuned,mini");
     for (int i = 1; i < argc; ++i) {
       std::string a = argv[i];
@@ -387,6 +392,26 @@ int main(int argc, char** argv) {
         reverse = true;
       else if (a == "--shm-only")
         shmOnly = true;
+      else if (a == "--rs-packet-bytes")
+        rsPacket = std::stoull(next());
+      else if (a == "--rs-min-packet-bytes")
+        rsMinPacket = std::stoull(next());
+      else if (a == "--rs-workers")
+        rsWorkers = std::stoi(next());
+      else if (a == "--rs-blocks")
+        rsBlocks = std::stoi(next());
+      else if (a == "--rs-threads")
+        rsThreads = std::stoi(next());
+      else if (a == "--rs-cpu-grain")
+        rsGrain = std::stoull(next());
+      else if (a == "--rs-transport-grain")
+        rsTransportGrain = std::stoull(next());
+      else if (a == "--rs-gpu")
+        rsGpu = true;
+      else if (a == "--rs-interleave")
+        rsInterleave = true;
+      else if (a == "--rs-direct")
+        rsDirect = true;
       else
         throw std::invalid_argument("unknown option " + a);
     }
@@ -421,8 +446,17 @@ int main(int argc, char** argv) {
           v != "router-progress" && v != "router-tuned" &&
           v != "router-single" && v != "router-full-ag" &&
           v != "router-full-ag-compact" && v != "router-bulk" &&
-          v != "current" && v != "mini" && v != "resident")
+          v != "current" && v != "previous" && v != "mini" && v != "resident" &&
+          v != "router-ring" && v != "rs-candidate" && v != "rs-ring" &&
+          v != "rs-halving" && v != "rs-ring-cta" && v != "rs-hier")
         throw std::invalid_argument("unknown variant " + v);
+      if ((v == "rs-candidate" || v == "router-ring") && op != 1)
+        throw std::invalid_argument("RS candidate requires ReduceScatter");
+      if ((v == "rs-ring" || v == "rs-halving" || v == "rs-ring-cta" ||
+           v == "rs-hier") &&
+          (op != 1 || end > (16UL << 20)))
+        throw std::invalid_argument(
+            "RS ring prototype requires RS through 16 MiB");
       if (v == "mini" && op != 0)
         throw std::invalid_argument("mini supports AG only");
       if ((v == "mini" || v == "resident") && end > (16UL << 20))
@@ -482,8 +516,11 @@ int main(int argc, char** argv) {
         for (size_t j = 0; j < variants.size(); ++j) {
           auto const& requested = variants[(j + repeat) % variants.size()];
           std::string name = requested;
-          if (name == "current") {
-            if (op == 0 && bytes >= (256UL << 10) && bytes <= (1UL << 20))
+          if (name == "current" || name == "previous") {
+            if (name == "current" && op == 1 && bytes >= (1UL << 20) &&
+                bytes <= (8UL << 20))
+              name = "router-ring";
+            else if (op == 0 && bytes >= (256UL << 10) && bytes <= (1UL << 20))
               name = "mini";
             else if (op == 0 && bytes >= (2UL << 20))
               name = "router-full-ag";
@@ -495,10 +532,17 @@ int main(int argc, char** argv) {
           std::printf("# implementation,%zu,%s,%s\n", bytes, requested.c_str(),
                       name.c_str());
           std::unique_ptr<Transport> compact;
+          std::unique_ptr<HostRing> ring;
           std::unique_ptr<CollectiveDispatcher> router;
           std::unique_ptr<NcclGraph> graph;
           std::function<void()> invoke;
-          if (name == "mini" || name == "resident") {
+          if (name == "rs-ring" || name == "rs-halving" ||
+              name == "rs-ring-cta" || name == "rs-hier") {
+            ring = std::make_unique<HostRing>(
+                b.ports, end, blocks, name == "rs-halving",
+                name == "rs-ring-cta", name == "rs-hier");
+            invoke = [&]() { ring->scatter(count, b.ports); };
+          } else if (name == "mini" || name == "resident") {
             compact = std::make_unique<Transport>(
                 b.ports, std::min(end, 16UL << 20), blocks);
             if (name == "resident") {
@@ -534,7 +578,7 @@ int main(int argc, char** argv) {
             }
             if (name == "router-tuned" || name == "router-single" ||
                 name == "router-full-ag" || name == "router-full-ag-compact" ||
-                name == "router-bulk")
+                name == "router-bulk" || name == "rs-candidate")
               options.gpuLaunchWorkersPerNode = 4;
             if (name == "router-single") options.singleCtaBytes = 65536;
             if (name == "router-full-ag" || name == "router-full-ag-compact") {
@@ -543,6 +587,43 @@ int main(int argc, char** argv) {
               options.agPerSourceProgress = true;
               if (name == "router-full-ag-compact")
                 options.transportBlocks = 16;
+            }
+            if (name == "rs-candidate") {
+              options.packetBytes = rsPacket;
+              options.minPacketBytes = rsMinPacket;
+              options.smallAllReducePacketBytes = 0;
+              options.smallReduceScatterPacketBytes = 0;
+              options.smallReduceScatterGpuProgress = false;
+              options.smallReduceScatterGpuProgressMaxBytes = 0;
+              options.smallReduceScatterWorkersPerNode = 0;
+              options.scatterWorkersPerNode = rsWorkers;
+              options.transportBlocks = rsBlocks;
+              options.transportThreads = rsThreads;
+              options.transportGrainBytes = rsTransportGrain;
+              options.grainElements = rsGrain;
+              options.directScatterResults = rsDirect;
+              options.interleaveScatter = rsInterleave;
+              options.gpuProgress = rsGpu;
+              options.reduction = rsGpu ? cpu_router::ReductionPlacement::Gpu
+                                        : cpu_router::ReductionPlacement::Cpu;
+              std::printf(
+                  "# RS candidate packet=%zu min=%zu workers=%d blocks=%d "
+                  "threads=%d cpu-grain=%zu transport-grain=%zu gpu=%d "
+                  "striped=%d direct=%d\n",
+                  rsPacket, rsMinPacket, rsWorkers, rsBlocks, rsThreads,
+                  rsGrain, rsTransportGrain, int(rsGpu), int(rsInterleave),
+                  int(rsDirect));
+            }
+            if (name == "router-ring") {
+              options.hostRingReduceScatter = true;
+              options.gpuProgress = true;
+              options.reduction = cpu_router::ReductionPlacement::Gpu;
+              options.packetBytes =
+                  std::max(size_t(128UL << 10), bytes / ranks);
+              options.transportBlocks = blocks;
+              options.gpuLaunchWorkersPerNode = 4;
+              options.smallReduceScatterGpuProgress = false;
+              options.smallReduceScatterGpuProgressMaxBytes = 0;
             }
             BackendPolicy policy;
             policy.mode = RouterMode::Force;

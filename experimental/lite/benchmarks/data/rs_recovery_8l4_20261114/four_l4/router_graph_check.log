@@ -1,0 +1,8 @@
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),
+# NUMA group1 host_node=1 ranks=2(device2),3(device3),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=4 NUMA_groups=2
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=524288 slots=2 blocks<=64 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+PASS: 1000 captured mixed collectives, producer/consumer dependencies, five replays and 128-entry ring wrap; GPUs=4 C_API=false

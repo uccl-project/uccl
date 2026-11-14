@@ -257,6 +257,12 @@ struct PacketPipelineOptions {
   // to a dedicated consumer-block group, which can copy before other sources
   // upload. Reader credits still wait for every group before slot reuse.
   bool agPerSourceProgress = false;
+  // Explicit standalone BF16 ReduceScatter ring through mapped host buffers.
+  // Requires GPU reduction/progress, aligned out-of-place full-rank shards,
+  // shard bytes <= packetBytes, and a fixed resident grid of at most 128 CTAs.
+  // No topology/size auto-selection: callers need separate calibration.
+  // Each hop rounds its partial to BF16 (unlike FP32 flat GPU reduction).
+  bool hostRingReduceScatter = false;
 };
 
 // One process, 1..kMaxRanks ports in arbitrary device/NUMA order. All GPU

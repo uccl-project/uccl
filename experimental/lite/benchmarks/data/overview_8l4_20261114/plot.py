@@ -77,11 +77,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--preview", action="store_true")
     parser.add_argument("--testbed", choices=("gpu", "shm", "all"), default="all")
+    parser.add_argument("--op", choices=("all_reduce", "all_gather", "reduce_scatter", "all"), default="all")
     args = parser.parse_args()
     configure()
     data = load()
     for mode in (("gpu", "shm") if args.testbed == "all" else (args.testbed,)):
         for operation, name, factor in OPERATIONS:
+            if args.op not in ("all", operation):
+                continue
             fig = make_figure(data, mode, operation, factor)
             prefix = "collectives-8l4-" + ("shm-" if mode == "shm" else "")
             save(fig, prefix + name + "-overview", args.preview)

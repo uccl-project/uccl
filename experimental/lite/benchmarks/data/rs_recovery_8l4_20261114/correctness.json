@@ -1,0 +1,93 @@
+{
+  "checks": [
+    {
+      "name": "post_append_cpu_bf16_check",
+      "manifest": "raw/post_append_cpu_bf16_check.json",
+      "result": "PASS"
+    },
+    {
+      "name": "post_append_router_core_check",
+      "manifest": "raw/post_append_router_core_check.json",
+      "result": "PASS"
+    },
+    {
+      "name": "post_append_router_policy_check",
+      "manifest": "raw/post_append_router_policy_check.json",
+      "result": "PASS"
+    },
+    {
+      "name": "post_append_dispatcher_check",
+      "manifest": "raw/post_append_dispatcher_check.json",
+      "result": "PASS"
+    },
+    {
+      "name": "post_append_nccl_identity_check",
+      "manifest": "raw/post_append_nccl_identity_check.json",
+      "result": "PASS"
+    },
+    {
+      "name": "post_append_dispatcher_cuda",
+      "manifest": "raw/post_append_dispatcher_cuda.json",
+      "result": "PASS"
+    },
+    {
+      "name": "post_append_gpu_router_check",
+      "manifest": "raw/post_append_gpu_router_check.json",
+      "result": "PASS"
+    },
+    {
+      "name": "post_append_gpu_router_graph_check",
+      "manifest": "raw/post_append_gpu_router_graph_check.json",
+      "result": "PASS"
+    },
+    {
+      "name": "post_append_shm_router_check",
+      "manifest": "raw/post_append_shm_router_check.json",
+      "result": "PASS"
+    },
+    {
+      "name": "post_append_shm_router_graph_check",
+      "manifest": "raw/post_append_shm_router_graph_check.json",
+      "result": "PASS"
+    },
+    {
+      "name": "post_append_ring_check_shm",
+      "manifest": "raw/post_append_ring_check_shm.json",
+      "result": "PASS"
+    },
+    {
+      "name": "final_topology_ring_check_4",
+      "manifest": "raw/final_topology_ring_check_4.json",
+      "result": "PASS"
+    },
+    {
+      "name": "final_topology_ring_check_8",
+      "manifest": "raw/final_topology_ring_check_8.json",
+      "result": "PASS"
+    },
+    {
+      "name": "documented_four_l4_host",
+      "manifest": "four_l4/checks.json",
+      "result": "PASS",
+      "tests": 3
+    }
+  ],
+  "source_manifest": "final_source_hashes.json",
+  "memcheck_full": {
+    "result": "TIMEOUT",
+    "manifest": "raw/final_memcheck.json",
+    "seconds": 180,
+    "counts_as_pass": false
+  },
+  "note": "Four-rank local tests use devices 0,1,4,5; the separate l41 host tests use its native devices 0,1,2,3. SHM ring check predates only test device-selection/formatting changes; library and benchmark hashes match the final revision.",
+  "memcheck_four_gpu_smoke": {
+    "result": "PASS",
+    "manifest": "four_l4/limited_memcheck.json",
+    "scope": "First four dispatchTransport launches instrumented; remaining native oracle, async and graph cases run to completion; not full graph instrumentation."
+  },
+  "memcheck_eight_gpu_smoke": {
+    "result": "PASS",
+    "manifest": "raw/limited_memcheck.json",
+    "scope": "First eight ring dispatches instrumented; full native test completes; not full graph instrumentation."
+  }
+}

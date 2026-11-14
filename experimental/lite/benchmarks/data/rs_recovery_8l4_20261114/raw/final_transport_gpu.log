@@ -1,0 +1,588 @@
+wxz-l4:1533729:1533729 [7] NCCL INFO ENV/Plugin: Could not find: libnccl-env.so
+wxz-l4:1533729:1533729 [7] NCCL INFO cudaDriverVersion 13000
+wxz-l4:1533729:1533729 [0] NCCL INFO NCCL version 2.28.9+cuda13.0
+wxz-l4:1533729:1533781 [6] NCCL INFO NCCL_NET_PLUGIN set by environment to none
+wxz-l4:1533729:1533781 [6] NCCL INFO NET/Socket : Using [0]ens7:10.142.15.215<0>
+wxz-l4:1533729:1533781 [6] NCCL INFO Initialized NET plugin Socket
+wxz-l4:1533729:1533781 [6] NCCL INFO Assigned NET plugin Socket to comm
+wxz-l4:1533729:1533781 [6] NCCL INFO Using network Socket
+wxz-l4:1533729:1533776 [1] NCCL INFO Initialized NET plugin Socket
+wxz-l4:1533729:1533776 [1] NCCL INFO Assigned NET plugin Socket to comm
+wxz-l4:1533729:1533776 [1] NCCL INFO Using network Socket
+wxz-l4:1533729:1533779 [4] NCCL INFO Initialized NET plugin Socket
+wxz-l4:1533729:1533779 [4] NCCL INFO Assigned NET plugin Socket to comm
+wxz-l4:1533729:1533779 [4] NCCL INFO Using network Socket
+wxz-l4:1533729:1533782 [7] NCCL INFO Initialized NET plugin Socket
+wxz-l4:1533729:1533782 [7] NCCL INFO Assigned NET plugin Socket to comm
+wxz-l4:1533729:1533782 [7] NCCL INFO Using network Socket
+wxz-l4:1533729:1533780 [5] NCCL INFO Initialized NET plugin Socket
+wxz-l4:1533729:1533780 [5] NCCL INFO Assigned NET plugin Socket to comm
+wxz-l4:1533729:1533780 [5] NCCL INFO Using network Socket
+wxz-l4:1533729:1533775 [0] NCCL INFO Initialized NET plugin Socket
+wxz-l4:1533729:1533775 [0] NCCL INFO Assigned NET plugin Socket to comm
+wxz-l4:1533729:1533775 [0] NCCL INFO Using network Socket
+wxz-l4:1533729:1533777 [2] NCCL INFO Initialized NET plugin Socket
+wxz-l4:1533729:1533777 [2] NCCL INFO Assigned NET plugin Socket to comm
+wxz-l4:1533729:1533777 [2] NCCL INFO Using network Socket
+wxz-l4:1533729:1533778 [3] NCCL INFO Initialized NET plugin Socket
+wxz-l4:1533729:1533778 [3] NCCL INFO Assigned NET plugin Socket to comm
+wxz-l4:1533729:1533778 [3] NCCL INFO Using network Socket
+wxz-l4:1533729:1533776 [1] NCCL INFO ncclCommInitAll comm 0x5f003bb58e20 rank 1 nranks 8 cudaDev 1 nvmlDev 1 busId 40 commId 0x9c607883e09873b0 - Init START
+wxz-l4:1533729:1533781 [6] NCCL INFO ncclCommInitAll comm 0x5f003c0a4cf0 rank 6 nranks 8 cudaDev 6 nvmlDev 6 busId 80020 commId 0x9c607883e09873b0 - Init START
+wxz-l4:1533729:1533779 [4] NCCL INFO ncclCommInitAll comm 0x5f003be866d0 rank 4 nranks 8 cudaDev 4 nvmlDev 4 busId 80000 commId 0x9c607883e09873b0 - Init START
+wxz-l4:1533729:1533782 [7] NCCL INFO ncclCommInitAll comm 0x5f003c1b4000 rank 7 nranks 8 cudaDev 7 nvmlDev 7 busId 80030 commId 0x9c607883e09873b0 - Init START
+wxz-l4:1533729:1533780 [5] NCCL INFO ncclCommInitAll comm 0x5f003bf959e0 rank 5 nranks 8 cudaDev 5 nvmlDev 5 busId 80010 commId 0x9c607883e09873b0 - Init START
+wxz-l4:1533729:1533775 [0] NCCL INFO ncclCommInitAll comm 0x5f003ba49d50 rank 0 nranks 8 cudaDev 0 nvmlDev 0 busId 30 commId 0x9c607883e09873b0 - Init START
+wxz-l4:1533729:1533777 [2] NCCL INFO ncclCommInitAll comm 0x5f003bc680d0 rank 2 nranks 8 cudaDev 2 nvmlDev 2 busId 50 commId 0x9c607883e09873b0 - Init START
+wxz-l4:1533729:1533780 [5] NCCL INFO RAS client listening socket at 127.0.0.1<28028>
+wxz-l4:1533729:1533778 [3] NCCL INFO ncclCommInitAll comm 0x5f003bd773c0 rank 3 nranks 8 cudaDev 3 nvmlDev 3 busId 60 commId 0x9c607883e09873b0 - Init START
+wxz-l4:1533729:1533782 [7] NCCL INFO Topology detection : could not read /sys/devices/pci0000:80/0000:80:03.0/max_link_speed, ignoring
+wxz-l4:1533729:1533782 [7] NCCL INFO Topology detection : could not read /sys/devices/pci0000:80/0000:80:03.0/../max_link_speed, ignoring
+wxz-l4:1533729:1533782 [7] NCCL INFO Topology detection : could not read /sys/devices/pci0000:80/0000:80:03.0/max_link_width, ignoring
+wxz-l4:1533729:1533782 [7] NCCL INFO Topology detection : could not read /sys/devices/pci0000:80/0000:80:03.0/../max_link_width, ignoring
+wxz-l4:1533729:1533782 [7] NCCL INFO TOPO/NET : Importing network plugins to topology
+wxz-l4:1533729:1533782 [7] NCCL INFO Topology detection: network path (name = ens7) /sys/devices/pci0000:00/0000:00:07.0/virtio0 is not a PCI device (virtio). Attaching to first CPU
+wxz-l4:1533729:1533782 [7] NCCL INFO ncclTopoPopulateNics : Filled ens7 in topo with pciPath=/sys/devices/pci0000:00/0000:00:07.0/virtio0 keep=1 coll=(null)
+wxz-l4:1533729:1533780 [5] NCCL INFO Topology detection : could not read /sys/devices/pci0000:80/0000:80:01.0/max_link_speed, ignoring
+wxz-l4:1533729:1533780 [5] NCCL INFO Topology detection : could not read /sys/devices/pci0000:80/0000:80:01.0/../max_link_speed, ignoring
+wxz-l4:1533729:1533780 [5] NCCL INFO Topology detection : could not read /sys/devices/pci0000:80/0000:80:01.0/max_link_width, ignoring
+wxz-l4:1533729:1533780 [5] NCCL INFO Topology detection : could not read /sys/devices/pci0000:80/0000:80:01.0/../max_link_width, ignoring
+wxz-l4:1533729:1533780 [5] NCCL INFO TOPO/NET : Importing network plugins to topology
+wxz-l4:1533729:1533780 [5] NCCL INFO Topology detection: network path (name = ens7) /sys/devices/pci0000:00/0000:00:07.0/virtio0 is not a PCI device (virtio). Attaching to first CPU
+wxz-l4:1533729:1533780 [5] NCCL INFO ncclTopoPopulateNics : Filled ens7 in topo with pciPath=/sys/devices/pci0000:00/0000:00:07.0/virtio0 keep=1 coll=(null)
+wxz-l4:1533729:1533778 [3] NCCL INFO Topology detection : could not read /sys/devices/pci0000:00/0000:00:06.0/max_link_speed, ignoring
+wxz-l4:1533729:1533778 [3] NCCL INFO Topology detection : could not read /sys/devices/pci0000:00/0000:00:06.0/../max_link_speed, ignoring
+wxz-l4:1533729:1533778 [3] NCCL INFO Topology detection : could not read /sys/devices/pci0000:00/0000:00:06.0/max_link_width, ignoring
+wxz-l4:1533729:1533778 [3] NCCL INFO Topology detection : could not read /sys/devices/pci0000:00/0000:00:06.0/../max_link_width, ignoring
+wxz-l4:1533729:1533778 [3] NCCL INFO TOPO/NET : Importing network plugins to topology
+wxz-l4:1533729:1533778 [3] NCCL INFO Topology detection: network path (name = ens7) /sys/devices/pci0000:00/0000:00:07.0/virtio0 is not a PCI device (virtio). Attaching to first CPU
+wxz-l4:1533729:1533778 [3] NCCL INFO ncclTopoPopulateNics : Filled ens7 in topo with pciPath=/sys/devices/pci0000:00/0000:00:07.0/virtio0 keep=1 coll=(null)
+wxz-l4:1533729:1533781 [6] NCCL INFO Topology detection : could not read /sys/devices/pci0000:80/0000:80:02.0/max_link_speed, ignoring
+wxz-l4:1533729:1533781 [6] NCCL INFO Topology detection : could not read /sys/devices/pci0000:80/0000:80:02.0/../max_link_speed, ignoring
+wxz-l4:1533729:1533781 [6] NCCL INFO Topology detection : could not read /sys/devices/pci0000:80/0000:80:02.0/max_link_width, ignoring
+wxz-l4:1533729:1533781 [6] NCCL INFO Topology detection : could not read /sys/devices/pci0000:80/0000:80:02.0/../max_link_width, ignoring
+wxz-l4:1533729:1533781 [6] NCCL INFO TOPO/NET : Importing network plugins to topology
+wxz-l4:1533729:1533781 [6] NCCL INFO Topology detection: network path (name = ens7) /sys/devices/pci0000:00/0000:00:07.0/virtio0 is not a PCI device (virtio). Attaching to first CPU
+wxz-l4:1533729:1533781 [6] NCCL INFO ncclTopoPopulateNics : Filled ens7 in topo with pciPath=/sys/devices/pci0000:00/0000:00:07.0/virtio0 keep=1 coll=(null)
+wxz-l4:1533729:1533779 [4] NCCL INFO Topology detection : could not read /sys/devices/pci0000:80/0000:80:00.0/max_link_speed, ignoring
+wxz-l4:1533729:1533779 [4] NCCL INFO Topology detection : could not read /sys/devices/pci0000:80/0000:80:00.0/../max_link_speed, ignoring
+wxz-l4:1533729:1533779 [4] NCCL INFO Topology detection : could not read /sys/devices/pci0000:80/0000:80:00.0/max_link_width, ignoring
+wxz-l4:1533729:1533779 [4] NCCL INFO Topology detection : could not read /sys/devices/pci0000:80/0000:80:00.0/../max_link_width, ignoring
+wxz-l4:1533729:1533779 [4] NCCL INFO TOPO/NET : Importing network plugins to topology
+wxz-l4:1533729:1533779 [4] NCCL INFO Topology detection: network path (name = ens7) /sys/devices/pci0000:00/0000:00:07.0/virtio0 is not a PCI device (virtio). Attaching to first CPU
+wxz-l4:1533729:1533779 [4] NCCL INFO ncclTopoPopulateNics : Filled ens7 in topo with pciPath=/sys/devices/pci0000:00/0000:00:07.0/virtio0 keep=1 coll=(null)
+wxz-l4:1533729:1533775 [0] NCCL INFO Topology detection : could not read /sys/devices/pci0000:00/0000:00:03.0/max_link_speed, ignoring
+wxz-l4:1533729:1533775 [0] NCCL INFO Topology detection : could not read /sys/devices/pci0000:00/0000:00:03.0/../max_link_speed, ignoring
+wxz-l4:1533729:1533775 [0] NCCL INFO Topology detection : could not read /sys/devices/pci0000:00/0000:00:03.0/max_link_width, ignoring
+wxz-l4:1533729:1533775 [0] NCCL INFO Topology detection : could not read /sys/devices/pci0000:00/0000:00:03.0/../max_link_width, ignoring
+wxz-l4:1533729:1533775 [0] NCCL INFO TOPO/NET : Importing network plugins to topology
+wxz-l4:1533729:1533775 [0] NCCL INFO Topology detection: network path (name = ens7) /sys/devices/pci0000:00/0000:00:07.0/virtio0 is not a PCI device (virtio). Attaching to first CPU
+wxz-l4:1533729:1533775 [0] NCCL INFO ncclTopoPopulateNics : Filled ens7 in topo with pciPath=/sys/devices/pci0000:00/0000:00:07.0/virtio0 keep=1 coll=(null)
+wxz-l4:1533729:1533776 [1] NCCL INFO Topology detection : could not read /sys/devices/pci0000:00/0000:00:04.0/max_link_speed, ignoring
+wxz-l4:1533729:1533776 [1] NCCL INFO Topology detection : could not read /sys/devices/pci0000:00/0000:00:04.0/../max_link_speed, ignoring
+wxz-l4:1533729:1533776 [1] NCCL INFO Topology detection : could not read /sys/devices/pci0000:00/0000:00:04.0/max_link_width, ignoring
+wxz-l4:1533729:1533776 [1] NCCL INFO Topology detection : could not read /sys/devices/pci0000:00/0000:00:04.0/../max_link_width, ignoring
+wxz-l4:1533729:1533776 [1] NCCL INFO TOPO/NET : Importing network plugins to topology
+wxz-l4:1533729:1533776 [1] NCCL INFO Topology detection: network path (name = ens7) /sys/devices/pci0000:00/0000:00:07.0/virtio0 is not a PCI device (virtio). Attaching to first CPU
+wxz-l4:1533729:1533776 [1] NCCL INFO ncclTopoPopulateNics : Filled ens7 in topo with pciPath=/sys/devices/pci0000:00/0000:00:07.0/virtio0 keep=1 coll=(null)
+wxz-l4:1533729:1533777 [2] NCCL INFO Topology detection : could not read /sys/devices/pci0000:00/0000:00:05.0/max_link_speed, ignoring
+wxz-l4:1533729:1533777 [2] NCCL INFO Topology detection : could not read /sys/devices/pci0000:00/0000:00:05.0/../max_link_speed, ignoring
+wxz-l4:1533729:1533777 [2] NCCL INFO Topology detection : could not read /sys/devices/pci0000:00/0000:00:05.0/max_link_width, ignoring
+wxz-l4:1533729:1533777 [2] NCCL INFO Topology detection : could not read /sys/devices/pci0000:00/0000:00:05.0/../max_link_width, ignoring
+wxz-l4:1533729:1533777 [2] NCCL INFO TOPO/NET : Importing network plugins to topology
+wxz-l4:1533729:1533777 [2] NCCL INFO Topology detection: network path (name = ens7) /sys/devices/pci0000:00/0000:00:07.0/virtio0 is not a PCI device (virtio). Attaching to first CPU
+wxz-l4:1533729:1533777 [2] NCCL INFO ncclTopoPopulateNics : Filled ens7 in topo with pciPath=/sys/devices/pci0000:00/0000:00:07.0/virtio0 keep=1 coll=(null)
+wxz-l4:1533729:1533782 [7] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533782 [7] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533782 [7] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533782 [7] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533782 [7] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533782 [7] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533782 [7] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533782 [7] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533778 [3] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533778 [3] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533778 [3] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533778 [3] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533778 [3] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533778 [3] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533778 [3] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533778 [3] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533781 [6] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533781 [6] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533781 [6] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533781 [6] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533781 [6] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533781 [6] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533781 [6] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533781 [6] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533780 [5] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533780 [5] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533780 [5] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533780 [5] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533780 [5] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533780 [5] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533780 [5] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533780 [5] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533777 [2] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533777 [2] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533777 [2] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533777 [2] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533777 [2] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533777 [2] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533777 [2] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533777 [2] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533779 [4] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533779 [4] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533779 [4] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533779 [4] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533779 [4] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533779 [4] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533779 [4] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533779 [4] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533778 [3] NCCL INFO === System : maxBw 12.0 totalBw 12.0 ===
+wxz-l4:1533729:1533778 [3] NCCL INFO CPU/0-0 (1/1/2)
+wxz-l4:1533729:1533778 [3] NCCL INFO + PCI[5000.0] - NIC/0-0
+wxz-l4:1533729:1533778 [3] NCCL INFO                 + NET[1.2] - NET/0-0 (0/0/0/1.250000)
+wxz-l4:1533729:1533778 [3] NCCL INFO                 + NET[1.2] - NET/0-0 (0/0/0/1.250000)
+wxz-l4:1533729:1533778 [3] NCCL INFO + PCI[12.0] - GPU/0-30 (0)
+wxz-l4:1533729:1533778 [3] NCCL INFO + PCI[12.0] - GPU/0-40 (1)
+wxz-l4:1533729:1533778 [3] NCCL INFO + PCI[12.0] - GPU/0-50 (2)
+wxz-l4:1533729:1533778 [3] NCCL INFO + PCI[12.0] - GPU/0-60 (3)
+wxz-l4:1533729:1533778 [3] NCCL INFO + SYS[10.0] - CPU/0-1
+wxz-l4:1533729:1533778 [3] NCCL INFO CPU/0-1 (1/1/2)
+wxz-l4:1533729:1533778 [3] NCCL INFO + PCI[12.0] - GPU/0-80000 (4)
+wxz-l4:1533729:1533778 [3] NCCL INFO + PCI[12.0] - GPU/0-80010 (5)
+wxz-l4:1533729:1533778 [3] NCCL INFO + PCI[12.0] - GPU/0-80020 (6)
+wxz-l4:1533729:1533778 [3] NCCL INFO + PCI[12.0] - GPU/0-80030 (7)
+wxz-l4:1533729:1533778 [3] NCCL INFO + SYS[10.0] - CPU/0-0
+wxz-l4:1533729:1533778 [3] NCCL INFO ==========================================
+wxz-l4:1533729:1533778 [3] NCCL INFO GPU/0-30 :GPU/0-30 (0/5000.0/LOC) GPU/0-40 (2/12.0/PHB) GPU/0-50 (2/12.0/PHB) GPU/0-60 (2/12.0/PHB) GPU/0-80000 (3/10.0/SYS) GPU/0-80010 (3/10.0/SYS) GPU/0-80020 (3/10.0/SYS) GPU/0-80030 (3/10.0/SYS) CPU/0-0 (1/12.0/PHB) CPU/0-1 (2/10.0/SYS) NET/0-0 (3/1.2/PHB) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533778 [3] NCCL INFO GPU/0-40 :GPU/0-30 (2/12.0/PHB) GPU/0-40 (0/5000.0/LOC) GPU/0-50 (2/12.0/PHB) GPU/0-60 (2/12.0/PHB) GPU/0-80000 (3/10.0/SYS) GPU/0-80010 (3/10.0/SYS) GPU/0-80020 (3/10.0/SYS) GPU/0-80030 (3/10.0/SYS) CPU/0-0 (1/12.0/PHB) CPU/0-1 (2/10.0/SYS) NET/0-0 (3/1.2/PHB) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533778 [3] NCCL INFO GPU/0-50 :GPU/0-30 (2/12.0/PHB) GPU/0-40 (2/12.0/PHB) GPU/0-50 (0/5000.0/LOC) GPU/0-60 (2/12.0/PHB) GPU/0-80000 (3/10.0/SYS) GPU/0-80010 (3/10.0/SYS) GPU/0-80020 (3/10.0/SYS) GPU/0-80030 (3/10.0/SYS) CPU/0-0 (1/12.0/PHB) CPU/0-1 (2/10.0/SYS) NET/0-0 (3/1.2/PHB) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533778 [3] NCCL INFO GPU/0-60 :GPU/0-30 (2/12.0/PHB) GPU/0-40 (2/12.0/PHB) GPU/0-50 (2/12.0/PHB) GPU/0-60 (0/5000.0/LOC) GPU/0-80000 (3/10.0/SYS) GPU/0-80010 (3/10.0/SYS) GPU/0-80020 (3/10.0/SYS) GPU/0-80030 (3/10.0/SYS) CPU/0-0 (1/12.0/PHB) CPU/0-1 (2/10.0/SYS) NET/0-0 (3/1.2/PHB) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533778 [3] NCCL INFO GPU/0-80000 :GPU/0-30 (3/10.0/SYS) GPU/0-40 (3/10.0/SYS) GPU/0-50 (3/10.0/SYS) GPU/0-60 (3/10.0/SYS) GPU/0-80000 (0/5000.0/LOC) GPU/0-80010 (2/12.0/PHB) GPU/0-80020 (2/12.0/PHB) GPU/0-80030 (2/12.0/PHB) CPU/0-0 (2/10.0/SYS) CPU/0-1 (1/12.0/PHB) NET/0-0 (4/1.2/SYS) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533778 [3] NCCL INFO GPU/0-80010 :GPU/0-30 (3/10.0/SYS) GPU/0-40 (3/10.0/SYS) GPU/0-50 (3/10.0/SYS) GPU/0-60 (3/10.0/SYS) GPU/0-80000 (2/12.0/PHB) GPU/0-80010 (0/5000.0/LOC) GPU/0-80020 (2/12.0/PHB) GPU/0-80030 (2/12.0/PHB) CPU/0-0 (2/10.0/SYS) CPU/0-1 (1/12.0/PHB) NET/0-0 (4/1.2/SYS) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533778 [3] NCCL INFO GPU/0-80020 :GPU/0-30 (3/10.0/SYS) GPU/0-40 (3/10.0/SYS) GPU/0-50 (3/10.0/SYS) GPU/0-60 (3/10.0/SYS) GPU/0-80000 (2/12.0/PHB) GPU/0-80010 (2/12.0/PHB) GPU/0-80020 (0/5000.0/LOC) GPU/0-80030 (2/12.0/PHB) CPU/0-0 (2/10.0/SYS) CPU/0-1 (1/12.0/PHB) NET/0-0 (4/1.2/SYS) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533778 [3] NCCL INFO GPU/0-80030 :GPU/0-30 (3/10.0/SYS) GPU/0-40 (3/10.0/SYS) GPU/0-50 (3/10.0/SYS) GPU/0-60 (3/10.0/SYS) GPU/0-80000 (2/12.0/PHB) GPU/0-80010 (2/12.0/PHB) GPU/0-80020 (2/12.0/PHB) GPU/0-80030 (0/5000.0/LOC) CPU/0-0 (2/10.0/SYS) CPU/0-1 (1/12.0/PHB) NET/0-0 (4/1.2/SYS) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533778 [3] NCCL INFO NET/0-0 :GPU/0-30 (3/1.2/PHB) GPU/0-40 (3/1.2/PHB) GPU/0-50 (3/1.2/PHB) GPU/0-60 (3/1.2/PHB) GPU/0-80000 (4/1.2/SYS) GPU/0-80010 (4/1.2/SYS) GPU/0-80020 (4/1.2/SYS) GPU/0-80030 (4/1.2/SYS) CPU/0-0 (2/1.2/PHB) CPU/0-1 (3/1.2/SYS) NET/0-0 (0/5000.0/LOC) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533778 [3] NCCL INFO NET/0-0 :GPU/0-30 (3/1.2/PHB) GPU/0-40 (3/1.2/PHB) GPU/0-50 (3/1.2/PHB) GPU/0-60 (3/1.2/PHB) GPU/0-80000 (4/1.2/SYS) GPU/0-80010 (4/1.2/SYS) GPU/0-80020 (4/1.2/SYS) GPU/0-80030 (4/1.2/SYS) CPU/0-0 (2/1.2/PHB) CPU/0-1 (3/1.2/SYS) NET/0-0 (0/5000.0/LOC) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533778 [3] NCCL INFO ncclTopoGetCpuAffinity: Affinity for GPU 3 is empty, ignoring. (GPU affinity = 0-23,48-71 ; CPU affinity = 47).
+wxz-l4:1533729:1533778 [3] NCCL INFO NVLS multicast support is not available on dev 3 (NVLS_NCHANNELS 0)
+wxz-l4:1533729:1533781 [6] NCCL INFO === System : maxBw 12.0 totalBw 12.0 ===
+wxz-l4:1533729:1533781 [6] NCCL INFO CPU/0-0 (1/1/2)
+wxz-l4:1533729:1533781 [6] NCCL INFO + PCI[5000.0] - NIC/0-0
+wxz-l4:1533729:1533781 [6] NCCL INFO                 + NET[1.2] - NET/0-0 (0/0/0/1.250000)
+wxz-l4:1533729:1533781 [6] NCCL INFO                 + NET[1.2] - NET/0-0 (0/0/0/1.250000)
+wxz-l4:1533729:1533781 [6] NCCL INFO + PCI[12.0] - GPU/0-30 (0)
+wxz-l4:1533729:1533781 [6] NCCL INFO + PCI[12.0] - GPU/0-40 (1)
+wxz-l4:1533729:1533781 [6] NCCL INFO + PCI[12.0] - GPU/0-50 (2)
+wxz-l4:1533729:1533781 [6] NCCL INFO + PCI[12.0] - GPU/0-60 (3)
+wxz-l4:1533729:1533781 [6] NCCL INFO + SYS[10.0] - CPU/0-1
+wxz-l4:1533729:1533781 [6] NCCL INFO CPU/0-1 (1/1/2)
+wxz-l4:1533729:1533781 [6] NCCL INFO + PCI[12.0] - GPU/0-80000 (4)
+wxz-l4:1533729:1533781 [6] NCCL INFO + PCI[12.0] - GPU/0-80010 (5)
+wxz-l4:1533729:1533781 [6] NCCL INFO + PCI[12.0] - GPU/0-80020 (6)
+wxz-l4:1533729:1533781 [6] NCCL INFO + PCI[12.0] - GPU/0-80030 (7)
+wxz-l4:1533729:1533781 [6] NCCL INFO + SYS[10.0] - CPU/0-0
+wxz-l4:1533729:1533781 [6] NCCL INFO ==========================================
+wxz-l4:1533729:1533781 [6] NCCL INFO GPU/0-30 :GPU/0-30 (0/5000.0/LOC) GPU/0-40 (2/12.0/PHB) GPU/0-50 (2/12.0/PHB) GPU/0-60 (2/12.0/PHB) GPU/0-80000 (3/10.0/SYS) GPU/0-80010 (3/10.0/SYS) GPU/0-80020 (3/10.0/SYS) GPU/0-80030 (3/10.0/SYS) CPU/0-0 (1/12.0/PHB) CPU/0-1 (2/10.0/SYS) NET/0-0 (3/1.2/PHB) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533781 [6] NCCL INFO GPU/0-40 :GPU/0-30 (2/12.0/PHB) GPU/0-40 (0/5000.0/LOC) GPU/0-50 (2/12.0/PHB) GPU/0-60 (2/12.0/PHB) GPU/0-80000 (3/10.0/SYS) GPU/0-80010 (3/10.0/SYS) GPU/0-80020 (3/10.0/SYS) GPU/0-80030 (3/10.0/SYS) CPU/0-0 (1/12.0/PHB) CPU/0-1 (2/10.0/SYS) NET/0-0 (3/1.2/PHB) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533781 [6] NCCL INFO GPU/0-50 :GPU/0-30 (2/12.0/PHB) GPU/0-40 (2/12.0/PHB) GPU/0-50 (0/5000.0/LOC) GPU/0-60 (2/12.0/PHB) GPU/0-80000 (3/10.0/SYS) GPU/0-80010 (3/10.0/SYS) GPU/0-80020 (3/10.0/SYS) GPU/0-80030 (3/10.0/SYS) CPU/0-0 (1/12.0/PHB) CPU/0-1 (2/10.0/SYS) NET/0-0 (3/1.2/PHB) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533781 [6] NCCL INFO GPU/0-60 :GPU/0-30 (2/12.0/PHB) GPU/0-40 (2/12.0/PHB) GPU/0-50 (2/12.0/PHB) GPU/0-60 (0/5000.0/LOC) GPU/0-80000 (3/10.0/SYS) GPU/0-80010 (3/10.0/SYS) GPU/0-80020 (3/10.0/SYS) GPU/0-80030 (3/10.0/SYS) CPU/0-0 (1/12.0/PHB) CPU/0-1 (2/10.0/SYS) NET/0-0 (3/1.2/PHB) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533781 [6] NCCL INFO GPU/0-80000 :GPU/0-30 (3/10.0/SYS) GPU/0-40 (3/10.0/SYS) GPU/0-50 (3/10.0/SYS) GPU/0-60 (3/10.0/SYS) GPU/0-80000 (0/5000.0/LOC) GPU/0-80010 (2/12.0/PHB) GPU/0-80020 (2/12.0/PHB) GPU/0-80030 (2/12.0/PHB) CPU/0-0 (2/10.0/SYS) CPU/0-1 (1/12.0/PHB) NET/0-0 (4/1.2/SYS) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533781 [6] NCCL INFO GPU/0-80010 :GPU/0-30 (3/10.0/SYS) GPU/0-40 (3/10.0/SYS) GPU/0-50 (3/10.0/SYS) GPU/0-60 (3/10.0/SYS) GPU/0-80000 (2/12.0/PHB) GPU/0-80010 (0/5000.0/LOC) GPU/0-80020 (2/12.0/PHB) GPU/0-80030 (2/12.0/PHB) CPU/0-0 (2/10.0/SYS) CPU/0-1 (1/12.0/PHB) NET/0-0 (4/1.2/SYS) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533781 [6] NCCL INFO GPU/0-80020 :GPU/0-30 (3/10.0/SYS) GPU/0-40 (3/10.0/SYS) GPU/0-50 (3/10.0/SYS) GPU/0-60 (3/10.0/SYS) GPU/0-80000 (2/12.0/PHB) GPU/0-80010 (2/12.0/PHB) GPU/0-80020 (0/5000.0/LOC) GPU/0-80030 (2/12.0/PHB) CPU/0-0 (2/10.0/SYS) CPU/0-1 (1/12.0/PHB) NET/0-0 (4/1.2/SYS) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533781 [6] NCCL INFO GPU/0-80030 :GPU/0-30 (3/10.0/SYS) GPU/0-40 (3/10.0/SYS) GPU/0-50 (3/10.0/SYS) GPU/0-60 (3/10.0/SYS) GPU/0-80000 (2/12.0/PHB) GPU/0-80010 (2/12.0/PHB) GPU/0-80020 (2/12.0/PHB) GPU/0-80030 (0/5000.0/LOC) CPU/0-0 (2/10.0/SYS) CPU/0-1 (1/12.0/PHB) NET/0-0 (4/1.2/SYS) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533781 [6] NCCL INFO NET/0-0 :GPU/0-30 (3/1.2/PHB) GPU/0-40 (3/1.2/PHB) GPU/0-50 (3/1.2/PHB) GPU/0-60 (3/1.2/PHB) GPU/0-80000 (4/1.2/SYS) GPU/0-80010 (4/1.2/SYS) GPU/0-80020 (4/1.2/SYS) GPU/0-80030 (4/1.2/SYS) CPU/0-0 (2/1.2/PHB) CPU/0-1 (3/1.2/SYS) NET/0-0 (0/5000.0/LOC) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533781 [6] NCCL INFO NET/0-0 :GPU/0-30 (3/1.2/PHB) GPU/0-40 (3/1.2/PHB) GPU/0-50 (3/1.2/PHB) GPU/0-60 (3/1.2/PHB) GPU/0-80000 (4/1.2/SYS) GPU/0-80010 (4/1.2/SYS) GPU/0-80020 (4/1.2/SYS) GPU/0-80030 (4/1.2/SYS) CPU/0-0 (2/1.2/PHB) CPU/0-1 (3/1.2/SYS) NET/0-0 (0/5000.0/LOC) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533781 [6] NCCL INFO ncclTopoGetCpuAffinity: Affinity for GPU 6 is 47. (GPU affinity = 24-47,72-95 ; CPU affinity = 47).
+wxz-l4:1533729:1533781 [6] NCCL INFO NVLS multicast support is not available on dev 6 (NVLS_NCHANNELS 0)
+wxz-l4:1533729:1533780 [5] NCCL INFO === System : maxBw 12.0 totalBw 12.0 ===
+wxz-l4:1533729:1533780 [5] NCCL INFO CPU/0-0 (1/1/2)
+wxz-l4:1533729:1533780 [5] NCCL INFO + PCI[5000.0] - NIC/0-0
+wxz-l4:1533729:1533780 [5] NCCL INFO                 + NET[1.2] - NET/0-0 (0/0/0/1.250000)
+wxz-l4:1533729:1533780 [5] NCCL INFO                 + NET[1.2] - NET/0-0 (0/0/0/1.250000)
+wxz-l4:1533729:1533780 [5] NCCL INFO + PCI[12.0] - GPU/0-30 (0)
+wxz-l4:1533729:1533780 [5] NCCL INFO + PCI[12.0] - GPU/0-40 (1)
+wxz-l4:1533729:1533780 [5] NCCL INFO + PCI[12.0] - GPU/0-50 (2)
+wxz-l4:1533729:1533780 [5] NCCL INFO + PCI[12.0] - GPU/0-60 (3)
+wxz-l4:1533729:1533780 [5] NCCL INFO + SYS[10.0] - CPU/0-1
+wxz-l4:1533729:1533780 [5] NCCL INFO CPU/0-1 (1/1/2)
+wxz-l4:1533729:1533780 [5] NCCL INFO + PCI[12.0] - GPU/0-80000 (4)
+wxz-l4:1533729:1533780 [5] NCCL INFO + PCI[12.0] - GPU/0-80010 (5)
+wxz-l4:1533729:1533780 [5] NCCL INFO + PCI[12.0] - GPU/0-80020 (6)
+wxz-l4:1533729:1533780 [5] NCCL INFO + PCI[12.0] - GPU/0-80030 (7)
+wxz-l4:1533729:1533780 [5] NCCL INFO + SYS[10.0] - CPU/0-0
+wxz-l4:1533729:1533780 [5] NCCL INFO ==========================================
+wxz-l4:1533729:1533780 [5] NCCL INFO GPU/0-30 :GPU/0-30 (0/5000.0/LOC) GPU/0-40 (2/12.0/PHB) GPU/0-50 (2/12.0/PHB) GPU/0-60 (2/12.0/PHB) GPU/0-80000 (3/10.0/SYS) GPU/0-80010 (3/10.0/SYS) GPU/0-80020 (3/10.0/SYS) GPU/0-80030 (3/10.0/SYS) CPU/0-0 (1/12.0/PHB) CPU/0-1 (2/10.0/SYS) NET/0-0 (3/1.2/PHB) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533780 [5] NCCL INFO GPU/0-40 :GPU/0-30 (2/12.0/PHB) GPU/0-40 (0/5000.0/LOC) GPU/0-50 (2/12.0/PHB) GPU/0-60 (2/12.0/PHB) GPU/0-80000 (3/10.0/SYS) GPU/0-80010 (3/10.0/SYS) GPU/0-80020 (3/10.0/SYS) GPU/0-80030 (3/10.0/SYS) CPU/0-0 (1/12.0/PHB) CPU/0-1 (2/10.0/SYS) NET/0-0 (3/1.2/PHB) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533780 [5] NCCL INFO GPU/0-50 :GPU/0-30 (2/12.0/PHB) GPU/0-40 (2/12.0/PHB) GPU/0-50 (0/5000.0/LOC) GPU/0-60 (2/12.0/PHB) GPU/0-80000 (3/10.0/SYS) GPU/0-80010 (3/10.0/SYS) GPU/0-80020 (3/10.0/SYS) GPU/0-80030 (3/10.0/SYS) CPU/0-0 (1/12.0/PHB) CPU/0-1 (2/10.0/SYS) NET/0-0 (3/1.2/PHB) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533780 [5] NCCL INFO GPU/0-60 :GPU/0-30 (2/12.0/PHB) GPU/0-40 (2/12.0/PHB) GPU/0-50 (2/12.0/PHB) GPU/0-60 (0/5000.0/LOC) GPU/0-80000 (3/10.0/SYS) GPU/0-80010 (3/10.0/SYS) GPU/0-80020 (3/10.0/SYS) GPU/0-80030 (3/10.0/SYS) CPU/0-0 (1/12.0/PHB) CPU/0-1 (2/10.0/SYS) NET/0-0 (3/1.2/PHB) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533780 [5] NCCL INFO GPU/0-80000 :GPU/0-30 (3/10.0/SYS) GPU/0-40 (3/10.0/SYS) GPU/0-50 (3/10.0/SYS) GPU/0-60 (3/10.0/SYS) GPU/0-80000 (0/5000.0/LOC) GPU/0-80010 (2/12.0/PHB) GPU/0-80020 (2/12.0/PHB) GPU/0-80030 (2/12.0/PHB) CPU/0-0 (2/10.0/SYS) CPU/0-1 (1/12.0/PHB) NET/0-0 (4/1.2/SYS) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533780 [5] NCCL INFO GPU/0-80010 :GPU/0-30 (3/10.0/SYS) GPU/0-40 (3/10.0/SYS) GPU/0-50 (3/10.0/SYS) GPU/0-60 (3/10.0/SYS) GPU/0-80000 (2/12.0/PHB) GPU/0-80010 (0/5000.0/LOC) GPU/0-80020 (2/12.0/PHB) GPU/0-80030 (2/12.0/PHB) CPU/0-0 (2/10.0/SYS) CPU/0-1 (1/12.0/PHB) NET/0-0 (4/1.2/SYS) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533780 [5] NCCL INFO GPU/0-80020 :GPU/0-30 (3/10.0/SYS) GPU/0-40 (3/10.0/SYS) GPU/0-50 (3/10.0/SYS) GPU/0-60 (3/10.0/SYS) GPU/0-80000 (2/12.0/PHB) GPU/0-80010 (2/12.0/PHB) GPU/0-80020 (0/5000.0/LOC) GPU/0-80030 (2/12.0/PHB) CPU/0-0 (2/10.0/SYS) CPU/0-1 (1/12.0/PHB) NET/0-0 (4/1.2/SYS) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533780 [5] NCCL INFO GPU/0-80030 :GPU/0-30 (3/10.0/SYS) GPU/0-40 (3/10.0/SYS) GPU/0-50 (3/10.0/SYS) GPU/0-60 (3/10.0/SYS) GPU/0-80000 (2/12.0/PHB) GPU/0-80010 (2/12.0/PHB) GPU/0-80020 (2/12.0/PHB) GPU/0-80030 (0/5000.0/LOC) CPU/0-0 (2/10.0/SYS) CPU/0-1 (1/12.0/PHB) NET/0-0 (4/1.2/SYS) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533780 [5] NCCL INFO NET/0-0 :GPU/0-30 (3/1.2/PHB) GPU/0-40 (3/1.2/PHB) GPU/0-50 (3/1.2/PHB) GPU/0-60 (3/1.2/PHB) GPU/0-80000 (4/1.2/SYS) GPU/0-80010 (4/1.2/SYS) GPU/0-80020 (4/1.2/SYS) GPU/0-80030 (4/1.2/SYS) CPU/0-0 (2/1.2/PHB) CPU/0-1 (3/1.2/SYS) NET/0-0 (0/5000.0/LOC) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533780 [5] NCCL INFO NET/0-0 :GPU/0-30 (3/1.2/PHB) GPU/0-40 (3/1.2/PHB) GPU/0-50 (3/1.2/PHB) GPU/0-60 (3/1.2/PHB) GPU/0-80000 (4/1.2/SYS) GPU/0-80010 (4/1.2/SYS) GPU/0-80020 (4/1.2/SYS) GPU/0-80030 (4/1.2/SYS) CPU/0-0 (2/1.2/PHB) CPU/0-1 (3/1.2/SYS) NET/0-0 (0/5000.0/LOC) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533780 [5] NCCL INFO ncclTopoGetCpuAffinity: Affinity for GPU 5 is 47. (GPU affinity = 24-47,72-95 ; CPU affinity = 47).
+wxz-l4:1533729:1533780 [5] NCCL INFO NVLS multicast support is not available on dev 5 (NVLS_NCHANNELS 0)
+wxz-l4:1533729:1533775 [0] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533775 [0] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533775 [0] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533775 [0] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533775 [0] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533775 [0] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533775 [0] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533775 [0] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533776 [1] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533776 [1] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533776 [1] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533776 [1] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533776 [1] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533776 [1] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533776 [1] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533776 [1] NCCL INFO KV Convert to int : could not find value of '' in dictionary, falling back to 60
+wxz-l4:1533729:1533777 [2] NCCL INFO === System : maxBw 12.0 totalBw 12.0 ===
+wxz-l4:1533729:1533777 [2] NCCL INFO CPU/0-0 (1/1/2)
+wxz-l4:1533729:1533777 [2] NCCL INFO + PCI[5000.0] - NIC/0-0
+wxz-l4:1533729:1533777 [2] NCCL INFO                 + NET[1.2] - NET/0-0 (0/0/0/1.250000)
+wxz-l4:1533729:1533777 [2] NCCL INFO                 + NET[1.2] - NET/0-0 (0/0/0/1.250000)
+wxz-l4:1533729:1533777 [2] NCCL INFO + PCI[12.0] - GPU/0-30 (0)
+wxz-l4:1533729:1533777 [2] NCCL INFO + PCI[12.0] - GPU/0-40 (1)
+wxz-l4:1533729:1533777 [2] NCCL INFO + PCI[12.0] - GPU/0-50 (2)
+wxz-l4:1533729:1533777 [2] NCCL INFO + PCI[12.0] - GPU/0-60 (3)
+wxz-l4:1533729:1533777 [2] NCCL INFO + SYS[10.0] - CPU/0-1
+wxz-l4:1533729:1533777 [2] NCCL INFO CPU/0-1 (1/1/2)
+wxz-l4:1533729:1533777 [2] NCCL INFO + PCI[12.0] - GPU/0-80000 (4)
+wxz-l4:1533729:1533777 [2] NCCL INFO + PCI[12.0] - GPU/0-80010 (5)
+wxz-l4:1533729:1533777 [2] NCCL INFO + PCI[12.0] - GPU/0-80020 (6)
+wxz-l4:1533729:1533777 [2] NCCL INFO + PCI[12.0] - GPU/0-80030 (7)
+wxz-l4:1533729:1533777 [2] NCCL INFO + SYS[10.0] - CPU/0-0
+wxz-l4:1533729:1533777 [2] NCCL INFO ==========================================
+wxz-l4:1533729:1533777 [2] NCCL INFO GPU/0-30 :GPU/0-30 (0/5000.0/LOC) GPU/0-40 (2/12.0/PHB) GPU/0-50 (2/12.0/PHB) GPU/0-60 (2/12.0/PHB) GPU/0-80000 (3/10.0/SYS) GPU/0-80010 (3/10.0/SYS) GPU/0-80020 (3/10.0/SYS) GPU/0-80030 (3/10.0/SYS) CPU/0-0 (1/12.0/PHB) CPU/0-1 (2/10.0/SYS) NET/0-0 (3/1.2/PHB) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533777 [2] NCCL INFO GPU/0-40 :GPU/0-30 (2/12.0/PHB) GPU/0-40 (0/5000.0/LOC) GPU/0-50 (2/12.0/PHB) GPU/0-60 (2/12.0/PHB) GPU/0-80000 (3/10.0/SYS) GPU/0-80010 (3/10.0/SYS) GPU/0-80020 (3/10.0/SYS) GPU/0-80030 (3/10.0/SYS) CPU/0-0 (1/12.0/PHB) CPU/0-1 (2/10.0/SYS) NET/0-0 (3/1.2/PHB) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533777 [2] NCCL INFO GPU/0-50 :GPU/0-30 (2/12.0/PHB) GPU/0-40 (2/12.0/PHB) GPU/0-50 (0/5000.0/LOC) GPU/0-60 (2/12.0/PHB) GPU/0-80000 (3/10.0/SYS) GPU/0-80010 (3/10.0/SYS) GPU/0-80020 (3/10.0/SYS) GPU/0-80030 (3/10.0/SYS) CPU/0-0 (1/12.0/PHB) CPU/0-1 (2/10.0/SYS) NET/0-0 (3/1.2/PHB) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533777 [2] NCCL INFO GPU/0-60 :GPU/0-30 (2/12.0/PHB) GPU/0-40 (2/12.0/PHB) GPU/0-50 (2/12.0/PHB) GPU/0-60 (0/5000.0/LOC) GPU/0-80000 (3/10.0/SYS) GPU/0-80010 (3/10.0/SYS) GPU/0-80020 (3/10.0/SYS) GPU/0-80030 (3/10.0/SYS) CPU/0-0 (1/12.0/PHB) CPU/0-1 (2/10.0/SYS) NET/0-0 (3/1.2/PHB) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533777 [2] NCCL INFO GPU/0-80000 :GPU/0-30 (3/10.0/SYS) GPU/0-40 (3/10.0/SYS) GPU/0-50 (3/10.0/SYS) GPU/0-60 (3/10.0/SYS) GPU/0-80000 (0/5000.0/LOC) GPU/0-80010 (2/12.0/PHB) GPU/0-80020 (2/12.0/PHB) GPU/0-80030 (2/12.0/PHB) CPU/0-0 (2/10.0/SYS) CPU/0-1 (1/12.0/PHB) NET/0-0 (4/1.2/SYS) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533777 [2] NCCL INFO GPU/0-80010 :GPU/0-30 (3/10.0/SYS) GPU/0-40 (3/10.0/SYS) GPU/0-50 (3/10.0/SYS) GPU/0-60 (3/10.0/SYS) GPU/0-80000 (2/12.0/PHB) GPU/0-80010 (0/5000.0/LOC) GPU/0-80020 (2/12.0/PHB) GPU/0-80030 (2/12.0/PHB) CPU/0-0 (2/10.0/SYS) CPU/0-1 (1/12.0/PHB) NET/0-0 (4/1.2/SYS) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533777 [2] NCCL INFO GPU/0-80020 :GPU/0-30 (3/10.0/SYS) GPU/0-40 (3/10.0/SYS) GPU/0-50 (3/10.0/SYS) GPU/0-60 (3/10.0/SYS) GPU/0-80000 (2/12.0/PHB) GPU/0-80010 (2/12.0/PHB) GPU/0-80020 (0/5000.0/LOC) GPU/0-80030 (2/12.0/PHB) CPU/0-0 (2/10.0/SYS) CPU/0-1 (1/12.0/PHB) NET/0-0 (4/1.2/SYS) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533777 [2] NCCL INFO GPU/0-80030 :GPU/0-30 (3/10.0/SYS) GPU/0-40 (3/10.0/SYS) GPU/0-50 (3/10.0/SYS) GPU/0-60 (3/10.0/SYS) GPU/0-80000 (2/12.0/PHB) GPU/0-80010 (2/12.0/PHB) GPU/0-80020 (2/12.0/PHB) GPU/0-80030 (0/5000.0/LOC) CPU/0-0 (2/10.0/SYS) CPU/0-1 (1/12.0/PHB) NET/0-0 (4/1.2/SYS) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533777 [2] NCCL INFO NET/0-0 :GPU/0-30 (3/1.2/PHB) GPU/0-40 (3/1.2/PHB) GPU/0-50 (3/1.2/PHB) GPU/0-60 (3/1.2/PHB) GPU/0-80000 (4/1.2/SYS) GPU/0-80010 (4/1.2/SYS) GPU/0-80020 (4/1.2/SYS) GPU/0-80030 (4/1.2/SYS) CPU/0-0 (2/1.2/PHB) CPU/0-1 (3/1.2/SYS) NET/0-0 (0/5000.0/LOC) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533777 [2] NCCL INFO NET/0-0 :GPU/0-30 (3/1.2/PHB) GPU/0-40 (3/1.2/PHB) GPU/0-50 (3/1.2/PHB) GPU/0-60 (3/1.2/PHB) GPU/0-80000 (4/1.2/SYS) GPU/0-80010 (4/1.2/SYS) GPU/0-80020 (4/1.2/SYS) GPU/0-80030 (4/1.2/SYS) CPU/0-0 (2/1.2/PHB) CPU/0-1 (3/1.2/SYS) NET/0-0 (0/5000.0/LOC) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533777 [2] NCCL INFO ncclTopoGetCpuAffinity: Affinity for GPU 2 is empty, ignoring. (GPU affinity = 0-23,48-71 ; CPU affinity = 47).
+wxz-l4:1533729:1533777 [2] NCCL INFO NVLS multicast support is not available on dev 2 (NVLS_NCHANNELS 0)
+wxz-l4:1533729:1533779 [4] NCCL INFO === System : maxBw 12.0 totalBw 12.0 ===
+wxz-l4:1533729:1533779 [4] NCCL INFO CPU/0-0 (1/1/2)
+wxz-l4:1533729:1533779 [4] NCCL INFO + PCI[5000.0] - NIC/0-0
+wxz-l4:1533729:1533779 [4] NCCL INFO                 + NET[1.2] - NET/0-0 (0/0/0/1.250000)
+wxz-l4:1533729:1533779 [4] NCCL INFO                 + NET[1.2] - NET/0-0 (0/0/0/1.250000)
+wxz-l4:1533729:1533779 [4] NCCL INFO + PCI[12.0] - GPU/0-30 (0)
+wxz-l4:1533729:1533779 [4] NCCL INFO + PCI[12.0] - GPU/0-40 (1)
+wxz-l4:1533729:1533779 [4] NCCL INFO + PCI[12.0] - GPU/0-50 (2)
+wxz-l4:1533729:1533779 [4] NCCL INFO + PCI[12.0] - GPU/0-60 (3)
+wxz-l4:1533729:1533779 [4] NCCL INFO + SYS[10.0] - CPU/0-1
+wxz-l4:1533729:1533779 [4] NCCL INFO CPU/0-1 (1/1/2)
+wxz-l4:1533729:1533779 [4] NCCL INFO + PCI[12.0] - GPU/0-80000 (4)
+wxz-l4:1533729:1533779 [4] NCCL INFO + PCI[12.0] - GPU/0-80010 (5)
+wxz-l4:1533729:1533779 [4] NCCL INFO + PCI[12.0] - GPU/0-80020 (6)
+wxz-l4:1533729:1533779 [4] NCCL INFO + PCI[12.0] - GPU/0-80030 (7)
+wxz-l4:1533729:1533779 [4] NCCL INFO + SYS[10.0] - CPU/0-0
+wxz-l4:1533729:1533779 [4] NCCL INFO ==========================================
+wxz-l4:1533729:1533779 [4] NCCL INFO GPU/0-30 :GPU/0-30 (0/5000.0/LOC) GPU/0-40 (2/12.0/PHB) GPU/0-50 (2/12.0/PHB) GPU/0-60 (2/12.0/PHB) GPU/0-80000 (3/10.0/SYS) GPU/0-80010 (3/10.0/SYS) GPU/0-80020 (3/10.0/SYS) GPU/0-80030 (3/10.0/SYS) CPU/0-0 (1/12.0/PHB) CPU/0-1 (2/10.0/SYS) NET/0-0 (3/1.2/PHB) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533779 [4] NCCL INFO GPU/0-40 :GPU/0-30 (2/12.0/PHB) GPU/0-40 (0/5000.0/LOC) GPU/0-50 (2/12.0/PHB) GPU/0-60 (2/12.0/PHB) GPU/0-80000 (3/10.0/SYS) GPU/0-80010 (3/10.0/SYS) GPU/0-80020 (3/10.0/SYS) GPU/0-80030 (3/10.0/SYS) CPU/0-0 (1/12.0/PHB) CPU/0-1 (2/10.0/SYS) NET/0-0 (3/1.2/PHB) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533779 [4] NCCL INFO GPU/0-50 :GPU/0-30 (2/12.0/PHB) GPU/0-40 (2/12.0/PHB) GPU/0-50 (0/5000.0/LOC) GPU/0-60 (2/12.0/PHB) GPU/0-80000 (3/10.0/SYS) GPU/0-80010 (3/10.0/SYS) GPU/0-80020 (3/10.0/SYS) GPU/0-80030 (3/10.0/SYS) CPU/0-0 (1/12.0/PHB) CPU/0-1 (2/10.0/SYS) NET/0-0 (3/1.2/PHB) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533779 [4] NCCL INFO GPU/0-60 :GPU/0-30 (2/12.0/PHB) GPU/0-40 (2/12.0/PHB) GPU/0-50 (2/12.0/PHB) GPU/0-60 (0/5000.0/LOC) GPU/0-80000 (3/10.0/SYS) GPU/0-80010 (3/10.0/SYS) GPU/0-80020 (3/10.0/SYS) GPU/0-80030 (3/10.0/SYS) CPU/0-0 (1/12.0/PHB) CPU/0-1 (2/10.0/SYS) NET/0-0 (3/1.2/PHB) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533779 [4] NCCL INFO GPU/0-80000 :GPU/0-30 (3/10.0/SYS) GPU/0-40 (3/10.0/SYS) GPU/0-50 (3/10.0/SYS) GPU/0-60 (3/10.0/SYS) GPU/0-80000 (0/5000.0/LOC) GPU/0-80010 (2/12.0/PHB) GPU/0-80020 (2/12.0/PHB) GPU/0-80030 (2/12.0/PHB) CPU/0-0 (2/10.0/SYS) CPU/0-1 (1/12.0/PHB) NET/0-0 (4/1.2/SYS) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533779 [4] NCCL INFO GPU/0-80010 :GPU/0-30 (3/10.0/SYS) GPU/0-40 (3/10.0/SYS) GPU/0-50 (3/10.0/SYS) GPU/0-60 (3/10.0/SYS) GPU/0-80000 (2/12.0/PHB) GPU/0-80010 (0/5000.0/LOC) GPU/0-80020 (2/12.0/PHB) GPU/0-80030 (2/12.0/PHB) CPU/0-0 (2/10.0/SYS) CPU/0-1 (1/12.0/PHB) NET/0-0 (4/1.2/SYS) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533779 [4] NCCL INFO GPU/0-80020 :GPU/0-30 (3/10.0/SYS) GPU/0-40 (3/10.0/SYS) GPU/0-50 (3/10.0/SYS) GPU/0-60 (3/10.0/SYS) GPU/0-80000 (2/12.0/PHB) GPU/0-80010 (2/12.0/PHB) GPU/0-80020 (0/5000.0/LOC) GPU/0-80030 (2/12.0/PHB) CPU/0-0 (2/10.0/SYS) CPU/0-1 (1/12.0/PHB) NET/0-0 (4/1.2/SYS) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533779 [4] NCCL INFO GPU/0-80030 :GPU/0-30 (3/10.0/SYS) GPU/0-40 (3/10.0/SYS) GPU/0-50 (3/10.0/SYS) GPU/0-60 (3/10.0/SYS) GPU/0-80000 (2/12.0/PHB) GPU/0-80010 (2/12.0/PHB) GPU/0-80020 (2/12.0/PHB) GPU/0-80030 (0/5000.0/LOC) CPU/0-0 (2/10.0/SYS) CPU/0-1 (1/12.0/PHB) NET/0-0 (4/1.2/SYS) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533779 [4] NCCL INFO NET/0-0 :GPU/0-30 (3/1.2/PHB) GPU/0-40 (3/1.2/PHB) GPU/0-50 (3/1.2/PHB) GPU/0-60 (3/1.2/PHB) GPU/0-80000 (4/1.2/SYS) GPU/0-80010 (4/1.2/SYS) GPU/0-80020 (4/1.2/SYS) GPU/0-80030 (4/1.2/SYS) CPU/0-0 (2/1.2/PHB) CPU/0-1 (3/1.2/SYS) NET/0-0 (0/5000.0/LOC) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533779 [4] NCCL INFO NET/0-0 :GPU/0-30 (3/1.2/PHB) GPU/0-40 (3/1.2/PHB) GPU/0-50 (3/1.2/PHB) GPU/0-60 (3/1.2/PHB) GPU/0-80000 (4/1.2/SYS) GPU/0-80010 (4/1.2/SYS) GPU/0-80020 (4/1.2/SYS) GPU/0-80030 (4/1.2/SYS) CPU/0-0 (2/1.2/PHB) CPU/0-1 (3/1.2/SYS) NET/0-0 (0/5000.0/LOC) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533779 [4] NCCL INFO ncclTopoGetCpuAffinity: Affinity for GPU 4 is 47. (GPU affinity = 24-47,72-95 ; CPU affinity = 47).
+wxz-l4:1533729:1533779 [4] NCCL INFO NVLS multicast support is not available on dev 4 (NVLS_NCHANNELS 0)
+wxz-l4:1533729:1533782 [7] NCCL INFO === System : maxBw 12.0 totalBw 12.0 ===
+wxz-l4:1533729:1533782 [7] NCCL INFO CPU/0-0 (1/1/2)
+wxz-l4:1533729:1533782 [7] NCCL INFO + PCI[5000.0] - NIC/0-0
+wxz-l4:1533729:1533782 [7] NCCL INFO                 + NET[1.2] - NET/0-0 (0/0/0/1.250000)
+wxz-l4:1533729:1533782 [7] NCCL INFO                 + NET[1.2] - NET/0-0 (0/0/0/1.250000)
+wxz-l4:1533729:1533782 [7] NCCL INFO + PCI[12.0] - GPU/0-30 (0)
+wxz-l4:1533729:1533782 [7] NCCL INFO + PCI[12.0] - GPU/0-40 (1)
+wxz-l4:1533729:1533782 [7] NCCL INFO + PCI[12.0] - GPU/0-50 (2)
+wxz-l4:1533729:1533782 [7] NCCL INFO + PCI[12.0] - GPU/0-60 (3)
+wxz-l4:1533729:1533782 [7] NCCL INFO + SYS[10.0] - CPU/0-1
+wxz-l4:1533729:1533782 [7] NCCL INFO CPU/0-1 (1/1/2)
+wxz-l4:1533729:1533782 [7] NCCL INFO + PCI[12.0] - GPU/0-80000 (4)
+wxz-l4:1533729:1533782 [7] NCCL INFO + PCI[12.0] - GPU/0-80010 (5)
+wxz-l4:1533729:1533782 [7] NCCL INFO + PCI[12.0] - GPU/0-80020 (6)
+wxz-l4:1533729:1533782 [7] NCCL INFO + PCI[12.0] - GPU/0-80030 (7)
+wxz-l4:1533729:1533782 [7] NCCL INFO + SYS[10.0] - CPU/0-0
+wxz-l4:1533729:1533782 [7] NCCL INFO ==========================================
+wxz-l4:1533729:1533782 [7] NCCL INFO GPU/0-30 :GPU/0-30 (0/5000.0/LOC) GPU/0-40 (2/12.0/PHB) GPU/0-50 (2/12.0/PHB) GPU/0-60 (2/12.0/PHB) GPU/0-80000 (3/10.0/SYS) GPU/0-80010 (3/10.0/SYS) GPU/0-80020 (3/10.0/SYS) GPU/0-80030 (3/10.0/SYS) CPU/0-0 (1/12.0/PHB) CPU/0-1 (2/10.0/SYS) NET/0-0 (3/1.2/PHB) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533782 [7] NCCL INFO GPU/0-40 :GPU/0-30 (2/12.0/PHB) GPU/0-40 (0/5000.0/LOC) GPU/0-50 (2/12.0/PHB) GPU/0-60 (2/12.0/PHB) GPU/0-80000 (3/10.0/SYS) GPU/0-80010 (3/10.0/SYS) GPU/0-80020 (3/10.0/SYS) GPU/0-80030 (3/10.0/SYS) CPU/0-0 (1/12.0/PHB) CPU/0-1 (2/10.0/SYS) NET/0-0 (3/1.2/PHB) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533782 [7] NCCL INFO GPU/0-50 :GPU/0-30 (2/12.0/PHB) GPU/0-40 (2/12.0/PHB) GPU/0-50 (0/5000.0/LOC) GPU/0-60 (2/12.0/PHB) GPU/0-80000 (3/10.0/SYS) GPU/0-80010 (3/10.0/SYS) GPU/0-80020 (3/10.0/SYS) GPU/0-80030 (3/10.0/SYS) CPU/0-0 (1/12.0/PHB) CPU/0-1 (2/10.0/SYS) NET/0-0 (3/1.2/PHB) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533782 [7] NCCL INFO GPU/0-60 :GPU/0-30 (2/12.0/PHB) GPU/0-40 (2/12.0/PHB) GPU/0-50 (2/12.0/PHB) GPU/0-60 (0/5000.0/LOC) GPU/0-80000 (3/10.0/SYS) GPU/0-80010 (3/10.0/SYS) GPU/0-80020 (3/10.0/SYS) GPU/0-80030 (3/10.0/SYS) CPU/0-0 (1/12.0/PHB) CPU/0-1 (2/10.0/SYS) NET/0-0 (3/1.2/PHB) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533782 [7] NCCL INFO GPU/0-80000 :GPU/0-30 (3/10.0/SYS) GPU/0-40 (3/10.0/SYS) GPU/0-50 (3/10.0/SYS) GPU/0-60 (3/10.0/SYS) GPU/0-80000 (0/5000.0/LOC) GPU/0-80010 (2/12.0/PHB) GPU/0-80020 (2/12.0/PHB) GPU/0-80030 (2/12.0/PHB) CPU/0-0 (2/10.0/SYS) CPU/0-1 (1/12.0/PHB) NET/0-0 (4/1.2/SYS) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533782 [7] NCCL INFO GPU/0-80010 :GPU/0-30 (3/10.0/SYS) GPU/0-40 (3/10.0/SYS) GPU/0-50 (3/10.0/SYS) GPU/0-60 (3/10.0/SYS) GPU/0-80000 (2/12.0/PHB) GPU/0-80010 (0/5000.0/LOC) GPU/0-80020 (2/12.0/PHB) GPU/0-80030 (2/12.0/PHB) CPU/0-0 (2/10.0/SYS) CPU/0-1 (1/12.0/PHB) NET/0-0 (4/1.2/SYS) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533782 [7] NCCL INFO GPU/0-80020 :GPU/0-30 (3/10.0/SYS) GPU/0-40 (3/10.0/SYS) GPU/0-50 (3/10.0/SYS) GPU/0-60 (3/10.0/SYS) GPU/0-80000 (2/12.0/PHB) GPU/0-80010 (2/12.0/PHB) GPU/0-80020 (0/5000.0/LOC) GPU/0-80030 (2/12.0/PHB) CPU/0-0 (2/10.0/SYS) CPU/0-1 (1/12.0/PHB) NET/0-0 (4/1.2/SYS) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533782 [7] NCCL INFO GPU/0-80030 :GPU/0-30 (3/10.0/SYS) GPU/0-40 (3/10.0/SYS) GPU/0-50 (3/10.0/SYS) GPU/0-60 (3/10.0/SYS) GPU/0-80000 (2/12.0/PHB) GPU/0-80010 (2/12.0/PHB) GPU/0-80020 (2/12.0/PHB) GPU/0-80030 (0/5000.0/LOC) CPU/0-0 (2/10.0/SYS) CPU/0-1 (1/12.0/PHB) NET/0-0 (4/1.2/SYS) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533782 [7] NCCL INFO NET/0-0 :GPU/0-30 (3/1.2/PHB) GPU/0-40 (3/1.2/PHB) GPU/0-50 (3/1.2/PHB) GPU/0-60 (3/1.2/PHB) GPU/0-80000 (4/1.2/SYS) GPU/0-80010 (4/1.2/SYS) GPU/0-80020 (4/1.2/SYS) GPU/0-80030 (4/1.2/SYS) CPU/0-0 (2/1.2/PHB) CPU/0-1 (3/1.2/SYS) NET/0-0 (0/5000.0/LOC) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533782 [7] NCCL INFO NET/0-0 :GPU/0-30 (3/1.2/PHB) GPU/0-40 (3/1.2/PHB) GPU/0-50 (3/1.2/PHB) GPU/0-60 (3/1.2/PHB) GPU/0-80000 (4/1.2/SYS) GPU/0-80010 (4/1.2/SYS) GPU/0-80020 (4/1.2/SYS) GPU/0-80030 (4/1.2/SYS) CPU/0-0 (2/1.2/PHB) CPU/0-1 (3/1.2/SYS) NET/0-0 (0/5000.0/LOC) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533782 [7] NCCL INFO ncclTopoGetCpuAffinity: Affinity for GPU 7 is 47. (GPU affinity = 24-47,72-95 ; CPU affinity = 47).
+wxz-l4:1533729:1533782 [7] NCCL INFO NVLS multicast support is not available on dev 7 (NVLS_NCHANNELS 0)
+wxz-l4:1533729:1533775 [0] NCCL INFO === System : maxBw 12.0 totalBw 12.0 ===
+wxz-l4:1533729:1533775 [0] NCCL INFO CPU/0-0 (1/1/2)
+wxz-l4:1533729:1533775 [0] NCCL INFO + PCI[5000.0] - NIC/0-0
+wxz-l4:1533729:1533775 [0] NCCL INFO                 + NET[1.2] - NET/0-0 (0/0/0/1.250000)
+wxz-l4:1533729:1533775 [0] NCCL INFO                 + NET[1.2] - NET/0-0 (0/0/0/1.250000)
+wxz-l4:1533729:1533775 [0] NCCL INFO + PCI[12.0] - GPU/0-30 (0)
+wxz-l4:1533729:1533775 [0] NCCL INFO + PCI[12.0] - GPU/0-40 (1)
+wxz-l4:1533729:1533775 [0] NCCL INFO + PCI[12.0] - GPU/0-50 (2)
+wxz-l4:1533729:1533775 [0] NCCL INFO + PCI[12.0] - GPU/0-60 (3)
+wxz-l4:1533729:1533775 [0] NCCL INFO + SYS[10.0] - CPU/0-1
+wxz-l4:1533729:1533775 [0] NCCL INFO CPU/0-1 (1/1/2)
+wxz-l4:1533729:1533775 [0] NCCL INFO + PCI[12.0] - GPU/0-80000 (4)
+wxz-l4:1533729:1533775 [0] NCCL INFO + PCI[12.0] - GPU/0-80010 (5)
+wxz-l4:1533729:1533775 [0] NCCL INFO + PCI[12.0] - GPU/0-80020 (6)
+wxz-l4:1533729:1533775 [0] NCCL INFO + PCI[12.0] - GPU/0-80030 (7)
+wxz-l4:1533729:1533775 [0] NCCL INFO + SYS[10.0] - CPU/0-0
+wxz-l4:1533729:1533775 [0] NCCL INFO ==========================================
+wxz-l4:1533729:1533775 [0] NCCL INFO GPU/0-30 :GPU/0-30 (0/5000.0/LOC) GPU/0-40 (2/12.0/PHB) GPU/0-50 (2/12.0/PHB) GPU/0-60 (2/12.0/PHB) GPU/0-80000 (3/10.0/SYS) GPU/0-80010 (3/10.0/SYS) GPU/0-80020 (3/10.0/SYS) GPU/0-80030 (3/10.0/SYS) CPU/0-0 (1/12.0/PHB) CPU/0-1 (2/10.0/SYS) NET/0-0 (3/1.2/PHB) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533775 [0] NCCL INFO GPU/0-40 :GPU/0-30 (2/12.0/PHB) GPU/0-40 (0/5000.0/LOC) GPU/0-50 (2/12.0/PHB) GPU/0-60 (2/12.0/PHB) GPU/0-80000 (3/10.0/SYS) GPU/0-80010 (3/10.0/SYS) GPU/0-80020 (3/10.0/SYS) GPU/0-80030 (3/10.0/SYS) CPU/0-0 (1/12.0/PHB) CPU/0-1 (2/10.0/SYS) NET/0-0 (3/1.2/PHB) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533775 [0] NCCL INFO GPU/0-50 :GPU/0-30 (2/12.0/PHB) GPU/0-40 (2/12.0/PHB) GPU/0-50 (0/5000.0/LOC) GPU/0-60 (2/12.0/PHB) GPU/0-80000 (3/10.0/SYS) GPU/0-80010 (3/10.0/SYS) GPU/0-80020 (3/10.0/SYS) GPU/0-80030 (3/10.0/SYS) CPU/0-0 (1/12.0/PHB) CPU/0-1 (2/10.0/SYS) NET/0-0 (3/1.2/PHB) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533775 [0] NCCL INFO GPU/0-60 :GPU/0-30 (2/12.0/PHB) GPU/0-40 (2/12.0/PHB) GPU/0-50 (2/12.0/PHB) GPU/0-60 (0/5000.0/LOC) GPU/0-80000 (3/10.0/SYS) GPU/0-80010 (3/10.0/SYS) GPU/0-80020 (3/10.0/SYS) GPU/0-80030 (3/10.0/SYS) CPU/0-0 (1/12.0/PHB) CPU/0-1 (2/10.0/SYS) NET/0-0 (3/1.2/PHB) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533775 [0] NCCL INFO GPU/0-80000 :GPU/0-30 (3/10.0/SYS) GPU/0-40 (3/10.0/SYS) GPU/0-50 (3/10.0/SYS) GPU/0-60 (3/10.0/SYS) GPU/0-80000 (0/5000.0/LOC) GPU/0-80010 (2/12.0/PHB) GPU/0-80020 (2/12.0/PHB) GPU/0-80030 (2/12.0/PHB) CPU/0-0 (2/10.0/SYS) CPU/0-1 (1/12.0/PHB) NET/0-0 (4/1.2/SYS) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533775 [0] NCCL INFO GPU/0-80010 :GPU/0-30 (3/10.0/SYS) GPU/0-40 (3/10.0/SYS) GPU/0-50 (3/10.0/SYS) GPU/0-60 (3/10.0/SYS) GPU/0-80000 (2/12.0/PHB) GPU/0-80010 (0/5000.0/LOC) GPU/0-80020 (2/12.0/PHB) GPU/0-80030 (2/12.0/PHB) CPU/0-0 (2/10.0/SYS) CPU/0-1 (1/12.0/PHB) NET/0-0 (4/1.2/SYS) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533775 [0] NCCL INFO GPU/0-80020 :GPU/0-30 (3/10.0/SYS) GPU/0-40 (3/10.0/SYS) GPU/0-50 (3/10.0/SYS) GPU/0-60 (3/10.0/SYS) GPU/0-80000 (2/12.0/PHB) GPU/0-80010 (2/12.0/PHB) GPU/0-80020 (0/5000.0/LOC) GPU/0-80030 (2/12.0/PHB) CPU/0-0 (2/10.0/SYS) CPU/0-1 (1/12.0/PHB) NET/0-0 (4/1.2/SYS) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533775 [0] NCCL INFO GPU/0-80030 :GPU/0-30 (3/10.0/SYS) GPU/0-40 (3/10.0/SYS) GPU/0-50 (3/10.0/SYS) GPU/0-60 (3/10.0/SYS) GPU/0-80000 (2/12.0/PHB) GPU/0-80010 (2/12.0/PHB) GPU/0-80020 (2/12.0/PHB) GPU/0-80030 (0/5000.0/LOC) CPU/0-0 (2/10.0/SYS) CPU/0-1 (1/12.0/PHB) NET/0-0 (4/1.2/SYS) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533775 [0] NCCL INFO NET/0-0 :GPU/0-30 (3/1.2/PHB) GPU/0-40 (3/1.2/PHB) GPU/0-50 (3/1.2/PHB) GPU/0-60 (3/1.2/PHB) GPU/0-80000 (4/1.2/SYS) GPU/0-80010 (4/1.2/SYS) GPU/0-80020 (4/1.2/SYS) GPU/0-80030 (4/1.2/SYS) CPU/0-0 (2/1.2/PHB) CPU/0-1 (3/1.2/SYS) NET/0-0 (0/5000.0/LOC) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533775 [0] NCCL INFO NET/0-0 :GPU/0-30 (3/1.2/PHB) GPU/0-40 (3/1.2/PHB) GPU/0-50 (3/1.2/PHB) GPU/0-60 (3/1.2/PHB) GPU/0-80000 (4/1.2/SYS) GPU/0-80010 (4/1.2/SYS) GPU/0-80020 (4/1.2/SYS) GPU/0-80030 (4/1.2/SYS) CPU/0-0 (2/1.2/PHB) CPU/0-1 (3/1.2/SYS) NET/0-0 (0/5000.0/LOC) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533775 [0] NCCL INFO ncclTopoGetCpuAffinity: Affinity for GPU 0 is empty, ignoring. (GPU affinity = 0-23,48-71 ; CPU affinity = 47).
+wxz-l4:1533729:1533775 [0] NCCL INFO NVLS multicast support is not available on dev 0 (NVLS_NCHANNELS 0)
+wxz-l4:1533729:1533776 [1] NCCL INFO === System : maxBw 12.0 totalBw 12.0 ===
+wxz-l4:1533729:1533776 [1] NCCL INFO CPU/0-0 (1/1/2)
+wxz-l4:1533729:1533776 [1] NCCL INFO + PCI[5000.0] - NIC/0-0
+wxz-l4:1533729:1533776 [1] NCCL INFO                 + NET[1.2] - NET/0-0 (0/0/0/1.250000)
+wxz-l4:1533729:1533776 [1] NCCL INFO                 + NET[1.2] - NET/0-0 (0/0/0/1.250000)
+wxz-l4:1533729:1533776 [1] NCCL INFO + PCI[12.0] - GPU/0-30 (0)
+wxz-l4:1533729:1533776 [1] NCCL INFO + PCI[12.0] - GPU/0-40 (1)
+wxz-l4:1533729:1533776 [1] NCCL INFO + PCI[12.0] - GPU/0-50 (2)
+wxz-l4:1533729:1533776 [1] NCCL INFO + PCI[12.0] - GPU/0-60 (3)
+wxz-l4:1533729:1533776 [1] NCCL INFO + SYS[10.0] - CPU/0-1
+wxz-l4:1533729:1533776 [1] NCCL INFO CPU/0-1 (1/1/2)
+wxz-l4:1533729:1533776 [1] NCCL INFO + PCI[12.0] - GPU/0-80000 (4)
+wxz-l4:1533729:1533776 [1] NCCL INFO + PCI[12.0] - GPU/0-80010 (5)
+wxz-l4:1533729:1533776 [1] NCCL INFO + PCI[12.0] - GPU/0-80020 (6)
+wxz-l4:1533729:1533776 [1] NCCL INFO + PCI[12.0] - GPU/0-80030 (7)
+wxz-l4:1533729:1533776 [1] NCCL INFO + SYS[10.0] - CPU/0-0
+wxz-l4:1533729:1533776 [1] NCCL INFO ==========================================
+wxz-l4:1533729:1533776 [1] NCCL INFO GPU/0-30 :GPU/0-30 (0/5000.0/LOC) GPU/0-40 (2/12.0/PHB) GPU/0-50 (2/12.0/PHB) GPU/0-60 (2/12.0/PHB) GPU/0-80000 (3/10.0/SYS) GPU/0-80010 (3/10.0/SYS) GPU/0-80020 (3/10.0/SYS) GPU/0-80030 (3/10.0/SYS) CPU/0-0 (1/12.0/PHB) CPU/0-1 (2/10.0/SYS) NET/0-0 (3/1.2/PHB) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533776 [1] NCCL INFO GPU/0-40 :GPU/0-30 (2/12.0/PHB) GPU/0-40 (0/5000.0/LOC) GPU/0-50 (2/12.0/PHB) GPU/0-60 (2/12.0/PHB) GPU/0-80000 (3/10.0/SYS) GPU/0-80010 (3/10.0/SYS) GPU/0-80020 (3/10.0/SYS) GPU/0-80030 (3/10.0/SYS) CPU/0-0 (1/12.0/PHB) CPU/0-1 (2/10.0/SYS) NET/0-0 (3/1.2/PHB) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533776 [1] NCCL INFO GPU/0-50 :GPU/0-30 (2/12.0/PHB) GPU/0-40 (2/12.0/PHB) GPU/0-50 (0/5000.0/LOC) GPU/0-60 (2/12.0/PHB) GPU/0-80000 (3/10.0/SYS) GPU/0-80010 (3/10.0/SYS) GPU/0-80020 (3/10.0/SYS) GPU/0-80030 (3/10.0/SYS) CPU/0-0 (1/12.0/PHB) CPU/0-1 (2/10.0/SYS) NET/0-0 (3/1.2/PHB) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533776 [1] NCCL INFO GPU/0-60 :GPU/0-30 (2/12.0/PHB) GPU/0-40 (2/12.0/PHB) GPU/0-50 (2/12.0/PHB) GPU/0-60 (0/5000.0/LOC) GPU/0-80000 (3/10.0/SYS) GPU/0-80010 (3/10.0/SYS) GPU/0-80020 (3/10.0/SYS) GPU/0-80030 (3/10.0/SYS) CPU/0-0 (1/12.0/PHB) CPU/0-1 (2/10.0/SYS) NET/0-0 (3/1.2/PHB) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533776 [1] NCCL INFO GPU/0-80000 :GPU/0-30 (3/10.0/SYS) GPU/0-40 (3/10.0/SYS) GPU/0-50 (3/10.0/SYS) GPU/0-60 (3/10.0/SYS) GPU/0-80000 (0/5000.0/LOC) GPU/0-80010 (2/12.0/PHB) GPU/0-80020 (2/12.0/PHB) GPU/0-80030 (2/12.0/PHB) CPU/0-0 (2/10.0/SYS) CPU/0-1 (1/12.0/PHB) NET/0-0 (4/1.2/SYS) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533776 [1] NCCL INFO GPU/0-80010 :GPU/0-30 (3/10.0/SYS) GPU/0-40 (3/10.0/SYS) GPU/0-50 (3/10.0/SYS) GPU/0-60 (3/10.0/SYS) GPU/0-80000 (2/12.0/PHB) GPU/0-80010 (0/5000.0/LOC) GPU/0-80020 (2/12.0/PHB) GPU/0-80030 (2/12.0/PHB) CPU/0-0 (2/10.0/SYS) CPU/0-1 (1/12.0/PHB) NET/0-0 (4/1.2/SYS) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533776 [1] NCCL INFO GPU/0-80020 :GPU/0-30 (3/10.0/SYS) GPU/0-40 (3/10.0/SYS) GPU/0-50 (3/10.0/SYS) GPU/0-60 (3/10.0/SYS) GPU/0-80000 (2/12.0/PHB) GPU/0-80010 (2/12.0/PHB) GPU/0-80020 (0/5000.0/LOC) GPU/0-80030 (2/12.0/PHB) CPU/0-0 (2/10.0/SYS) CPU/0-1 (1/12.0/PHB) NET/0-0 (4/1.2/SYS) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533776 [1] NCCL INFO GPU/0-80030 :GPU/0-30 (3/10.0/SYS) GPU/0-40 (3/10.0/SYS) GPU/0-50 (3/10.0/SYS) GPU/0-60 (3/10.0/SYS) GPU/0-80000 (2/12.0/PHB) GPU/0-80010 (2/12.0/PHB) GPU/0-80020 (2/12.0/PHB) GPU/0-80030 (0/5000.0/LOC) CPU/0-0 (2/10.0/SYS) CPU/0-1 (1/12.0/PHB) NET/0-0 (4/1.2/SYS) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533776 [1] NCCL INFO NET/0-0 :GPU/0-30 (3/1.2/PHB) GPU/0-40 (3/1.2/PHB) GPU/0-50 (3/1.2/PHB) GPU/0-60 (3/1.2/PHB) GPU/0-80000 (4/1.2/SYS) GPU/0-80010 (4/1.2/SYS) GPU/0-80020 (4/1.2/SYS) GPU/0-80030 (4/1.2/SYS) CPU/0-0 (2/1.2/PHB) CPU/0-1 (3/1.2/SYS) NET/0-0 (0/5000.0/LOC) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533776 [1] NCCL INFO NET/0-0 :GPU/0-30 (3/1.2/PHB) GPU/0-40 (3/1.2/PHB) GPU/0-50 (3/1.2/PHB) GPU/0-60 (3/1.2/PHB) GPU/0-80000 (4/1.2/SYS) GPU/0-80010 (4/1.2/SYS) GPU/0-80020 (4/1.2/SYS) GPU/0-80030 (4/1.2/SYS) CPU/0-0 (2/1.2/PHB) CPU/0-1 (3/1.2/SYS) NET/0-0 (0/5000.0/LOC) NET/0-0 (0/0.0/DIS) 
+wxz-l4:1533729:1533776 [1] NCCL INFO ncclTopoGetCpuAffinity: Affinity for GPU 1 is empty, ignoring. (GPU affinity = 0-23,48-71 ; CPU affinity = 47).
+wxz-l4:1533729:1533776 [1] NCCL INFO NVLS multicast support is not available on dev 1 (NVLS_NCHANNELS 0)
+wxz-l4:1533729:1533778 [3] NCCL INFO Pattern 4, crossNic 0, nChannels 1, bw 10.000000/10.000000, type SYS/PIX, sameChannels 1
+wxz-l4:1533729:1533778 [3] NCCL INFO  0 : GPU/0-30 GPU/0-40 GPU/0-50 GPU/0-60 GPU/0-80000 GPU/0-80010 GPU/0-80020 GPU/0-80030
+wxz-l4:1533729:1533778 [3] NCCL INFO Pattern 1, crossNic 0, nChannels 1, bw 10.000000/10.000000, type SYS/PIX, sameChannels 1
+wxz-l4:1533729:1533778 [3] NCCL INFO  0 : GPU/0-30 GPU/0-40 GPU/0-50 GPU/0-60 GPU/0-80000 GPU/0-80010 GPU/0-80020 GPU/0-80030
+wxz-l4:1533729:1533781 [6] NCCL INFO Pattern 4, crossNic 0, nChannels 1, bw 10.000000/10.000000, type SYS/PIX, sameChannels 1
+wxz-l4:1533729:1533781 [6] NCCL INFO  0 : GPU/0-30 GPU/0-40 GPU/0-50 GPU/0-60 GPU/0-80000 GPU/0-80010 GPU/0-80020 GPU/0-80030
+wxz-l4:1533729:1533781 [6] NCCL INFO Pattern 1, crossNic 0, nChannels 1, bw 10.000000/10.000000, type SYS/PIX, sameChannels 1
+wxz-l4:1533729:1533781 [6] NCCL INFO  0 : GPU/0-30 GPU/0-40 GPU/0-50 GPU/0-60 GPU/0-80000 GPU/0-80010 GPU/0-80020 GPU/0-80030
+wxz-l4:1533729:1533780 [5] NCCL INFO Pattern 4, crossNic 0, nChannels 1, bw 10.000000/10.000000, type SYS/PIX, sameChannels 1
+wxz-l4:1533729:1533780 [5] NCCL INFO  0 : GPU/0-30 GPU/0-40 GPU/0-50 GPU/0-60 GPU/0-80000 GPU/0-80010 GPU/0-80020 GPU/0-80030
+wxz-l4:1533729:1533780 [5] NCCL INFO Pattern 1, crossNic 0, nChannels 1, bw 10.000000/10.000000, type SYS/PIX, sameChannels 1
+wxz-l4:1533729:1533780 [5] NCCL INFO  0 : GPU/0-30 GPU/0-40 GPU/0-50 GPU/0-60 GPU/0-80000 GPU/0-80010 GPU/0-80020 GPU/0-80030
+wxz-l4:1533729:1533777 [2] NCCL INFO Pattern 4, crossNic 0, nChannels 1, bw 10.000000/10.000000, type SYS/PIX, sameChannels 1
+wxz-l4:1533729:1533777 [2] NCCL INFO  0 : GPU/0-30 GPU/0-40 GPU/0-50 GPU/0-60 GPU/0-80000 GPU/0-80010 GPU/0-80020 GPU/0-80030
+wxz-l4:1533729:1533779 [4] NCCL INFO Pattern 4, crossNic 0, nChannels 1, bw 10.000000/10.000000, type SYS/PIX, sameChannels 1
+wxz-l4:1533729:1533779 [4] NCCL INFO  0 : GPU/0-30 GPU/0-40 GPU/0-50 GPU/0-60 GPU/0-80000 GPU/0-80010 GPU/0-80020 GPU/0-80030
+wxz-l4:1533729:1533782 [7] NCCL INFO Pattern 4, crossNic 0, nChannels 1, bw 10.000000/10.000000, type SYS/PIX, sameChannels 1
+wxz-l4:1533729:1533782 [7] NCCL INFO  0 : GPU/0-30 GPU/0-40 GPU/0-50 GPU/0-60 GPU/0-80000 GPU/0-80010 GPU/0-80020 GPU/0-80030
+wxz-l4:1533729:1533777 [2] NCCL INFO Pattern 1, crossNic 0, nChannels 1, bw 10.000000/10.000000, type SYS/PIX, sameChannels 1
+wxz-l4:1533729:1533777 [2] NCCL INFO  0 : GPU/0-30 GPU/0-40 GPU/0-50 GPU/0-60 GPU/0-80000 GPU/0-80010 GPU/0-80020 GPU/0-80030
+wxz-l4:1533729:1533779 [4] NCCL INFO Pattern 1, crossNic 0, nChannels 1, bw 10.000000/10.000000, type SYS/PIX, sameChannels 1
+wxz-l4:1533729:1533779 [4] NCCL INFO  0 : GPU/0-30 GPU/0-40 GPU/0-50 GPU/0-60 GPU/0-80000 GPU/0-80010 GPU/0-80020 GPU/0-80030
+wxz-l4:1533729:1533782 [7] NCCL INFO Pattern 1, crossNic 0, nChannels 1, bw 10.000000/10.000000, type SYS/PIX, sameChannels 1
+wxz-l4:1533729:1533782 [7] NCCL INFO  0 : GPU/0-30 GPU/0-40 GPU/0-50 GPU/0-60 GPU/0-80000 GPU/0-80010 GPU/0-80020 GPU/0-80030
+wxz-l4:1533729:1533775 [0] NCCL INFO Pattern 4, crossNic 0, nChannels 1, bw 10.000000/10.000000, type SYS/PIX, sameChannels 1
+wxz-l4:1533729:1533775 [0] NCCL INFO  0 : GPU/0-30 GPU/0-40 GPU/0-50 GPU/0-60 GPU/0-80000 GPU/0-80010 GPU/0-80020 GPU/0-80030
+wxz-l4:1533729:1533775 [0] NCCL INFO Pattern 1, crossNic 0, nChannels 1, bw 10.000000/10.000000, type SYS/PIX, sameChannels 1
+wxz-l4:1533729:1533775 [0] NCCL INFO  0 : GPU/0-30 GPU/0-40 GPU/0-50 GPU/0-60 GPU/0-80000 GPU/0-80010 GPU/0-80020 GPU/0-80030
+wxz-l4:1533729:1533776 [1] NCCL INFO Pattern 4, crossNic 0, nChannels 1, bw 10.000000/10.000000, type SYS/PIX, sameChannels 1
+wxz-l4:1533729:1533776 [1] NCCL INFO  0 : GPU/0-30 GPU/0-40 GPU/0-50 GPU/0-60 GPU/0-80000 GPU/0-80010 GPU/0-80020 GPU/0-80030
+wxz-l4:1533729:1533776 [1] NCCL INFO Pattern 1, crossNic 0, nChannels 1, bw 10.000000/10.000000, type SYS/PIX, sameChannels 1
+wxz-l4:1533729:1533776 [1] NCCL INFO  0 : GPU/0-30 GPU/0-40 GPU/0-50 GPU/0-60 GPU/0-80000 GPU/0-80010 GPU/0-80020 GPU/0-80030
+wxz-l4:1533729:1533778 [3] NCCL INFO comm 0x5f003bd773c0 rank 3 nRanks 8 nNodes 1 localRanks 8 localRank 3 MNNVL 0
+wxz-l4:1533729:1533778 [3] NCCL INFO Ring 00 : 2 -> 3 -> 4
+wxz-l4:1533729:1533778 [3] NCCL INFO Ring 01 : 2 -> 3 -> 4
+wxz-l4:1533729:1533778 [3] NCCL INFO Trees [0] 4/-1/-1->3->2 [1] 4/-1/-1->3->2
+wxz-l4:1533729:1533778 [3] NCCL INFO P2P Chunksize set to 131072
+wxz-l4:1533729:1533778 [3] NCCL INFO PROFILER/Plugin: Could not find: libnccl-profiler.so
+wxz-l4:1533729:1533778 [3] NCCL INFO Check P2P Type isAllDirectP2p 0 directMode 1 isAllCudaP2p 0
+wxz-l4:1533729:1533778 [3] NCCL INFO ncclP2pSchedule: group size used is 8
+wxz-l4:1533729:1533776 [1] NCCL INFO comm 0x5f003bb58e20 rank 1 nRanks 8 nNodes 1 localRanks 8 localRank 1 MNNVL 0
+wxz-l4:1533729:1533776 [1] NCCL INFO Tree 0 : 0 -> 1 -> 2/-1/-1
+wxz-l4:1533729:1533776 [1] NCCL INFO Tree 1 : 0 -> 1 -> 2/-1/-1
+wxz-l4:1533729:1533776 [1] NCCL INFO Ring 00 : 0 -> 1 -> 2
+wxz-l4:1533729:1533776 [1] NCCL INFO Ring 01 : 0 -> 1 -> 2
+wxz-l4:1533729:1533776 [1] NCCL INFO Trees [0] 2/-1/-1->1->0 [1] 2/-1/-1->1->0
+wxz-l4:1533729:1533776 [1] NCCL INFO P2P Chunksize set to 131072
+wxz-l4:1533729:1533776 [1] NCCL INFO Check P2P Type isAllDirectP2p 0 directMode 1 isAllCudaP2p 0
+wxz-l4:1533729:1533776 [1] NCCL INFO ncclP2pSchedule: group size used is 8
+wxz-l4:1533729:1533776 [1] NCCL INFO TUNER/Plugin: Could not find: libnccl-tuner.so
+wxz-l4:1533729:1533776 [1] NCCL INFO threadThresholds 8/8/64 | 64/8/64 | 512 | 512
+wxz-l4:1533729:1533776 [1] NCCL INFO 2 coll channels, 2 collnet channels, 0 nvls channels, 2 p2p channels, 2 p2p channels per peer
+wxz-l4:1533729:1533797 [0] NCCL INFO [Proxy Service] Device 3 CPU core 47
+wxz-l4:1533729:1533798 [0] NCCL INFO [Proxy Service UDS] Device 3 CPU core 47
+wxz-l4:1533729:1533799 [0] NCCL INFO [Proxy Service] Device 1 CPU core 47
+wxz-l4:1533729:1533800 [0] NCCL INFO [Proxy Service UDS] Device 1 CPU core 47
+wxz-l4:1533729:1533780 [5] NCCL INFO comm 0x5f003bf959e0 rank 5 nRanks 8 nNodes 1 localRanks 8 localRank 5 MNNVL 0
+wxz-l4:1533729:1533780 [5] NCCL INFO Ring 00 : 4 -> 5 -> 6
+wxz-l4:1533729:1533780 [5] NCCL INFO Ring 01 : 4 -> 5 -> 6
+wxz-l4:1533729:1533780 [5] NCCL INFO Trees [0] 6/-1/-1->5->4 [1] 6/-1/-1->5->4
+wxz-l4:1533729:1533780 [5] NCCL INFO P2P Chunksize set to 131072
+wxz-l4:1533729:1533780 [5] NCCL INFO Check P2P Type isAllDirectP2p 0 directMode 1 isAllCudaP2p 0
+wxz-l4:1533729:1533780 [5] NCCL INFO ncclP2pSchedule: group size used is 8
+wxz-l4:1533729:1533780 [5] NCCL INFO threadThresholds 8/8/64 | 64/8/64 | 512 | 512
+wxz-l4:1533729:1533780 [5] NCCL INFO 2 coll channels, 2 collnet channels, 0 nvls channels, 2 p2p channels, 2 p2p channels per peer
+wxz-l4:1533729:1533801 [0] NCCL INFO [Proxy Service] Device 5 CPU core 47
+wxz-l4:1533729:1533802 [0] NCCL INFO [Proxy Service UDS] Device 5 CPU core 47
+wxz-l4:1533729:1533779 [4] NCCL INFO comm 0x5f003be866d0 rank 4 nRanks 8 nNodes 1 localRanks 8 localRank 4 MNNVL 0
+wxz-l4:1533729:1533779 [4] NCCL INFO Ring 00 : 3 -> 4 -> 5
+wxz-l4:1533729:1533779 [4] NCCL INFO Ring 01 : 3 -> 4 -> 5
+wxz-l4:1533729:1533779 [4] NCCL INFO Trees [0] 5/-1/-1->4->3 [1] 5/-1/-1->4->3
+wxz-l4:1533729:1533779 [4] NCCL INFO P2P Chunksize set to 131072
+wxz-l4:1533729:1533779 [4] NCCL INFO Check P2P Type isAllDirectP2p 0 directMode 1 isAllCudaP2p 0
+wxz-l4:1533729:1533779 [4] NCCL INFO ncclP2pSchedule: group size used is 8
+wxz-l4:1533729:1533779 [4] NCCL INFO threadThresholds 8/8/64 | 64/8/64 | 512 | 512
+wxz-l4:1533729:1533779 [4] NCCL INFO 2 coll channels, 2 collnet channels, 0 nvls channels, 2 p2p channels, 2 p2p channels per peer
+wxz-l4:1533729:1533782 [7] NCCL INFO comm 0x5f003c1b4000 rank 7 nRanks 8 nNodes 1 localRanks 8 localRank 7 MNNVL 0
+wxz-l4:1533729:1533782 [7] NCCL INFO Ring 00 : 6 -> 7 -> 0
+wxz-l4:1533729:1533782 [7] NCCL INFO Ring 01 : 6 -> 7 -> 0
+wxz-l4:1533729:1533782 [7] NCCL INFO Trees [0] -1/-1/-1->7->6 [1] -1/-1/-1->7->6
+wxz-l4:1533729:1533782 [7] NCCL INFO P2P Chunksize set to 131072
+wxz-l4:1533729:1533782 [7] NCCL INFO Check P2P Type isAllDirectP2p 0 directMode 1 isAllCudaP2p 0
+wxz-l4:1533729:1533782 [7] NCCL INFO ncclP2pSchedule: group size used is 8
+wxz-l4:1533729:1533782 [7] NCCL INFO threadThresholds 8/8/64 | 64/8/64 | 512 | 512
+wxz-l4:1533729:1533782 [7] NCCL INFO 2 coll channels, 2 collnet channels, 0 nvls channels, 2 p2p channels, 2 p2p channels per peer
+wxz-l4:1533729:1533803 [0] NCCL INFO [Proxy Service] Device 4 CPU core 47
+wxz-l4:1533729:1533804 [0] NCCL INFO [Proxy Service UDS] Device 4 CPU core 47
+wxz-l4:1533729:1533778 [3] NCCL INFO threadThresholds 8/8/64 | 64/8/64 | 512 | 512
+wxz-l4:1533729:1533778 [3] NCCL INFO 2 coll channels, 2 collnet channels, 0 nvls channels, 2 p2p channels, 2 p2p channels per peer
+wxz-l4:1533729:1533775 [0] NCCL INFO comm 0x5f003ba49d50 rank 0 nRanks 8 nNodes 1 localRanks 8 localRank 0 MNNVL 0
+wxz-l4:1533729:1533775 [0] NCCL INFO Tree 0 : -1 -> 0 -> 1/-1/-1
+wxz-l4:1533729:1533775 [0] NCCL INFO Tree 1 : -1 -> 0 -> 1/-1/-1
+wxz-l4:1533729:1533775 [0] NCCL INFO Channel 00/02 : 0 1 2 3 4 5 6 7
+wxz-l4:1533729:1533775 [0] NCCL INFO Channel 01/02 : 0 1 2 3 4 5 6 7
+wxz-l4:1533729:1533775 [0] NCCL INFO Ring 00 : 7 -> 0 -> 1
+wxz-l4:1533729:1533775 [0] NCCL INFO Ring 01 : 7 -> 0 -> 1
+wxz-l4:1533729:1533775 [0] NCCL INFO Trees [0] 1/-1/-1->0->-1 [1] 1/-1/-1->0->-1
+wxz-l4:1533729:1533775 [0] NCCL INFO P2P Chunksize set to 131072
+wxz-l4:1533729:1533775 [0] NCCL INFO Check P2P Type isAllDirectP2p 0 directMode 1 isAllCudaP2p 0
+wxz-l4:1533729:1533775 [0] NCCL INFO ncclP2pSchedule: group size used is 8
+wxz-l4:1533729:1533775 [0] NCCL INFO threadThresholds 8/8/64 | 64/8/64 | 512 | 512
+wxz-l4:1533729:1533775 [0] NCCL INFO 2 coll channels, 2 collnet channels, 0 nvls channels, 2 p2p channels, 2 p2p channels per peer
+wxz-l4:1533729:1533775 [0] NCCL INFO CC Off, workFifoBytes 1048576
+wxz-l4:1533729:1533805 [0] NCCL INFO [Proxy Service] Device 7 CPU core 47
+wxz-l4:1533729:1533806 [0] NCCL INFO [Proxy Service UDS] Device 7 CPU core 47
+wxz-l4:1533729:1533777 [2] NCCL INFO comm 0x5f003bc680d0 rank 2 nRanks 8 nNodes 1 localRanks 8 localRank 2 MNNVL 0
+wxz-l4:1533729:1533777 [2] NCCL INFO Ring 00 : 1 -> 2 -> 3
+wxz-l4:1533729:1533777 [2] NCCL INFO Ring 01 : 1 -> 2 -> 3
+wxz-l4:1533729:1533777 [2] NCCL INFO Trees [0] 3/-1/-1->2->1 [1] 3/-1/-1->2->1
+wxz-l4:1533729:1533777 [2] NCCL INFO P2P Chunksize set to 131072
+wxz-l4:1533729:1533777 [2] NCCL INFO Check P2P Type isAllDirectP2p 0 directMode 1 isAllCudaP2p 0
+wxz-l4:1533729:1533777 [2] NCCL INFO ncclP2pSchedule: group size used is 8
+wxz-l4:1533729:1533777 [2] NCCL INFO threadThresholds 8/8/64 | 64/8/64 | 512 | 512
+wxz-l4:1533729:1533777 [2] NCCL INFO 2 coll channels, 2 collnet channels, 0 nvls channels, 2 p2p channels, 2 p2p channels per peer
+wxz-l4:1533729:1533807 [0] NCCL INFO [Proxy Service] Device 0 CPU core 47
+wxz-l4:1533729:1533808 [0] NCCL INFO [Proxy Service UDS] Device 0 CPU core 47
+wxz-l4:1533729:1533809 [0] NCCL INFO [Proxy Service] Device 2 CPU core 47
+wxz-l4:1533729:1533810 [0] NCCL INFO [Proxy Service UDS] Device 2 CPU core 47
+wxz-l4:1533729:1533781 [6] NCCL INFO comm 0x5f003c0a4cf0 rank 6 nRanks 8 nNodes 1 localRanks 8 localRank 6 MNNVL 0
+wxz-l4:1533729:1533781 [6] NCCL INFO Ring 00 : 5 -> 6 -> 7
+wxz-l4:1533729:1533781 [6] NCCL INFO Ring 01 : 5 -> 6 -> 7
+wxz-l4:1533729:1533781 [6] NCCL INFO Trees [0] 7/-1/-1->6->5 [1] 7/-1/-1->6->5
+wxz-l4:1533729:1533781 [6] NCCL INFO P2P Chunksize set to 131072
+wxz-l4:1533729:1533781 [6] NCCL INFO Check P2P Type isAllDirectP2p 0 directMode 1 isAllCudaP2p 0
+wxz-l4:1533729:1533781 [6] NCCL INFO ncclP2pSchedule: group size used is 8
+wxz-l4:1533729:1533781 [6] NCCL INFO threadThresholds 8/8/64 | 64/8/64 | 512 | 512
+wxz-l4:1533729:1533781 [6] NCCL INFO 2 coll channels, 2 collnet channels, 0 nvls channels, 2 p2p channels, 2 p2p channels per peer
+wxz-l4:1533729:1533811 [0] NCCL INFO [Proxy Service] Device 6 CPU core 47
+wxz-l4:1533729:1533812 [0] NCCL INFO [Proxy Service UDS] Device 6 CPU core 47
+wxz-l4:1533729:1533782 [7] NCCL INFO ncclCommInitAll comm 0x5f003c1b4000 rank 7 nranks 8 cudaDev 7 nvmlDev 7 busId 80030 commId 0x9c607883e09873b0 - Init COMPLETE
+wxz-l4:1533729:1533782 [7] NCCL INFO Init timings - ncclCommInitAll: rank 7 nranks 8 total 2.41 (kernels 1.04, alloc 0.08, bootstrap 0.19, allgathers 0.26, topo 0.37, graphs 0.43, connections 0.00, rest 0.02)
+wxz-l4:1533729:1533778 [3] NCCL INFO ncclCommInitAll comm 0x5f003bd773c0 rank 3 nranks 8 cudaDev 3 nvmlDev 3 busId 60 commId 0x9c607883e09873b0 - Init COMPLETE
+wxz-l4:1533729:1533778 [3] NCCL INFO Init timings - ncclCommInitAll: rank 3 nranks 8 total 2.41 (kernels 1.05, alloc 0.11, bootstrap 0.17, allgathers 0.31, topo 0.32, graphs 0.41, connections 0.02, rest 0.03)
+wxz-l4:1533729:1533775 [0] NCCL INFO ncclCommInitAll comm 0x5f003ba49d50 rank 0 nranks 8 cudaDev 0 nvmlDev 0 busId 30 commId 0x9c607883e09873b0 - Init COMPLETE
+wxz-l4:1533729:1533775 [0] NCCL INFO Init timings - ncclCommInitAll: rank 0 nranks 8 total 2.41 (kernels 1.05, alloc 0.09, bootstrap 0.17, allgathers 0.29, topo 0.35, graphs 0.43, connections 0.00, rest 0.02)
+wxz-l4:1533729:1533776 [1] NCCL INFO ncclCommInitAll comm 0x5f003bb58e20 rank 1 nranks 8 cudaDev 1 nvmlDev 1 busId 40 commId 0x9c607883e09873b0 - Init COMPLETE
+wxz-l4:1533729:1533776 [1] NCCL INFO Init timings - ncclCommInitAll: rank 1 nranks 8 total 2.41 (kernels 1.04, alloc 0.08, bootstrap 0.20, allgathers 0.26, topo 0.36, graphs 0.43, connections 0.00, rest 0.04)
+wxz-l4:1533729:1533781 [6] NCCL INFO ncclCommInitAll comm 0x5f003c0a4cf0 rank 6 nranks 8 cudaDev 6 nvmlDev 6 busId 80020 commId 0x9c607883e09873b0 - Init COMPLETE
+wxz-l4:1533729:1533781 [6] NCCL INFO Init timings - ncclCommInitAll: rank 6 nranks 8 total 2.41 (kernels 1.04, alloc 0.08, bootstrap 0.19, allgathers 0.36, topo 0.32, graphs 0.41, connections 0.00, rest 0.01)
+wxz-l4:1533729:1533780 [5] NCCL INFO ncclCommInitAll comm 0x5f003bf959e0 rank 5 nranks 8 cudaDev 5 nvmlDev 5 busId 80010 commId 0x9c607883e09873b0 - Init COMPLETE
+wxz-l4:1533729:1533780 [5] NCCL INFO Init timings - ncclCommInitAll: rank 5 nranks 8 total 2.41 (kernels 1.04, alloc 0.08, bootstrap 0.19, allgathers 0.31, topo 0.33, graphs 0.42, connections 0.00, rest 0.04)
+wxz-l4:1533729:1533779 [4] NCCL INFO ncclCommInitAll comm 0x5f003be866d0 rank 4 nranks 8 cudaDev 4 nvmlDev 4 busId 80000 commId 0x9c607883e09873b0 - Init COMPLETE
+wxz-l4:1533729:1533779 [4] NCCL INFO Init timings - ncclCommInitAll: rank 4 nranks 8 total 2.41 (kernels 1.04, alloc 0.08, bootstrap 0.19, allgathers 0.29, topo 0.35, graphs 0.44, connections 0.00, rest 0.03)
+wxz-l4:1533729:1533777 [2] NCCL INFO ncclCommInitAll comm 0x5f003bc680d0 rank 2 nranks 8 cudaDev 2 nvmlDev 2 busId 50 commId 0x9c607883e09873b0 - Init COMPLETE
+wxz-l4:1533729:1533777 [2] NCCL INFO Init timings - ncclCommInitAll: rank 2 nranks 8 total 2.41 (kernels 1.04, alloc 0.10, bootstrap 0.17, allgathers 0.31, topo 0.33, graphs 0.42, connections 0.00, rest 0.02)
+# BF16 8 GPUs op=1 AR-in-place AG/RS-out-of-place NCCL=22809 input-ready slowest-GPU-event timing CPU=47 idle_us=0 blocks=16 warmup=1 iterations=2 repeats=1
+# testbed=gpu; host-packet UCCL transport; NCCL P2P default
+kind,bytes,variant,repeat,iteration,us
+# implementation,1048576,nccl,nccl
+wxz-l4:1533729:1533819 [1] NCCL INFO Channel 00 : 1[1] -> 2[2] via SHM/direct/direct
+wxz-l4:1533729:1533818 [2] NCCL INFO Channel 00 : 2[2] -> 3[3] via SHM/direct/direct
+wxz-l4:1533729:1533815 [5] NCCL INFO Channel 00 : 5[5] -> 6[6] via SHM/direct/direct
+wxz-l4:1533729:1533819 [1] NCCL INFO Channel 01 : 1[1] -> 2[2] via SHM/direct/direct
+wxz-l4:1533729:1533814 [6] NCCL INFO Channel 00 : 6[6] -> 7[7] via SHM/direct/direct
+wxz-l4:1533729:1533817 [3] NCCL INFO Channel 00 : 3[3] -> 4[4] via SHM/direct/direct
+wxz-l4:1533729:1533820 [0] NCCL INFO Channel 00 : 0[0] -> 1[1] via SHM/direct/direct
+wxz-l4:1533729:1533818 [2] NCCL INFO Channel 01 : 2[2] -> 3[3] via SHM/direct/direct
+wxz-l4:1533729:1533816 [4] NCCL INFO Channel 00 : 4[4] -> 5[5] via SHM/direct/direct
+wxz-l4:1533729:1533814 [6] NCCL INFO Channel 01 : 6[6] -> 7[7] via SHM/direct/direct
+wxz-l4:1533729:1533815 [5] NCCL INFO Channel 01 : 5[5] -> 6[6] via SHM/direct/direct
+wxz-l4:1533729:1533813 [7] NCCL INFO Channel 00 : 7[7] -> 0[0] via SHM/direct/direct
+wxz-l4:1533729:1533817 [3] NCCL INFO Channel 01 : 3[3] -> 4[4] via SHM/direct/direct
+wxz-l4:1533729:1533820 [0] NCCL INFO Channel 01 : 0[0] -> 1[1] via SHM/direct/direct
+wxz-l4:1533729:1533816 [4] NCCL INFO Channel 01 : 4[4] -> 5[5] via SHM/direct/direct
+wxz-l4:1533729:1533813 [7] NCCL INFO Channel 01 : 7[7] -> 0[0] via SHM/direct/direct
+wxz-l4:1533729:1533815 [5] NCCL INFO Connected all rings, use ring PXN 0 GDR 1
+wxz-l4:1533729:1533813 [7] NCCL INFO Connected all rings, use ring PXN 0 GDR 1
+wxz-l4:1533729:1533817 [3] NCCL INFO Connected all rings, use ring PXN 0 GDR 1
+wxz-l4:1533729:1533819 [1] NCCL INFO Connected all rings, use ring PXN 0 GDR 1
+wxz-l4:1533729:1533818 [2] NCCL INFO Connected all rings, use ring PXN 0 GDR 1
+wxz-l4:1533729:1533814 [6] NCCL INFO Connected all rings, use ring PXN 0 GDR 1
+wxz-l4:1533729:1533816 [4] NCCL INFO Connected all rings, use ring PXN 0 GDR 1
+wxz-l4:1533729:1533820 [0] NCCL INFO Connected all rings, use ring PXN 0 GDR 1
+sample,1048576,nccl,0,0,382.975996
+sample,1048576,nccl,0,1,396.288007
+median,1048576,nccl,0,-1,389.632002
+# ReduceScatter host ring; BF16 per-hop rounding; fixed CTAs=16
+# NUMA group0 host_node=0 ranks=0(device0),1(device1),2(device2),3(device3),
+# NUMA group1 host_node=1 ranks=4(device4),5(device5),6(device6),7(device7),
+# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=8 NUMA_groups=2
+# GPU launch workers=8 CPUs=71,70,69,68,94,93,92,91,
+# packet_progress=gpu routing_cpu_workers=0
+# CPU-router BF16: packet=131072 slots=2 blocks<=16 threads=256 CPU<=23/node grain=8192; no NCCL collective fallback
+# reduction_placement=gpu
+# scatter_packet_order=flat
+# implementation,1048576,current,router-ring
+sample,1048576,current,0,0,299.008012
+sample,1048576,current,0,1,282.624006
+median,1048576,current,0,-1,290.816009
+wxz-l4:1533729:1533729 [0] NCCL INFO comm 0x5f003ba49d50 rank 0 nranks 8 cudaDev 0 busId 30 - Destroy COMPLETE
+wxz-l4:1533729:1533729 [7] NCCL INFO comm 0x5f003c1b4000 rank 7 nranks 8 cudaDev 7 busId 80030 - Destroy COMPLETE
+wxz-l4:1533729:1533729 [6] NCCL INFO comm 0x5f003c0a4cf0 rank 6 nranks 8 cudaDev 6 busId 80020 - Destroy COMPLETE
+wxz-l4:1533729:1533729 [5] NCCL INFO comm 0x5f003bf959e0 rank 5 nranks 8 cudaDev 5 busId 80010 - Destroy COMPLETE
+wxz-l4:1533729:1533729 [4] NCCL INFO comm 0x5f003be866d0 rank 4 nranks 8 cudaDev 4 busId 80000 - Destroy COMPLETE
+wxz-l4:1533729:1533729 [3] NCCL INFO comm 0x5f003bd773c0 rank 3 nranks 8 cudaDev 3 busId 60 - Destroy COMPLETE
+wxz-l4:1533729:1533729 [2] NCCL INFO comm 0x5f003bc680d0 rank 2 nranks 8 cudaDev 2 busId 50 - Destroy COMPLETE
+wxz-l4:1533729:1533729 [1] NCCL INFO comm 0x5f003bb58e20 rank 1 nranks 8 cudaDev 1 busId 40 - Destroy COMPLETE
+wxz-l4:1533729:1533729 [7] NCCL INFO ENV/Plugin: Closing env plugin ncclEnvDefault

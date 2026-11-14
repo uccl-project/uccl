@@ -1,0 +1,36 @@
+[
+  {
+    "test": "host_ring_check",
+    "command": [
+      "/ssd1/wxzheng/rs-recovery-20261114/build/uccl_lite_host_ring_check",
+      "4"
+    ],
+    "returncode": 0,
+    "seconds": 1.6807501316070557,
+    "binary_sha256": "545523edc9a3e9436be75316920caa4e2278fad42e018a4d000ecd31e429e851"
+  },
+  {
+    "test": "router_check",
+    "command": [
+      "/ssd1/wxzheng/rs-recovery-20261114/build/uccl_lite_router_check",
+      "--gpus",
+      "4",
+      "--ag-per-source"
+    ],
+    "returncode": 0,
+    "seconds": 1.1260337829589844,
+    "binary_sha256": "03bd912daf9ce8b6242842efd9e2b82dbc2f4061d1c386824f4f67ddcc8e2065"
+  },
+  {
+    "test": "router_graph_check",
+    "command": [
+      "/ssd1/wxzheng/rs-recovery-20261114/build/uccl_lite_router_graph_check",
+      "--gpus",
+      "4",
+      "--ag-per-source"
+    ],
+    "returncode": 0,
+    "seconds": 1.1246800422668457,
+    "binary_sha256": "3056d416e088f8b35493bec4a6ee31b3df9bb76f1b1b3aae14d49979073e0573"
+  }
+]

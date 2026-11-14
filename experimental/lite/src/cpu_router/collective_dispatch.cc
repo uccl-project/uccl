@@ -218,6 +218,12 @@ CollectiveDispatcher::CollectiveDispatcher(Topology topology,
       options_.reduction == cpu_router::ReductionPlacement::Cpu)
     throw std::invalid_argument(
         "interleaved scatter requires standalone SM transport");
+  if (options_.hostRingReduceScatter &&
+      (options_.reduction != cpu_router::ReductionPlacement::Gpu ||
+       !options_.gpuProgress || options_.interleaveScatter ||
+       options_.concurrentProducer || options_.transportBlocks > 128 ||
+       options_.singleCtaBytes || options_.transportVectorBytes != 16))
+    throw std::invalid_argument("invalid standalone host-ring options");
   if (options_.gpuProgress &&
       options_.reduction != cpu_router::ReductionPlacement::Gpu)
     throw std::invalid_argument("GPU progress requires GPU reduction");
@@ -295,6 +301,7 @@ CollectiveDispatcher::CollectiveDispatcher(Topology topology,
     key << ";gpu-launch-workers-per-node-v1="
         << options_.gpuLaunchWorkersPerNode;
   if (options_.gpuProgress) key << ";progress=gpu-v1";
+  if (options_.hostRingReduceScatter) key << ";rs-host-ring=bf16-cta-v1";
   if (options_.agPerSourceProgress) key << ";ag-progress=per-source-v1";
   if (options_.singleNumaReduction) key << ";single-numa-reduction=v1";
   if (options_.singleCtaBytes)
@@ -399,9 +406,25 @@ BackendDecision CollectiveDispatcher::decision(
       throw std::invalid_argument("CPU-router capacity exceeded");
     return {false, "CPU-router capacity exceeded; keep existing backend"};
   }
+  if (options_.hostRingReduceScatter) {
+    bool supported = call.collective == Collective::ReduceScatter &&
+                     call.dtype == ScalarType::BFloat16 && !call.inPlace &&
+                     call.ports.size() >= 2 && call.count % 8 == 0 &&
+                     call.count <= options_.packetBytes / 2;
+    for (auto const& p : call.ports)
+      supported = supported && !((reinterpret_cast<uintptr_t>(p.input) |
+                                  reinterpret_cast<uintptr_t>(p.output)) &
+                                 15);
+    if (!supported) {
+      if (policy_.mode == RouterMode::Force)
+        throw std::invalid_argument("unsupported host-ring workload");
+      return {false, "unsupported host-ring workload; keep existing backend"};
+    }
+  }
   return policy_.select(topology_, w);
 }
 size_t CollectiveDispatcher::packetBytesFor(CollectiveCall const& call) const {
+  if (options_.hostRingReduceScatter) return options_.packetBytes;
   if (call.collective == Collective::AllGather &&
       call.workload().bytes >= (4UL << 20) &&
       options_.largeAllGatherPacketBytes)

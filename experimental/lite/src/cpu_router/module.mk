@@ -8,7 +8,7 @@ ROUTER_STATIC := $(ROUTER_BUILD)/libuccl_lite_cpu_router.a
 ROUTER_SHARED := $(ROUTER_BUILD)/libuccl_lite_cpu_router.so
 ROUTER_LIB := $(ROUTER_STATIC) -L$(CUDA_HOME)/lib64 -lcudart -lpthread -ldl -Wl,-rpath,$(CUDA_HOME)/lib64
 LOCAL_STATIC := $(BUILD)/libuccl_lite_local_collectives.a
-ROUTER_CUDA_TESTS := primitives_check primitive_example router_check router_graph_check gpu_reduction_check dispatcher_cuda_check
+ROUTER_CUDA_TESTS := primitives_check primitive_example router_check router_graph_check gpu_reduction_check dispatcher_cuda_check host_ring_check
 ROUTER_HOST_TESTS := cpu_bf16_check router_core_check dispatcher_check
 
 .PHONY: cpu-router local-collectives adaptive-collectives local-collectives-check router-checks router-policy-check nccl-identity-check ddio-reduce-probe

@@ -1,0 +1,7 @@
+{
+  "checked_timed_calls": 7560,
+  "checked_warmups": 3780,
+  "identical_implementations_at_all_84_points": true,
+  "single_sweep": true,
+  "slowdowns_over_5pct": []
+}

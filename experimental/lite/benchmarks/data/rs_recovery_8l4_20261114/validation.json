@@ -1,0 +1,123 @@
+{
+  "timed_calls": 7560,
+  "warmup_calls": 3780,
+  "figure_points": 42,
+  "binary_sha256": "f6e80074af2c70e625932743f6af343b4a161e50cc7fc63d5b9517a02a94a45d",
+  "targets": [
+    {
+      "testbed": "gpu",
+      "bytes": 1048576,
+      "sweep": "a",
+      "beats_nccl": true,
+      "beats_previous": true
+    },
+    {
+      "testbed": "gpu",
+      "bytes": 1048576,
+      "sweep": "b",
+      "beats_nccl": true,
+      "beats_previous": true
+    },
+    {
+      "testbed": "gpu",
+      "bytes": 2097152,
+      "sweep": "a",
+      "beats_nccl": true,
+      "beats_previous": true
+    },
+    {
+      "testbed": "gpu",
+      "bytes": 2097152,
+      "sweep": "b",
+      "beats_nccl": true,
+      "beats_previous": true
+    },
+    {
+      "testbed": "gpu",
+      "bytes": 4194304,
+      "sweep": "a",
+      "beats_nccl": true,
+      "beats_previous": true
+    },
+    {
+      "testbed": "gpu",
+      "bytes": 4194304,
+      "sweep": "b",
+      "beats_nccl": true,
+      "beats_previous": true
+    },
+    {
+      "testbed": "gpu",
+      "bytes": 8388608,
+      "sweep": "a",
+      "beats_nccl": true,
+      "beats_previous": true
+    },
+    {
+      "testbed": "gpu",
+      "bytes": 8388608,
+      "sweep": "b",
+      "beats_nccl": true,
+      "beats_previous": true
+    },
+    {
+      "testbed": "shm",
+      "bytes": 1048576,
+      "sweep": "a",
+      "beats_nccl": true,
+      "beats_previous": true
+    },
+    {
+      "testbed": "shm",
+      "bytes": 1048576,
+      "sweep": "b",
+      "beats_nccl": true,
+      "beats_previous": true
+    },
+    {
+      "testbed": "shm",
+      "bytes": 2097152,
+      "sweep": "a",
+      "beats_nccl": true,
+      "beats_previous": true
+    },
+    {
+      "testbed": "shm",
+      "bytes": 2097152,
+      "sweep": "b",
+      "beats_nccl": true,
+      "beats_previous": true
+    },
+    {
+      "testbed": "shm",
+      "bytes": 4194304,
+      "sweep": "a",
+      "beats_nccl": true,
+      "beats_previous": true
+    },
+    {
+      "testbed": "shm",
+      "bytes": 4194304,
+      "sweep": "b",
+      "beats_nccl": true,
+      "beats_previous": true
+    },
+    {
+      "testbed": "shm",
+      "bytes": 8388608,
+      "sweep": "a",
+      "beats_nccl": true,
+      "beats_previous": true
+    },
+    {
+      "testbed": "shm",
+      "bytes": 8388608,
+      "sweep": "b",
+      "beats_nccl": true,
+      "beats_previous": true
+    }
+  ],
+  "all_target_sweeps_beat_nccl": true,
+  "all_target_sweeps_beat_previous": true,
+  "unchanged_size_regressions_over_5pct": []
+}

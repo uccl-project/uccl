@@ -1,0 +1,10 @@
+{
+  "command": [
+    "/home/wxzheng/uccl-zhongjie-dev/experimental/lite/build/rs_recovery_8l4_20261114/uccl_lite_nccl_identity_check"
+  ],
+  "cwd": "/home/wxzheng/uccl-zhongjie-dev/experimental/lite",
+  "binary_sha256": "087157562b7f5be189ebca0c2ddc6234eca4f038e510daf1554a7d95c3b1af8f",
+  "returncode": 0,
+  "utc": "2026-11-14T08:01:12.085644+00:00",
+  "scope": "host-only; no GPU initialization; GPU performance job from another user active"
+}
