@@ -360,6 +360,27 @@
       "command": "python3 -m pytest -q ep/deep_ep_wrapper/tests/test_event_handle.py -k records_on_current_stream --junitxml=\"$CI_TEST_JUNIT\""
     },
     {
+      "id": "ep.cpu.config_check",
+      "sources": [
+        "ep/tests/test_config_check.py"
+      ],
+      "tier": "cpu",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "ep/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "python3 -m pytest -q ep/tests/test_config_check.py -k 'not GlooTest' --junitxml=\"$CI_TEST_JUNIT\""
+    },
+    {
       "id": "mccl.cpu.mccl_abi",
       "sources": [
         "collective/mccl/test_mccl_abi.py"
@@ -1028,6 +1049,28 @@
       "setup": [
         "ep"
       ]
+    },
+    {
+      "id": "ep.config_check",
+      "sources": [
+        "ep/tests/test_config_check.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "gh200",
+        "gb10"
+      ],
+      "paths": [
+        "ep/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "python3 -m pytest -q ep/tests/test_config_check.py -k GlooTest --junitxml=\"$CI_TEST_JUNIT\""
     },
     {
       "id": "ep.low_latency",
