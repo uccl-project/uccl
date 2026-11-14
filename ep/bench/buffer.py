@@ -1047,7 +1047,7 @@ class Buffer:
         # TODO: automatically tune
         config_map = {
             2: Config(Buffer.num_sms, 24, 256, 6, 128),
-            4: Config(Buffer.num_sms, 6, 256, 6, 128),
+            4: Config(Buffer.num_sms, 24, 256, 6, 128),
             8: Config(Buffer.num_sms, 6, 256, 6, 128),
             16: Config(Buffer.num_sms, 36, 288, 20, 512 if Buffer._is_efa() else 128),
             24: Config(Buffer.num_sms, 8, 288, 32, 128),
