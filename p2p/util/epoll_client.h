@@ -10,6 +10,7 @@
 // ---------------------------
 struct ClientConnection {
   int fd = -1;
+  uint64_t event_id = 0;
   std::string server_ip;
   int server_port = 0;
   bool connected = false;
@@ -49,6 +50,7 @@ class EpollClient {
  private:
   void event_loop();
 
+  // Called with conns_mtx_ held.
   void handle_read(std::string const& conn_key);
 
   void parse_responses(ClientConnection& conn);
@@ -64,4 +66,6 @@ class EpollClient {
   std::atomic<bool> running_;
   mutable std::mutex conns_mtx_;
   std::map<std::string, ClientConnection> conns_;
+  uint64_t next_event_id_ = 0;
+  std::unordered_map<uint64_t, decltype(conns_)::iterator> events_;
 };

@@ -546,7 +546,7 @@
       "nodes": 1,
       "gpus": 0,
       "timeout": 180,
-      "command": "g++ -std=c++17 -O2 -pthread -Ip2p -Ip2p/util -Iinclude p2p/tests/test_epoll_client.cc p2p/util/epoll_client.cc -o \"$CI_ARTIFACTS/epoll_client\" && \"$CI_ARTIFACTS/epoll_client\""
+      "command": "g++ -std=c++17 -O2 -pthread -Ip2p -Ip2p/util -Iinclude p2p/tests/test_epoll_client.cc p2p/util/epoll_client.cc -Wl,--wrap=epoll_wait -o \"$CI_ARTIFACTS/epoll_client\" && \"$CI_ARTIFACTS/epoll_client\""
     },
     {
       "id": "p2p.cpu.epoll_server",
