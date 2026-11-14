@@ -165,7 +165,7 @@ test_epoll_server: tests/test_epoll_server.cc util/epoll_server.cc util/epoll_se
 	$(CXX) -std=c++17 -O2 -I. -I./util -I../include -o $@ tests/test_epoll_server.cc util/epoll_server.cc -lpthread
 
 test_epoll_client: tests/test_epoll_client.cc util/epoll_client.cc util/epoll_client.h
-	$(CXX) -std=c++17 -O2 -I. -I./util -I../include -o $@ tests/test_epoll_client.cc util/epoll_client.cc -lpthread
+	$(CXX) -std=c++17 -O2 -I. -I./util -I../include -o $@ tests/test_epoll_client.cc util/epoll_client.cc -lpthread -Wl,--wrap=epoll_wait
 
 # Runtime ordinal preservation and sysfs mapping; no GPU or RDMA device needed.
 test_gpu_topology: ../include/util/gpu_topology_test.cc ../include/util/gpu_topology.h
