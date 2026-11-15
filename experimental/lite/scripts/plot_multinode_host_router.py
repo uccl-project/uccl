@@ -14,8 +14,8 @@ from figure_style import ROOT, clean_axis, collective_panels, configure, save
 DATA = ROOT / "benchmarks/data/ag_host_router_2x4l4_20261115/validated/summary.csv"
 NAME = "collectives-2x4l4-allgather-host-router"
 MODES = (
-    ("shared_ready", "UCCL Lite (CPU router)", "#0068B5", "o", "-"),
-    ("nccl_shared_ready", "NCCL 2.28.7 Ring+Simple", "#D65A00", "s", (0, (5, 2.5))),
+    ("shared_ready", "UCCL Lite", "#0068B5", "o", "-"),
+    ("nccl_shared_ready", "NCCL", "#D8A17A", "s", (0, (5, 2.5))),
 )
 
 
@@ -55,8 +55,9 @@ def draw(preview=False):
         ax.set_xscale("log", base=2)
         ax.set_xlim(sizes[0] / 1.35, sizes[-1] * 1.35)
         ticks = sizes if metric == 0 else [1 << p for p in (20, 22, 24, 26, 28, 30)]
-        ax.set_xticks(ticks, [str(size >> 20) for size in ticks])
-        ax.set_xlabel("Complete output per GPU (MiB)")
+        ax.set_xticks(ticks, [f"{size >> 20}M" if size < 1 << 30 else "1G"
+                             for size in ticks])
+        ax.set_xlabel("Complete tensor bytes per rank")
         ax.set_ylabel(ylabel)
         upper = 0
         for mode, label, color, marker, linestyle in MODES:
@@ -69,7 +70,7 @@ def draw(preview=False):
         ax.set_ylim(0, upper * 1.13)
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 0.99),
-               ncol=1, frameon=False, fontsize=11.5, handlelength=1.6,
+               ncol=2, frameon=False, fontsize=11.5, handlelength=1.6,
                handletextpad=0.5, labelspacing=0.3)
     save(fig, NAME, preview)
 
