@@ -83,9 +83,9 @@ def make_figure(data, operation, title, factor):
         ax.set_ylabel(ylabel)
         upper = 0.0
         for prefix, label, color, marker, linestyle in (
-            ("nccl_", "NCCL (default P2P)", "#D65A00", "s", (0, (5, 2.5))),
-            ("tuned_", "NCCL SM (tuned)", "#168B67", "D", (0, (2, 1.5))),
-            ("ascending_", "NCCL CE (tuned)", "#8C49AD", "^", (0, (6, 2, 1, 2))),
+            ("nccl_", "NCCL (default P2P)", "#D8A17A", "s", (0, (5, 2.5))),
+            ("tuned_", "NCCL SM (tuned)", "#82B4A3", "D", (0, (2, 1.5))),
+            ("ascending_", "NCCL CE (tuned)", "#B899C8", "^", (0, (6, 2, 1, 2))),
             ("", "UCCL Lite", "#0068B5", "o", "-"),
         ):
             orders = ("run1", "run2") if prefix == "ascending_" else ("forward", "reverse")
@@ -97,10 +97,13 @@ def make_figure(data, operation, title, factor):
                        for us in pair] for size, pair in zip(sizes, runs)]
             low, high = [min(pair) for pair in bounds], [max(pair) for pair in bounds]
             upper = max(upper, *high)
-            ax.fill_between(sizes, low, high, color=color, alpha=0.12, linewidth=0)
-            ax.plot(sizes, values, color=color, linewidth=2.8, marker=marker,
-                    linestyle=linestyle, markersize=6.0,
-                    markeredgecolor="white", markeredgewidth=0.7, label=label)
+            is_uccl = prefix == ""
+            ax.fill_between(sizes, low, high, color=color,
+                            alpha=0.12 if is_uccl else 0.08, linewidth=0)
+            ax.plot(sizes, values, color=color, linewidth=3.6 if is_uccl else 2.2,
+                    marker=marker, linestyle=linestyle, markersize=6.5 if is_uccl else 5,
+                    markeredgecolor="white", markeredgewidth=0.7, label=label,
+                    zorder=4 if is_uccl else 2)
         ax.set_ylim(0, upper * 1.13)
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(handles[::-1], labels[::-1], loc="upper center",

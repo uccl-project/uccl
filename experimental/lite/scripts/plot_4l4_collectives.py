@@ -40,9 +40,9 @@ def plot(rows, name, timer, factor):
         ax.set_ylabel(ylabel)
         upper = 0.0
         for key, label, color, marker, style in (
-            ('nccl_median_us', 'NCCL (default)', '#D65A00', 's', (0, (5, 2.5))),
-            ('sm_median_us', 'NCCL SM (tuned)', '#168B67', 'D', (0, (2, 1.5))),
-            ('ce_median_us', 'NCCL CE (tuned)', '#8C49AD', '^', (0, (6, 2, 1, 2))),
+            ('nccl_median_us', 'NCCL (default)', '#D8A17A', 's', (0, (5, 2.5))),
+            ('sm_median_us', 'NCCL SM (tuned)', '#82B4A3', 'D', (0, (2, 1.5))),
+            ('ce_median_us', 'NCCL CE (tuned)', '#B899C8', '^', (0, (6, 2, 1, 2))),
             ('uccl_median_us', 'UCCL Lite', '#0068B5', 'o', '-'),
         ):
             selected = tuned if key.startswith(('sm_', 'ce_')) else by_size
@@ -54,10 +54,14 @@ def plot(rows, name, timer, factor):
             high = [max(pair) for pair in bounds]
             assert len(values) == 11 and all(math.isfinite(v) and v > 0 for v in values)
             upper = max(upper, *high)
-            ax.fill_between(sizes, low, high, color=color, alpha=.12, linewidth=0)
-            ax.plot(sizes, values, color=color, linewidth=2.8, marker=marker,
-                    linestyle=style, markersize=6, markeredgecolor='white',
-                    markeredgewidth=.7, label=label)
+            is_uccl = key == 'uccl_median_us'
+            if key != 'ce_median_us':
+                ax.fill_between(sizes, low, high, color=color,
+                                alpha=.12 if is_uccl else .08, linewidth=0)
+            ax.plot(sizes, values, color=color, linewidth=3.6 if is_uccl else 2.2,
+                    marker=marker, linestyle=style, markersize=6.5 if is_uccl else 5,
+                    markeredgecolor='white', markeredgewidth=.7, label=label,
+                    zorder=4 if is_uccl else 2)
         ax.set_ylim(0, upper * 1.13)
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(handles[::-1], labels[::-1], loc='upper center',

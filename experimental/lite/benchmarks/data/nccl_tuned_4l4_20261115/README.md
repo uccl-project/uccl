@@ -44,7 +44,9 @@ those points are plotted in full.
   CUDA-event and host-clock results are separate figures, never combined.
 - Every process traverses the complete ascending size sweep on one communicator.
   Three independent evaluation runs produce a median of three run means.
-  Shading shows the three-run range, also recorded in CSVs; it is not a confidence interval.
+  Shading shows the three-run range for UCCL Lite and the SM/default controls;
+  CE shading is omitted for readability. All ranges remain in CSVs and are
+  not confidence intervals.
   Largest-first and CUDA-graph execution are outside this study.
 - Bus throughput is `1.5 × bytes / time` for AR and `0.75 × bytes / time`
   for AG/RS, in decimal GB/s.
