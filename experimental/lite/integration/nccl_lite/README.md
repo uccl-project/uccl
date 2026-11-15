@@ -7,9 +7,13 @@ library. It is not a complete NCCL ABI implementation.
 
 ## End-to-end results · 8×L4
 
-![GLM-4.5-Air-FP8 whole-batch serving latency and gains](../../docs/assets/sglang-large-prefill-e2e-8l4.svg)
-
-![Full training-step latency and gains for DDP and experimental adapted FSDP](../../docs/assets/training-large-message-e2e-8l4.svg)
+<table>
+  <tr><th>Serving</th><th>Training</th></tr>
+  <tr>
+    <td width="50%" valign="top"><img src="../../docs/assets/sglang-large-prefill-e2e-8l4.svg" alt="GLM-4.5-Air-FP8 serving latency and latency reduction versus NCCL on eight L4 GPUs" width="100%"></td>
+    <td width="50%" valign="top"><img src="../../docs/assets/training-large-message-e2e-8l4.svg" alt="DDP and experimental adapted FSDP training-step latency and latency reduction versus NCCL on eight L4 GPUs" width="100%"></td>
+  </tr>
+</table>
 
 [Methodology, raw data, and reproduction](e2e_large_messages_8l4_20261115.md) · [FSDP adapter boundary](e2e_large_messages_8l4_20261115.md#fsdp-compatibility-boundary)
 

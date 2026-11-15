@@ -52,9 +52,13 @@ validation and calibrated backend selection. See the
 
 #### Testbed 1
 
-![Fresh SGLang whole-batch latency and gains, UCCL Lite versus NCCL](docs/assets/sglang-large-prefill-e2e-8l4.svg)
-
-![Full training-step latency and gains for DDP and experimental adapted FSDP](docs/assets/training-large-message-e2e-8l4.svg)
+<table>
+  <tr><th>Serving</th><th>Training</th></tr>
+  <tr>
+    <td width="50%" valign="top"><img src="docs/assets/sglang-large-prefill-e2e-8l4.svg" alt="GLM-4.5-Air-FP8 serving latency and latency reduction versus NCCL on eight L4 GPUs" width="100%"></td>
+    <td width="50%" valign="top"><img src="docs/assets/training-large-message-e2e-8l4.svg" alt="DDP and experimental adapted FSDP training-step latency and latency reduction versus NCCL on eight L4 GPUs" width="100%"></td>
+  </tr>
+</table>
 
 [Measurements, raw data, and reproduction](integration/nccl_lite/e2e_large_messages_8l4_20261115.md) · [Earlier serving profile](docs/assets/sglang-e2e-latency-8l4.svg)
 
