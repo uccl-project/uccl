@@ -713,7 +713,7 @@ class SelectionTests(unittest.TestCase):
         for name in normal_ids | perf_ids:
             self.assertFalse(
                 any(
-                    source.startswith(("examples/", "experimental/"))
+                    source.startswith(("collective/examples/", "experimental/"))
                     for source in definitions[name]["sources"]
                 ),
                 name,

@@ -54,7 +54,7 @@ Target counts overlap. All 34 CPU suites run on GitHub. Seven protocol suites
 install pinned CUDA headers/runtime for compilation, without requiring a GPU or
 driver. No standalone build-tier entries are enabled.
 
-All 62 entries under `examples/` and `experimental/` are disabled, including
+All 62 entries under `collective/examples/` and `experimental/` are disabled, including
 GIN fixtures built through the experimental tree. The remaining 33 exclusions
 cover unavailable devices, unsupported configurations and opted-out fixtures.
 Every exclusion has a reason. Disabled tests cannot be forced with `--tests`.
