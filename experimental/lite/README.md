@@ -10,12 +10,12 @@
 
 ## Testbeds
 
-| GPUs | GPU P2P |
-| --- | --- |
-| 8 × NVIDIA L4 | Partial P2P |
-| 8 × NVIDIA L4 | Without P2P |
-| 4 × NVIDIA L4 | With P2P |
-| 2 × NVIDIA RTX PRO 6000 | With P2P |
+| # | GPUs | GPU P2P |
+| --- | --- | --- |
+| 1 | 8 × NVIDIA L4 | Partial P2P |
+| 2 | 8 × NVIDIA L4 | Without P2P |
+| 3 | 4 × NVIDIA L4 | With P2P |
+| 4 | 2 × NVIDIA RTX PRO 6000 | With P2P |
 
 UCCL Lite is an experimental collection of CUDA collective kernels, an
 optional CPU router, fusion kernels, and hardware probes. The direct peer paths
@@ -48,105 +48,98 @@ validation and calibrated backend selection. See the
 
 ## Measured results
 
-### SGLang end-to-end (8×L4)
+### SGLang end-to-end
+
+#### Testbed 1
 
 ![SGLang whole-batch latency, UCCL Lite versus NCCL](docs/assets/sglang-e2e-latency-8l4.svg)
 
 ### Single-node collectives
 
-#### AllReduce on single 4xL4 GPU
+#### Testbed 1
 
-![AllReduce: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput](docs/assets/collectives-4l4-allreduce-all-sizes.svg)
+<table>
+  <tr><th>AllReduce</th><th>AllGather</th><th>ReduceScatter</th></tr>
+  <tr>
+    <td width="33%"><img src="docs/assets/collectives-8l4-allreduce-overview.svg" alt="8xL4 GPU AllReduce: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite versus NCCL" width="100%"></td>
+    <td width="33%"><img src="docs/assets/collectives-8l4-allgather-overview.svg" alt="8xL4 GPU AllGather: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite versus NCCL" width="100%"></td>
+    <td width="33%"><img src="docs/assets/collectives-8l4-reducescatter-overview.svg" alt="8xL4 GPU ReduceScatter: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite versus NCCL" width="100%"></td>
+  </tr>
+</table>
 
-#### AllGather on single 4xL4 GPU
+#### Testbed 2
 
-![AllGather: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput](docs/assets/collectives-4l4-allgather-all-sizes.svg)
+<table>
+  <tr><th>AllReduce</th><th>AllGather</th><th>ReduceScatter</th></tr>
+  <tr>
+    <td width="33%"><img src="docs/assets/collectives-8l4-shm-allreduce-overview.svg" alt="8xL4 SHM AllReduce: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite versus NCCL SHM" width="100%"></td>
+    <td width="33%"><img src="docs/assets/collectives-8l4-shm-allgather-overview.svg" alt="8xL4 SHM AllGather: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite versus NCCL SHM" width="100%"></td>
+    <td width="33%"><img src="docs/assets/collectives-8l4-shm-reducescatter-overview.svg" alt="8xL4 SHM ReduceScatter: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite versus NCCL SHM" width="100%"></td>
+  </tr>
+</table>
 
-#### ReduceScatter on single 4xL4 GPU
+#### Testbed 3
 
-![ReduceScatter: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput](docs/assets/collectives-4l4-reducescatter-all-sizes.svg)
+<table>
+  <tr><th>AllReduce</th><th>AllGather</th><th>ReduceScatter</th></tr>
+  <tr>
+    <td width="33%"><img src="docs/assets/collectives-4l4-allreduce-all-sizes.svg" alt="AllReduce: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput" width="100%"></td>
+    <td width="33%"><img src="docs/assets/collectives-4l4-allgather-all-sizes.svg" alt="AllGather: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput" width="100%"></td>
+    <td width="33%"><img src="docs/assets/collectives-4l4-reducescatter-all-sizes.svg" alt="ReduceScatter: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput" width="100%"></td>
+  </tr>
+</table>
 
-#### RTX PRO 6000 ×2
+#### Testbed 4
 
-##### AllReduce on RTX PRO 6000 ×2
-
-![PRO6000 x2 AllReduce: UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (default P2P)](docs/assets/collectives-pro6000x2-allreduce-overview.svg)
-
-##### AllGather on RTX PRO 6000 ×2
-
-![PRO6000 x2 AllGather: UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (default P2P)](docs/assets/collectives-pro6000x2-allgather-overview.svg)
-
-##### ReduceScatter on RTX PRO 6000 ×2
-
-![PRO6000 x2 ReduceScatter: UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (default P2P)](docs/assets/collectives-pro6000x2-reducescatter-overview.svg)
-
-#### 8xL4 GPU
-
-##### AllReduce on single 8xL4 GPU
-
-![8xL4 GPU AllReduce: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite versus NCCL](docs/assets/collectives-8l4-allreduce-overview.svg)
-
-##### AllGather on single 8xL4 GPU
-
-![8xL4 GPU AllGather: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite versus NCCL](docs/assets/collectives-8l4-allgather-overview.svg)
-
-##### ReduceScatter on single 8xL4 GPU
-
-![8xL4 GPU ReduceScatter: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite versus NCCL](docs/assets/collectives-8l4-reducescatter-overview.svg)
-
-#### 8xL4 SHM
-
-##### AllReduce on single 8xL4 SHM
-
-![8xL4 SHM AllReduce: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite versus NCCL SHM](docs/assets/collectives-8l4-shm-allreduce-overview.svg)
-
-##### AllGather on single 8xL4 SHM
-
-![8xL4 SHM AllGather: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite versus NCCL SHM](docs/assets/collectives-8l4-shm-allgather-overview.svg)
-
-##### ReduceScatter on single 8xL4 SHM
-
-![8xL4 SHM ReduceScatter: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite versus NCCL SHM](docs/assets/collectives-8l4-shm-reducescatter-overview.svg)
+<table>
+  <tr><th>AllReduce</th><th>AllGather</th><th>ReduceScatter</th></tr>
+  <tr>
+    <td width="33%"><img src="docs/assets/collectives-pro6000x2-allreduce-overview.svg" alt="PRO6000 x2 AllReduce: UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (default P2P)" width="100%"></td>
+    <td width="33%"><img src="docs/assets/collectives-pro6000x2-allgather-overview.svg" alt="PRO6000 x2 AllGather: UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (default P2P)" width="100%"></td>
+    <td width="33%"><img src="docs/assets/collectives-pro6000x2-reducescatter-overview.svg" alt="PRO6000 x2 ReduceScatter: UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (default P2P)" width="100%"></td>
+  </tr>
+</table>
 
 ### Multi-node collectives
 
-#### AllReduce on two 4xL4 GPU nodes
+#### Testbed 3 × 2 nodes
 
-![Two-node AllReduce latency and bus throughput, UCCL Lite versus NCCL](docs/assets/collectives-2x4l4-allreduce-optimized.svg)
+<table>
+  <tr><th>AllReduce</th><th>AllGather</th><th>ReduceScatter</th></tr>
+  <tr>
+    <td width="33%"><img src="docs/assets/collectives-2x4l4-allreduce-optimized.svg" alt="Two-node AllReduce latency and bus throughput, UCCL Lite versus NCCL" width="100%"></td>
+    <td width="33%"><img src="docs/assets/collectives-2x4l4-allgather-host-multicast.svg" alt="Two-node AllGather: host multicast at 1–256 KiB versus paired NCCL" width="100%"></td>
+    <td width="33%"><img src="docs/assets/collectives-2x4l4-reducescatter-optimized.svg" alt="Two-node ReduceScatter latency and bus throughput, UCCL Lite versus NCCL" width="100%"></td>
+  </tr>
+</table>
 
-#### AllGather on two 4xL4 GPU nodes
+### Fusion
 
-![Two-node AllGather: host multicast at 1–256 KiB versus paired NCCL](docs/assets/collectives-2x4l4-allgather-host-multicast.svg)
+#### Testbed 3
 
-#### ReduceScatter on two 4xL4 GPU nodes
-
-![Two-node ReduceScatter latency and bus throughput, UCCL Lite versus NCCL](docs/assets/collectives-2x4l4-reducescatter-optimized.svg)
-
-### Fusion on single 4xL4 GPU
-
-#### Dense AG+GEMM, GEMM+RS, GEMM+AR
+##### Dense AG+GEMM, GEMM+RS, GEMM+AR
 
 ![Complete-operation latency at every dense shape, UCCL Lite versus NCCL and cuBLAS](docs/assets/dense-fusion-4l4-refresh.svg)
 
-#### Expert-parallel MoE
+##### Expert-parallel MoE
 
 ![Complete-layer latency at every token count, UCCL Lite versus NCCL and grouped cuBLAS](docs/assets/moe-fusion-4l4-refresh.svg)
 
-### Fusion on single 8xL4 GPU
+#### Testbed 1
 
-#### GEMM + AllReduce on single 8xL4 GPU
+##### GEMM + AllReduce
 
 ![Eight-L4 GEMM plus AllReduce decode latency bars for four model shapes at M=1,32,64](docs/assets/fusion-8l4-model-gemm-ar-decode-m64-labeled-bars.svg)
 
 ![Eight-L4 GEMM plus AllReduce prefill latency bars for four model shapes at M=2048,4096,8192](docs/assets/fusion-8l4-model-gemm-ar-prefill-labeled-bars.svg)
 
-#### AllGather + GEMM on single 8xL4 GPU
+##### AllGather + GEMM
 
 ![Eight-L4 AllGather plus GEMM decode latency bars for four model shapes at M=8,32,64](docs/assets/fusion-8l4-model-ag-gemm-decode-labeled-bars.svg)
 
 ![Eight-L4 AllGather plus GEMM prefill latency bars for four model shapes at M=2048,4096,8192](docs/assets/fusion-8l4-model-ag-gemm-prefill-labeled-bars.svg)
 
-#### GEMM + ReduceScatter on single 8xL4 GPU
+##### GEMM + ReduceScatter
 
 ![Eight-L4 GEMM plus ReduceScatter decode latency bars for four model shapes at M=1,32,64](docs/assets/fusion-8l4-model-gemm-rs-decode-optimized-labeled-bars.svg)
 
@@ -206,7 +199,7 @@ The `Process (CPU)` operators can be used in different collectives:
 - **Deduplicate** removes repeated token records in dispatch/combine. The
   included fixed-width operator is intended for small routing metadata.
 
-### 8xL4 collective packet flows
+### Testbed 1 collective packet flows
 
 Each animation shows all eight GPUs and one packet stage at a time. Larger
 tensors pipeline many packets.
