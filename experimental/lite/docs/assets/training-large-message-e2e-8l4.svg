@@ -127,7 +127,7 @@ L 252.236991 256.824
 L 252.236991 162.909026
 L 99.425455 162.909026
 z
-" clip-path="url(#p1ce03f023c)" style="fill: #d8a17a"/>
+" clip-path="url(#p1ce03f023c)" style="fill: #f6c99f"/>
    </g>
    <g id="patch_4">
     <path d="M 523.901944 256.824
@@ -135,7 +135,7 @@ L 676.71348 256.824
 L 676.71348 128.447354
 L 523.901944 128.447354
 z
-" clip-path="url(#p1ce03f023c)" style="fill: #d8a17a"/>
+" clip-path="url(#p1ce03f023c)" style="fill: #f6c99f"/>
    </g>
    <g id="patch_5">
     <path d="M 260.72652 256.824
@@ -180,10 +180,10 @@ L 761.608777 113.042157
     <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #172a3a" x="761.608777" y="146.963928" transform="rotate(-0 761.608777 146.963928)">584</text>
    </g>
    <g id="text_14">
-    <text style="font-weight: 700; font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #0068b5" x="256.481755" y="139.966419" transform="rotate(-0 256.481755 139.966419)">23.6% lower latency</text>
+    <text style="font-weight: 700; font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #0068b5" x="256.481755" y="139.966419" transform="rotate(-0 256.481755 139.966419)">↓ 23.6%</text>
    </g>
    <g id="text_15">
-    <text style="font-weight: 700; font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #0068b5" x="680.958245" y="105.504747" transform="rotate(-0 680.958245 105.504747)">19.4% lower latency</text>
+    <text style="font-weight: 700; font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #0068b5" x="680.958245" y="105.504747" transform="rotate(-0 680.958245 105.504747)">↓ 19.4%</text>
    </g>
    <g id="legend_1">
     <g id="patch_7">
@@ -192,7 +192,7 @@ L 88.596 94.642594
 L 88.596 88.342594
 L 70.596 88.342594
 z
-" style="fill: #d8a17a"/>
+" style="fill: #f6c99f"/>
     </g>
     <g id="text_16">
      <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #172a3a" x="95.796" y="94.642594" transform="rotate(-0 95.796 94.642594)">NCCL (default)</text>

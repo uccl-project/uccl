@@ -175,7 +175,7 @@ L 155.520829 259.2
 L 155.520829 243.711564
 L 99.425455 243.711564
 z
-" clip-path="url(#pa6080b7c5d)" style="fill: #d8a17a"/>
+" clip-path="url(#pa6080b7c5d)" style="fill: #f6c99f"/>
    </g>
    <g id="patch_4">
     <path d="M 255.245938 259.2
@@ -183,7 +183,7 @@ L 311.341312 259.2
 L 311.341312 200.978815
 L 255.245938 200.978815
 z
-" clip-path="url(#pa6080b7c5d)" style="fill: #d8a17a"/>
+" clip-path="url(#pa6080b7c5d)" style="fill: #f6c99f"/>
    </g>
    <g id="patch_5">
     <path d="M 411.066421 259.2
@@ -191,7 +191,7 @@ L 467.161795 259.2
 L 467.161795 141.799223
 L 411.066421 141.799223
 z
-" clip-path="url(#pa6080b7c5d)" style="fill: #d8a17a"/>
+" clip-path="url(#pa6080b7c5d)" style="fill: #f6c99f"/>
    </g>
    <g id="patch_6">
     <path d="M 566.886904 259.2
@@ -199,7 +199,7 @@ L 622.982278 259.2
 L 622.982278 183.283634
 L 566.886904 183.283634
 z
-" clip-path="url(#pa6080b7c5d)" style="fill: #d8a17a"/>
+" clip-path="url(#pa6080b7c5d)" style="fill: #f6c99f"/>
    </g>
    <g id="patch_7">
     <path d="M 722.707388 259.2
@@ -207,7 +207,7 @@ L 778.802762 259.2
 L 778.802762 118.885039
 L 722.707388 118.885039
 z
-" clip-path="url(#pa6080b7c5d)" style="fill: #d8a17a"/>
+" clip-path="url(#pa6080b7c5d)" style="fill: #f6c99f"/>
    </g>
    <g id="patch_8">
     <path d="M 158.637238 259.2
@@ -315,19 +315,19 @@ L 809.966858 102.047244
     <text style="font-size: 8px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #172a3a" x="809.966858" y="135.523206" transform="rotate(-0 809.966858 135.523206)">23.72</text>
    </g>
    <g id="text_26">
-    <text style="font-weight: 700; font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #0068b5" x="157.079033" y="218.858826" transform="rotate(-0 157.079033 218.858826)">14.8% lower latency</text>
+    <text style="font-weight: 700; font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #0068b5" x="157.079033" y="218.858826" transform="rotate(-0 157.079033 218.858826)">↓ 14.8%</text>
    </g>
    <g id="text_27">
-    <text style="font-weight: 700; font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #0068b5" x="312.899517" y="176.126078" transform="rotate(-0 312.899517 176.126078)">17.6% lower latency</text>
+    <text style="font-weight: 700; font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #0068b5" x="312.899517" y="176.126078" transform="rotate(-0 312.899517 176.126078)">↓ 17.6%</text>
    </g>
    <g id="text_28">
-    <text style="font-weight: 700; font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #0068b5" x="468.72" y="116.946486" transform="rotate(-0 468.72 116.946486)">18.4% lower latency</text>
+    <text style="font-weight: 700; font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #0068b5" x="468.72" y="116.946486" transform="rotate(-0 468.72 116.946486)">↓ 18.4%</text>
    </g>
    <g id="text_29">
-    <text style="font-weight: 700; font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #0068b5" x="624.540483" y="158.430897" transform="rotate(-0 624.540483 158.430897)">7.0% lower latency</text>
+    <text style="font-weight: 700; font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #0068b5" x="624.540483" y="158.430897" transform="rotate(-0 624.540483 158.430897)">↓ 7.0%</text>
    </g>
    <g id="text_30">
-    <text style="font-weight: 700; font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #0068b5" x="780.360967" y="94.032302" transform="rotate(-0 780.360967 94.032302)">15.4% lower latency</text>
+    <text style="font-weight: 700; font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #0068b5" x="780.360967" y="94.032302" transform="rotate(-0 780.360967 94.032302)">↓ 15.4%</text>
    </g>
    <g id="legend_1">
     <g id="patch_13">
@@ -336,7 +336,7 @@ L 88.596 95.938594
 L 88.596 89.638594
 L 70.596 89.638594
 z
-" style="fill: #d8a17a"/>
+" style="fill: #f6c99f"/>
     </g>
     <g id="text_31">
      <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #172a3a" x="95.796" y="95.938594" transform="rotate(-0 95.796 95.938594)">NCCL (default)</text>

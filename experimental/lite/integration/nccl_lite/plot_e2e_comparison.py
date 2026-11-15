@@ -25,7 +25,7 @@ def label_reductions(ax, data, cases, scale=1):
                 [y - maximum * 0.02, y, y, y - maximum * 0.02],
                 color="#0068B5", linewidth=1.2)
         ax.text(x, y + maximum * 0.02,
-                f"{data[case]['latency_reduction_pct']:.1f}% lower latency",
+                f"↓ {data[case]['latency_reduction_pct']:.1f}%",
                 ha="center", va="bottom", color="#0068B5", fontsize=10,
                 fontweight="bold")
 
@@ -57,7 +57,7 @@ def main():
     ax.set_xlabel("Requests × input tokens; output tokens below")
     maximum = max(data[c][b + "_s"] for c in cases for b in ("nccl", "packet"))
     for backend, label, color, shift in (
-        ("nccl", "NCCL (default)", "#D8A17A", -0.19),
+        ("nccl", "NCCL (default)", "#F6C99F", -0.19),
         ("packet", "UCCL Lite", "#0068B5", 0.19),
     ):
         values = [data[c][backend + "_s"] for c in cases]
@@ -85,7 +85,7 @@ def main():
     clean_axis(ax)
     ax.set_xticks(positions, labels, fontsize=10)
     for backend, label, color, shift in (
-        ("nccl", "NCCL (default)", "#D8A17A", -0.19),
+        ("nccl", "NCCL (default)", "#F6C99F", -0.19),
         ("packet", "UCCL Lite", "#0068B5", 0.19),
     ):
         values = [data[c][backend + "_s"] * 1000 for c in cases]

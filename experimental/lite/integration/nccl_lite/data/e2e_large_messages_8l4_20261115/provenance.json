@@ -9,7 +9,7 @@
     "integration/nccl_lite/bench_training_step.py": "b6498d0bb1cc3136d9c3666d2696caddb08dcc05909093f035ed7690e1da6470",
     "integration/nccl_lite/launch_glm45_air.sh": "338c4c4d38632becd95e5bbc6387b383bb59d7a65b0244ab668793566a6554cf",
     "integration/nccl_lite/nccl_compat.cc": "19d0d8f029d98bc77fd1b596c06bf994a8de3788558c386cca580ba6dad84a39",
-    "integration/nccl_lite/plot_e2e_comparison.py": "437fb43fa3c26748bf9a55b644b25f888182438fedba52a4930a47ae7cd9c623",
+    "integration/nccl_lite/plot_e2e_comparison.py": "ab7117071e9db5d651eb979518ae473ce0e1071cd6bf025166cbf23691b05d6d",
     "integration/nccl_lite/run_e2e_comparison.py": "c3686f8ead22650bda6f3d5ec57c2212c7ad0854afdb11ad911351888b527286",
     "integration/nccl_lite/run_packet_8l4.sh": "fa4628865b779e0c1256098b9075c07f27685d6272f2ec3e1b4cc009895d7854",
     "integration/nccl_lite/run_training_comparison.py": "ad8f8cf82f02dc4a9b6952c3d269184cb4685231c5ffc0c812e0fb64eff023eb",
@@ -28,7 +28,7 @@
   "collective_source_worktree_status": "",
   "artifact_sha256": {
     "integration/nccl_lite/e2e_large_messages_8l4_20261115.md": "ebf12e755e28af99c86b60a8344c45ef19f2ea5a7caec8d24813eac69e6e9af7",
-    "docs/assets/sglang-large-prefill-e2e-8l4.svg": "a7620045adbc3955623a33e788e2acfa80e64e0e2727a6581fc711581aa04e69",
-    "docs/assets/training-large-message-e2e-8l4.svg": "b1c11835c92b6d7fd105238b18db286bdaed1c6dbeddb10eecc38b32d3738356"
+    "docs/assets/sglang-large-prefill-e2e-8l4.svg": "b40780cd7dc734bdf20a6e75894dddf19fcecf4ff1005dcf73acb389d3a2db63",
+    "docs/assets/training-large-message-e2e-8l4.svg": "cc08eda336edc264f97b2decdb29c1e59777cba86ce64c3118f417d1506fe4c6"
   }
 }
