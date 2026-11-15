@@ -1,0 +1,42 @@
+{
+  "ddp": {
+    "dropin": {
+      "job_ms": [
+        395.5781711265445,
+        405.9419333934784
+      ],
+      "median_ms": 400.76005226001143
+    },
+    "nccl": {
+      "job_ms": [
+        471.4472482446581,
+        469.1486682277173
+      ],
+      "median_ms": 470.2979582361877
+    },
+    "latency_change_pct": -14.785925551744306,
+    "no_regression_5pct": true,
+    "max_loss_difference": 0.00103759765625,
+    "max_parameter_sample_difference": 0.0
+  },
+  "fsdp": {
+    "dropin": {
+      "job_ms": [
+        624.5611675549299,
+        625.0908689107746
+      ],
+      "median_ms": 624.8260182328522
+    },
+    "nccl": {
+      "job_ms": [
+        700.0909287016839,
+        698.7789350096136
+      ],
+      "median_ms": 699.4349318556488
+    },
+    "latency_change_pct": -10.667027084971858,
+    "no_regression_5pct": true,
+    "max_loss_difference": 0.0010366439819335938,
+    "max_parameter_sample_difference": 0.0
+  }
+}

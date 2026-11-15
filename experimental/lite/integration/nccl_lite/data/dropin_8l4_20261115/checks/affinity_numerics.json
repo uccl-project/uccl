@@ -1,0 +1,250 @@
+{
+  "cases": [
+    {
+      "op": 1,
+      "count": 4096,
+      "full_buffer_oracle": "pass"
+    },
+    {
+      "op": 1,
+      "count": 8192,
+      "full_buffer_oracle": "pass"
+    },
+    {
+      "op": 1,
+      "count": 16384,
+      "full_buffer_oracle": "pass"
+    },
+    {
+      "op": 1,
+      "count": 32768,
+      "full_buffer_oracle": "pass"
+    },
+    {
+      "op": 1,
+      "count": 65536,
+      "full_buffer_oracle": "pass"
+    },
+    {
+      "op": 1,
+      "count": 131072,
+      "full_buffer_oracle": "pass"
+    },
+    {
+      "op": 1,
+      "count": 262144,
+      "full_buffer_oracle": "pass"
+    },
+    {
+      "op": 1,
+      "count": 524288,
+      "full_buffer_oracle": "pass"
+    },
+    {
+      "op": 1,
+      "count": 1048576,
+      "full_buffer_oracle": "pass"
+    },
+    {
+      "op": 1,
+      "count": 2097152,
+      "full_buffer_oracle": "pass"
+    },
+    {
+      "op": 1,
+      "count": 4194304,
+      "full_buffer_oracle": "pass"
+    },
+    {
+      "op": 1,
+      "count": 4227328,
+      "full_buffer_oracle": "pass"
+    },
+    {
+      "op": 1,
+      "count": 6291968,
+      "full_buffer_oracle": "pass"
+    },
+    {
+      "op": 2,
+      "count": 4096,
+      "full_buffer_oracle": "pass"
+    },
+    {
+      "op": 2,
+      "count": 8192,
+      "full_buffer_oracle": "pass"
+    },
+    {
+      "op": 2,
+      "count": 16384,
+      "full_buffer_oracle": "pass"
+    },
+    {
+      "op": 2,
+      "count": 32768,
+      "full_buffer_oracle": "pass"
+    },
+    {
+      "op": 2,
+      "count": 65536,
+      "full_buffer_oracle": "pass"
+    },
+    {
+      "op": 2,
+      "count": 131072,
+      "full_buffer_oracle": "pass"
+    },
+    {
+      "op": 2,
+      "count": 262144,
+      "full_buffer_oracle": "pass"
+    },
+    {
+      "op": 2,
+      "count": 524288,
+      "full_buffer_oracle": "pass"
+    },
+    {
+      "op": 2,
+      "count": 1048576,
+      "full_buffer_oracle": "pass"
+    },
+    {
+      "op": 2,
+      "count": 2097152,
+      "full_buffer_oracle": "pass"
+    },
+    {
+      "op": 2,
+      "count": 4194304,
+      "full_buffer_oracle": "pass"
+    },
+    {
+      "op": 2,
+      "count": 4227328,
+      "full_buffer_oracle": "pass"
+    },
+    {
+      "op": 2,
+      "count": 6291968,
+      "full_buffer_oracle": "pass"
+    },
+    {
+      "op": 3,
+      "count": 32768,
+      "full_buffer_oracle": "pass"
+    },
+    {
+      "op": 3,
+      "count": 131072,
+      "full_buffer_oracle": "pass"
+    },
+    {
+      "op": 3,
+      "count": 524288,
+      "full_buffer_oracle": "pass"
+    },
+    {
+      "op": 3,
+      "count": 2097152,
+      "full_buffer_oracle": "pass"
+    },
+    {
+      "op": 3,
+      "count": 8388608,
+      "full_buffer_oracle": "pass"
+    },
+    {
+      "op": 3,
+      "count": 16777216,
+      "full_buffer_oracle": "pass"
+    },
+    {
+      "op": 3,
+      "count": 33554432,
+      "full_buffer_oracle": "pass"
+    },
+    {
+      "op": 3,
+      "count": 33820672,
+      "full_buffer_oracle": "pass"
+    },
+    {
+      "op": 3,
+      "count": 67112960,
+      "full_buffer_oracle": "pass"
+    },
+    {
+      "op": 3,
+      "count": 67115008,
+      "full_buffer_oracle": "pass"
+    }
+  ],
+  "rank_worker_affinity": [
+    {
+      "uccl_ar_lane": [
+        4
+      ],
+      "uccl_rs_worker": [
+        5
+      ]
+    },
+    {
+      "uccl_ar_lane": [
+        10
+      ],
+      "uccl_rs_worker": [
+        11
+      ]
+    },
+    {
+      "uccl_ar_lane": [
+        16
+      ],
+      "uccl_rs_worker": [
+        17
+      ]
+    },
+    {
+      "uccl_ar_lane": [
+        22
+      ],
+      "uccl_rs_worker": [
+        23
+      ]
+    },
+    {
+      "uccl_ar_lane": [
+        28
+      ],
+      "uccl_rs_worker": [
+        29
+      ]
+    },
+    {
+      "uccl_ar_lane": [
+        34
+      ],
+      "uccl_rs_worker": [
+        35
+      ]
+    },
+    {
+      "uccl_ar_lane": [
+        40
+      ],
+      "uccl_rs_worker": [
+        41
+      ]
+    },
+    {
+      "uccl_ar_lane": [
+        46
+      ],
+      "uccl_rs_worker": [
+        47
+      ]
+    }
+  ]
+}

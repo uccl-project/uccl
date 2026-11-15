@@ -1,0 +1,26 @@
+UCCL Lite packet mode AG=1 RS=1 AR=1 retain_rs=1 split_credits=1 scratch=1 pipeline_ag=1 hier_rs=1
+UCCL Lite packet worker device=2 CPU=17
+UCCL Lite packet worker device=2 isolated CPU=17 scheduler_threads=16
+UCCL Lite packet worker device=3 CPU=23
+UCCL Lite packet worker device=1 CPU=11
+UCCL Lite packet worker device=3 isolated CPU=23 scheduler_threads=16
+UCCL Lite packet worker device=0 CPU=5
+UCCL Lite packet worker device=0 isolated CPU=5 scheduler_threads=16
+UCCL Lite packet worker device=1 isolated CPU=11 scheduler_threads=16
+UCCL Lite packet worker device=4 CPU=29
+UCCL Lite packet worker device=6 CPU=41
+UCCL Lite packet worker device=7 CPU=47
+UCCL Lite packet worker device=4 isolated CPU=29 scheduler_threads=16
+UCCL Lite packet worker device=6 isolated CPU=41 scheduler_threads=16
+UCCL Lite packet worker device=7 isolated CPU=47 scheduler_threads=16
+UCCL Lite packet worker device=5 CPU=35
+UCCL Lite packet worker device=5 isolated CPU=35 scheduler_threads=16
+{"backend": "dropin", "sharding": "ddp", "fsdp_rs_group": "stock", "out": "build/dropin_8l4_20261115/training_release/samples.jsonl", "run_id": "01_dropin_ddp", "width": 2048, "layers": 12, "vocab": 8192, "sequence": 128, "batch": 1, "bucket_mib": 128, "warmup": 3, "steps": 20, "seed": 12345, "dtype": "bfloat16", "torch": "2.9.1+cu128", "torch_compiled_nccl": [2, 27, 5], "runtime_nccl_version": 22809, "mapped_nccl": ["/data/zhongjie/vllm-dsv4-venv/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2"], "parameters": 637847552, "gradient_bytes": 1275695104, "max_rank_step_s": [0.40544646978378296, 0.3937502708286047, 0.39904184779152274, 0.40661083487793803, 0.3895040573552251, 0.3963260529562831, 0.4011115380562842, 0.39033319568261504, 0.39327325904741883, 0.39714382495731115, 0.387892697006464, 0.40435892390087247, 0.417841468937695, 0.39822433423250914, 0.39715082198381424, 0.3891564616933465, 0.39057567110285163, 0.39483028929680586, 0.3932220507413149, 0.391801739577204], "median_step_s": 0.3955781711265445, "tokens_per_s": 2588.6160429019856, "rank_parameter_samples_identical": true}
+UCCL Lite drop-in: rank=0 AG=0 RS=0 AR=220 fallback=26
+UCCL Lite drop-in: rank=6 AG=0 RS=0 AR=220 fallback=26
+UCCL Lite drop-in: rank=7 AG=0 RS=0 AR=220 fallback=26
+UCCL Lite drop-in: rank=3 AG=0 RS=0 AR=220 fallback=26
+UCCL Lite drop-in: rank=2 AG=0 RS=0 AR=220 fallback=26
+UCCL Lite drop-in: rank=1 AG=0 RS=0 AR=220 fallback=26
+UCCL Lite drop-in: rank=4 AG=0 RS=0 AR=220 fallback=26
+UCCL Lite drop-in: rank=5 AG=0 RS=0 AR=220 fallback=26

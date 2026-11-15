@@ -1,0 +1,7 @@
+{
+  "status": "rejected private-stream prototype; not release results",
+  "warmup": 2,
+  "measured_steps": 3,
+  "paired_controls": false,
+  "reason": "microbenchmark wins did not transfer to stock training; release enqueues on the caller stream and preserves helper affinity"
+}

@@ -8,7 +8,13 @@ BUILD := build
 LITE := ../..
 
 .PHONY: all check check-torch check-shared-packet check-sum2 check-ag-gemm check-ready-rs bench-sum2 clean
-all: $(BUILD)/libuccl_lite_nccl_compat.so
+all: $(BUILD)/libuccl_lite_nccl_compat.so $(BUILD)/libuccl_lite_nccl.so
+
+.PHONY: dropin
+dropin: $(BUILD)/libuccl_lite_nccl.so
+
+$(BUILD)/libuccl_lite_nccl.so: dropin.cc $(LITE)/src/collectives/multiprocess_collectives.cc $(LITE)/include/uccl_lite/multiprocess_collectives.h $(LITE)/src/cpu_router/cpu_executor.cc $(BUILD)/multiprocess_packet_ag.o | $(BUILD)
+	$(CXX) -O3 -std=c++17 -fPIC -shared -pthread -I$(LITE)/include -I$(LITE)/include/uccl_lite/cpu_router -I$(CUDA_HOME)/include -I$(NCCL_HOME)/include dropin.cc $(LITE)/src/collectives/multiprocess_collectives.cc $(LITE)/src/cpu_router/cpu_executor.cc $(BUILD)/multiprocess_packet_ag.o -L$(CUDA_HOME)/lib64 -lcudart -lcublas -ldl -L$(NCCL_HOME)/lib -Wl,--no-as-needed -l:libnccl.so.2 -Wl,--as-needed -Wl,-rpath,$(CUDA_HOME)/lib64 -Wl,-rpath,$(abspath $(NCCL_HOME)/lib) -o $@
 
 check: $(BUILD)/test_compat
 	UCCL_LITE_REAL_NCCL=$(REAL_NCCL) UCCL_LITE_NCCL_ENABLE=1 NCCL_NET=Socket NCCL_NET_PLUGIN=none NCCL_CUMEM_ENABLE=0 NCCL_NVLS_ENABLE=0 ./$(BUILD)/test_compat

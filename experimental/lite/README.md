@@ -52,6 +52,14 @@ validation and calibrated backend selection. See the
 
 #### Testbed 1
 
+These historical figures are **not all stock NCCL drop-in results**: serving
+and DDP use the experimental NCCL proxy; FSDP uses a separate RS communicator
+and an application communication hook. See the
+[original FSDP boundary](integration/nccl_lite/e2e_large_messages_8l4_20261115.md#fsdp-compatibility-boundary).
+The [calibrated eight-L4 drop-in](integration/nccl_lite/DROPIN.md) has its own
+stock-FSDP validation and fresh performance records; it does not inherit these
+figures.
+
 <table>
   <tr><th>Serving</th><th>Training</th></tr>
   <tr>
@@ -61,6 +69,9 @@ validation and calibrated backend selection. See the
 </table>
 
 #### Testbed 4
+
+Both workloads below use an explicit parameter-sharded application adapter,
+not a drop-in NCCL replacement.
 
 <table>
   <tr><th>Serving</th><th>Training</th></tr>

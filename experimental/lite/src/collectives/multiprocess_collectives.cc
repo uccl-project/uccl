@@ -155,6 +155,7 @@ struct Handle {
   bool rsStop = false;
   std::thread rsThread;
   std::atomic<pid_t> rsWorkerTid{0};
+  std::atomic<pid_t> arLaneTid{0};
   std::unique_ptr<uccl_lite::cpu_router::CpuExecutor> rsHelper;
   std::thread arLaneThread;
   std::mutex arLaneMutex;
@@ -340,7 +341,8 @@ void isolatePacketWorker(Handle* h, int workerCpu) {
     char* end = nullptr;
     long tid = std::strtol(entry->d_name, &end, 10);
     if (end == entry->d_name || *end ||
-        tid == h->rsWorkerTid.load(std::memory_order_acquire))
+        tid == h->rsWorkerTid.load(std::memory_order_acquire) ||
+        tid == h->arLaneTid.load(std::memory_order_acquire))
       continue;
     cpu_set_t current;
     if (sched_getaffinity(pid_t(tid), sizeof(current), &current) != 0) {
@@ -379,6 +381,7 @@ void runParallelArLane(Handle* h, int cpu) {
     CPU_SET(cpu, &set);
     if (sched_setaffinity(0, sizeof(set), &set) != 0)
       throw std::runtime_error("AR lane CPU affinity failed");
+    h->arLaneTid.store(pid_t(syscall(SYS_gettid)), std::memory_order_release);
     uint64_t serial = 0;
     while (true) {
       uint64_t base;
@@ -1254,7 +1257,9 @@ std::unique_ptr<Handle> create(char const* identifier, int ranks, int rank,
     if (worker < 0)
       throw std::invalid_argument("worker isolation requires CPU map");
     auto deadline = std::chrono::steady_clock::now() + kTimeout;
-    while (!h->rsWorkerTid.load(std::memory_order_acquire)) {
+    while (!h->rsWorkerTid.load(std::memory_order_acquire) ||
+           (h->parallelAllReduce &&
+            !h->arLaneTid.load(std::memory_order_acquire))) {
       if (std::chrono::steady_clock::now() >= deadline)
         throw std::runtime_error("packet worker did not start");
       std::this_thread::yield();
@@ -1308,7 +1313,8 @@ extern "C" void* uccl_lite_mp_create_rs_ready(char const* identifier,
 }
 static int enqueueImpl(void* handle, int operation, void const* input,
                        void const* auxiliary, void* output, void* gemmOutput,
-                       uint32_t const* ready, size_t count, void* stream) {
+                       uint32_t const* ready, size_t count, void* stream,
+                       bool ordered = false) {
   try {
     auto* h = static_cast<Handle*>(handle);
     if (!h || !input || !output ||
@@ -1335,9 +1341,9 @@ static int enqueueImpl(void* handle, int operation, void const* input,
                   h->hostGateReduceScatter))
       throw std::invalid_argument("ready RS requires 4096-element GPU packet");
     auto cudaStream = static_cast<cudaStream_t>(stream);
-    // Subsequent calls on this communicator must use the same stream. This
-    // preserves ordering of the single shared staging slot.
-    if (h->lastStream && h->lastStream != cudaStream)
+    // The ordinary API requires one stream to protect shared staging. The
+    // ordered API's caller supplies CUDA dependencies when switching streams.
+    if (!ordered && h->lastStream && h->lastStream != cudaStream)
       throw std::invalid_argument("communicator stream changed");
     h->lastStream = cudaStream;
     if ((operation == 1 && h->packetAllGather) ||
@@ -1528,6 +1534,12 @@ extern "C" int uccl_lite_mp_enqueue(void* handle, int operation,
                                     size_t count, void* stream) {
   return enqueueImpl(handle, operation, input, nullptr, output, nullptr,
                      nullptr, count, stream);
+}
+extern "C" int uccl_lite_mp_enqueue_ordered(void* handle, int operation,
+                                            void const* input, void* output,
+                                            size_t count, void* stream) {
+  return enqueueImpl(handle, operation, input, nullptr, output, nullptr,
+                     nullptr, count, stream, true);
 }
 extern "C" int uccl_lite_mp_enqueue_ag_gemm_128x4096(
     void* handle, void const* input, void* gathered, void const* weight,

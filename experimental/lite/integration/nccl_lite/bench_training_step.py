@@ -51,7 +51,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--backend", required=True)
     parser.add_argument("--sharding", choices=["ddp", "fsdp"], default="ddp")
-    parser.add_argument("--fsdp-rs-group", choices=["separate", "shared"], default="separate")
+    parser.add_argument("--fsdp-rs-group", choices=["separate", "shared", "stock"], default="separate")
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--run-id", default="")
     parser.add_argument("--width", type=int, default=2048)
@@ -78,7 +78,7 @@ def main():
             pass
     torch.set_num_threads(1)
     torch.cuda.set_device(rank)
-    if args.sharding == "fsdp":
+    if args.sharding == "fsdp" and args.fsdp_rs_group != "stock":
         # Leave the default PG unbound to prevent ncclCommSplit for the RS
         # group: the experimental proxy tracks full communicator initialization.
         dist.init_process_group("nccl")
@@ -139,11 +139,15 @@ def main():
     rank_losses = [None] * 8
     dist.all_gather_object(rank_times, times)
     dist.all_gather_object(rank_losses, losses)
-    if args.sharding == "fsdp":
+    if args.sharding == "fsdp" and args.fsdp_rs_group != "stock":
         # Verification must preserve the trained communicator's AG stream too.
         with torch.cuda.stream(model._unshard_stream):
             with FullyShardedDataParallel.summon_full_params(model, writeback=False):
                 probes = torch.cat([p.detach().flatten()[:8].float() for p in model.parameters()])
+        torch.cuda.synchronize()
+    elif args.sharding == "fsdp":
+        with FullyShardedDataParallel.summon_full_params(model, writeback=False):
+            probes = torch.cat([p.detach().flatten()[:8].float() for p in model.parameters()])
         torch.cuda.synchronize()
     else:
         probes = torch.cat([p.detach().flatten()[:8].float() for p in model.parameters()])

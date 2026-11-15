@@ -1,5 +1,10 @@
 # UCCL Lite NCCL AG/RS/AR compatibility layer
 
+For the separate calibrated **NCCL ABI drop-in with stock FSDP**, use
+[DROPIN.md](DROPIN.md). It loads `build/libuccl_lite_nccl.so`, retains NCCL for
+unvalidated cases, and has its own measurements. The historical proxy and
+fusion experiments below use `build/libuccl_lite_nccl_compat.so`.
+
 This is an experimental **single-node, eight-process, BF16** NCCL compatibility
 layer for AllGather, ReduceScatter(SUM), and AllReduce(SUM). It forwards other
 NCCL calls used by the installed SGLang PyNccl wrapper to the real NCCL

@@ -14,6 +14,8 @@ import time
 import urllib.error
 import urllib.request
 
+from dropin_profile import LIBRARY, launch_environment
+
 
 HERE = Path(__file__).resolve().parent
 
@@ -27,7 +29,8 @@ def main():
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--real-nccl", type=Path, required=True)
     parser.add_argument("--backends", nargs="+", default=["nccl", "packet", "packet", "nccl"],
-                        choices=["nccl", "packet"])
+                        choices=["nccl", "packet", "dropin"])
+    parser.add_argument("--dropin-profile", type=Path)
     parser.add_argument("--cases", nargs="+", default=["8:2048:1", "32:1024:1", "32:2048:1"])
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--case-warmups", type=int, default=1)
@@ -36,6 +39,10 @@ def main():
     parser.add_argument("--startup-timeout", type=float, default=600)
     parser.add_argument("server_args", nargs=argparse.REMAINDER)
     args = parser.parse_args()
+    if "dropin" in args.backends and not args.dropin_profile:
+        parser.error("dropin requires --dropin-profile")
+    if args.dropin_profile and "packet" in args.backends:
+        parser.error("use nccl/dropin backends with --dropin-profile")
     with socket.socket() as probe:
         probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
@@ -75,18 +82,39 @@ def main():
             HERE / "run_packet_8l4.sh"]},
         "phases": [],
     }
+    if args.dropin_profile:
+        manifest["dropin_profile"] = str(args.dropin_profile.resolve())
+        manifest["sha256"][str(LIBRARY)] = sha256(LIBRARY)
+        manifest["sha256"][str(args.dropin_profile)] = sha256(args.dropin_profile)
+        for source in (Path(__file__), HERE / "dropin_profile.py"):
+            manifest["sha256"][str(source)] = sha256(source)
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
     for phase, backend in enumerate(args.backends):
         label = f"{phase:02d}_{backend}"
         command = [str(HERE / "run_packet_8l4.sh"), "env",
                    f"UCCL_LITE_NCCL_ENABLE={int(backend == 'packet')}",
                    str(HERE / "launch_glm45_air.sh"), *server_args]
+        trial_env = env.copy()
+        if args.dropin_profile:
+            trial_env.update(launch_environment(args.real_nccl, args.dropin_profile if backend == "dropin" else None))
+            trial_env.update(PORT=str(args.port), SGLANG_PYTHON=sys.executable,
+                             OMP_NUM_THREADS="1", MKL_NUM_THREADS="1",
+                             SGLANG_SET_CPU_AFFINITY="1",
+                             UCCL_LITE_NCCL_NO_OVERRIDES="1",
+                             UCCL_LITE_COMPAT_SO=str(LIBRARY if backend == "dropin" else args.real_nccl))
+            if backend == "nccl":
+                trial_env["LD_PRELOAD"] = str(args.real_nccl)
+                trial_env["SGLANG_NCCL_SO_PATH"] = str(args.real_nccl)
+            command = [str(HERE / "launch_glm45_air.sh"), *server_args]
         record = {"label": label, "command": command, "complete": False}
+        if args.dropin_profile:
+            record["environment"] = {k: v for k, v in trial_env.items() if k.startswith(
+                ("UCCL_", "NCCL_", "SGLANG_", "CUDA_", "OMP_", "MKL_", "LD_", "PYTHON"))}
         manifest["phases"].append(record)
         manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
         print(f"Starting {label}", flush=True)
         with (args.out_dir / f"{label}_server.log").open("w") as log:
-            server = subprocess.Popen(command, env=env, stdout=log, stderr=subprocess.STDOUT,
+            server = subprocess.Popen(command, env=trial_env, stdout=log, stderr=subprocess.STDOUT,
                                       start_new_session=True)
             try:
                 deadline = time.monotonic() + args.startup_timeout

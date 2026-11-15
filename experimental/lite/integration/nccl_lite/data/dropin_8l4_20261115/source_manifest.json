@@ -1,0 +1,23 @@
+{
+  "git_head": "56b26fecb60e9972c672d0169d3c85d6446095ca",
+  "source_sha256": {
+    "integration/nccl_lite/dropin.cc": "fa98c3b2a8c9e2be90d510180b1c27d7e8bbf54261829ec082a45ea7012827e2",
+    "integration/nccl_lite/dropin_profile.py": "c5ff837424e7670f45221491e7e813f5549c0d6d69319d3a2b918181e663719d",
+    "integration/nccl_lite/Makefile": "88e6446efd1dc801b005c6d83a5e828c5286834f89184d1cbb23a34b8055a61b",
+    "integration/nccl_lite/bench_dropin.py": "d83feca4a0756214eea93cb9ef89380822061110b728ebcf393d77f14ab2bb8c",
+    "integration/nccl_lite/calibrate_dropin.py": "fcd1e265d04318f3e845abcd60d869ac7f328b5ddf6bc6375ed9c7d47e19aa81",
+    "integration/nccl_lite/run_dropin_training.py": "35e5af5229b9dd7903227d12feb22d3502d899bdbd64e8ad1800d9524eaeb7a1",
+    "integration/nccl_lite/bench_training_step.py": "74cdd5dbbf9c7506dafc9232df82610692ee65b60166ae98c8a71b888f503959",
+    "integration/nccl_lite/run_e2e_comparison.py": "3c64ab46f415c26c379f30bfe5b5f0cadfbb068b0beff773f51a356a0544330e",
+    "integration/nccl_lite/launch_glm45_air.sh": "104b3aa5f9063143cf2a06e078c652f8431f1222c909f64eea2d5d1863848c07",
+    "integration/nccl_lite/test_dropin_numerics.py": "5d566d71e748a10b9e930292d7d4d75992c732089d37d21982fe9dac4dd254bd",
+    "integration/nccl_lite/test_dropin_fallback.py": "219cbcded01271a87a859b74f5bd22582b959552c76d92b86c92cf042f8b7726",
+    "integration/nccl_lite/summarize_dropin.py": "ce43e92b9475da53864c5847c59a673218ff6624423ba25db39562d071d108fd",
+    "src/collectives/multiprocess_collectives.cc": "a33b04fab6afb326952861be8432f32e913c54f00f269b1ad0c4302a6535d0a4",
+    "include/uccl_lite/multiprocess_collectives.h": "31a8c882165cfbe15ad7da9709da2a3bab8cef0c4ae8667ac70dee5bcdc211f9"
+  },
+  "binary_sha256": "c0cd09d615ae59c9eeba7aa45f46b4b84606f18fe4f691fb9d2365a990c3af7e",
+  "compiled_binaries": "retained only under build/",
+  "all_measured_latency_metrics_within_5pct": true,
+  "no_per_size_kernel_variant_sweep": true
+}

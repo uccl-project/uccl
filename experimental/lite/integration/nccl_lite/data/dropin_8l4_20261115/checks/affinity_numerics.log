@@ -1,0 +1,70 @@
+[Gloo] Rank [Gloo] Rank 1 is connected to 70 peer ranks.  is connected to Expected number of connected peer ranks is : 77 peer ranks. Expected number of connected peer ranks is : 
+7
+[Gloo] Rank 2 is connected to 7 peer ranks. Expected number of connected peer ranks is : 7
+[Gloo] Rank 4 is connected to 7 peer ranks. Expected number of connected peer ranks is : 7
+[Gloo] Rank 3 is connected to 7 peer ranks. Expected number of connected peer ranks is : 7
+[Gloo] Rank [Gloo] Rank [Gloo] Rank 65 is connected to  is connected to 777 peer ranks.  is connected to  peer ranks. Expected number of connected peer ranks is : 7Expected number of connected peer ranks is : 7 peer ranks. 7Expected number of connected peer ranks is : 
+7
+
+Checking op=1 count=4096
+UCCL Lite packet mode AG=1 RS=1 AR=1 retain_rs=1 split_credits=1 scratch=1 pipeline_ag=1 hier_rs=1
+UCCL Lite packet worker device=4 CPU=29
+UCCL Lite packet worker device=6 CPU=41
+UCCL Lite packet worker device=5 CPU=35
+UCCL Lite packet worker device=6 isolated CPU=41 scheduler_threads=9
+UCCL Lite packet worker device=4 isolated CPU=29 scheduler_threads=9
+UCCL Lite packet worker device=5 isolated CPU=35 scheduler_threads=9
+UCCL Lite packet worker device=7 CPU=47
+UCCL Lite packet worker device=7 isolated CPU=47 scheduler_threads=9
+UCCL Lite packet worker device=0 CPU=5
+UCCL Lite packet worker device=1 CPU=11
+UCCL Lite packet worker device=0 isolated CPU=5 scheduler_threads=9
+UCCL Lite packet worker device=3 CPU=23
+UCCL Lite packet worker device=1 isolated CPU=11 scheduler_threads=9
+UCCL Lite packet worker device=3 isolated CPU=23 scheduler_threads=9
+UCCL Lite packet worker device=2 CPU=17
+UCCL Lite packet worker device=2 isolated CPU=17 scheduler_threads=9
+Checking op=1 count=8192
+Checking op=1 count=16384
+Checking op=1 count=32768
+Checking op=1 count=65536
+Checking op=1 count=131072
+Checking op=1 count=262144
+Checking op=1 count=524288
+Checking op=1 count=1048576
+Checking op=1 count=2097152
+Checking op=1 count=4194304
+Checking op=1 count=4227328
+Checking op=1 count=6291968
+Checking op=2 count=4096
+Checking op=2 count=8192
+Checking op=2 count=16384
+Checking op=2 count=32768
+Checking op=2 count=65536
+Checking op=2 count=131072
+Checking op=2 count=262144
+Checking op=2 count=524288
+Checking op=2 count=1048576
+Checking op=2 count=2097152
+Checking op=2 count=4194304
+Checking op=2 count=4227328
+Checking op=2 count=6291968
+Checking op=3 count=32768
+Checking op=3 count=131072
+Checking op=3 count=524288
+Checking op=3 count=2097152
+Checking op=3 count=8388608
+Checking op=3 count=16777216
+Checking op=3 count=33554432
+Checking op=3 count=33820672
+Checking op=3 count=67112960
+Checking op=3 count=67115008
+UCCL Lite drop-in: rank=6 AG=13 RS=13 AR=10 fallback=0
+UCCL Lite drop-in: rank=2 AG=13 RS=13 AR=10 fallback=0
+UCCL Lite drop-in: rank=5 AG=13 RS=13 AR=10 fallback=0
+UCCL Lite drop-in: rank=4 AG=13 RS=13 AR=10 fallback=0
+UCCL Lite drop-in: rank=0 AG=13 RS=13 AR=10 fallback=0
+UCCL Lite drop-in: rank=3 AG=13 RS=13 AR=10 fallback=0
+UCCL Lite drop-in: rank=7 AG=13 RS=13 AR=10 fallback=0
+UCCL Lite drop-in: rank=1 AG=13 RS=13 AR=10 fallback=0
+PASS: 36 full-buffer signed/index-dependent cases; mixed rank layouts and alignments
