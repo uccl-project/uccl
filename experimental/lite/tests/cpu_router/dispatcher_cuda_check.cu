@@ -9,8 +9,15 @@ namespace {
 void check(cudaError_t error) {
   if (error != cudaSuccess) throw std::runtime_error(cudaGetErrorString(error));
 }
+std::vector<int> testDevices() {
+  int count = 0;
+  check(cudaGetDeviceCount(&count));
+  if (count < 4) throw std::runtime_error("dispatcher check requires four GPUs");
+  return count >= 8 ? std::vector<int>{0, 1, 4, 5}
+                    : std::vector<int>{0, 1, 2, 3};
+}
 void run(bool legacy, int launchWorkers, bool smallGpu) {
-  std::vector<int> devices{0, 1, 4, 5};
+  auto devices = testDevices();
   constexpr size_t maxBytes = 65552;
   CollectiveCall call;
   call.collective = Collective::ReduceScatter;
@@ -132,7 +139,7 @@ void run(bool legacy, int launchWorkers, bool smallGpu) {
 // Nonzero data across both placement boundaries, with aliasing and repeated
 // operation changes. A mode change must reject enqueue until prepare is called.
 void runArAgProgressBoundaries() {
-  std::vector<int> devices{0, 1, 4, 5};
+  auto devices = testDevices();
   constexpr size_t maxBytes = 65552;
   constexpr uint16_t values[] = {0x3f80, 0x4000, 0x4040, 0x4080};
   CollectiveCall call;

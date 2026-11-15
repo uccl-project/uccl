@@ -1,0 +1,22 @@
+{
+  "integration_base": "622fb704990637a76092b7ad2bb0c69e76008be4",
+  "experiment_upstream": "5b9a7f86",
+  "retained_peer_source": "e734b51547466ea141bc38b46b562db58e294890",
+  "retained_router_source": "2ba27356550628122fcff0e539c18a71e9ffd097",
+  "performance_scope": "Historical measurements of named experimental snapshots; not measurements of this integration on 622fb704.",
+  "files": {
+    "router-shm-cases.csv": "13dc050424f16e2addaa3cfeab2ccb55831cb11ed7df6a9a074e3dd900e7e22d",
+    "l41-peer-cases.csv": "4e56b74c5bed43728171fe8ea56fdef65fabb8aada7d0b877f4c42a64ea6339a",
+    "pro6000-joint-cases.csv": "d2a8eda91032a94157ef4bdb4425abcabc4f0fb1ab43d9d6c9f244d7ce4354f6",
+    "l41-peer-comparison.svg": "2d00bd5836e5f2d89d652c783213ab8844801cb2475c5d2bbb364c443d783932"
+  },
+  "original_pro6000_result_sha256": "b90ed3a4efb2e98695645128f08de9b3480eb55ce564a7c977ce26de61798d54",
+  "original_plot_sha256": "bccd4e90f7ff181d9202faa03e751279a20082dc018b9e2f7cd820171c72444d",
+  "plot_packaging": "Trailing whitespace removed from SVG; plotted coordinates and data unchanged.",
+  "original_csv_sha256": {
+    "router-shm-cases.csv": "05792b236839a6c75fdce0e3c830e79d5e4e50914a2ffaf084c2c6375d16aa23",
+    "l41-peer-cases.csv": "27ae87507a5f2919b53db3b43b63b8a0fc6db53668a891943af4c8839d0500ce",
+    "pro6000-joint-cases.csv": "4dfff2f98534ef33b4bf00876d905c726970adbf7abb07f4efeecc7455146866"
+  },
+  "csv_packaging": "CRLF normalized to LF; parsed CSV fields unchanged."
+}

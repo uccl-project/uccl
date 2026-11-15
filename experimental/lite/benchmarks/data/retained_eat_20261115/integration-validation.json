@@ -1,0 +1,329 @@
+{
+  "status": "PASS",
+  "base": "622fb704990637a76092b7ad2bb0c69e76008be4",
+  "host": "wxz-l4",
+  "hardware": "8 NVIDIA L4, 4+4 NUMA, peer within groups only",
+  "driver": "580.178.04",
+  "cuda": "12.9",
+  "nccl": "2.28.9",
+  "build_targets": [
+    "joint-bench",
+    "joint-nccl-reference",
+    "joint-router-four",
+    "joint-router-eight",
+    "router-checks"
+  ],
+  "build_log_sha256": "0ed43d17b6d3c908ebe4c8d0ec01283046592484c790d7c7a7c96afeef2f5e72",
+  "source_sha256": {
+    "Makefile": "84456c7c5521b7def93bb91e746d03b07e4815f19ca6541bfb14c74d770f630a",
+    "include/uccl_lite/joint_collectives.hpp": "f0f8bd521340c3d26e1e815678a98627e94c466285f2dfd41fc1077bbbdced71",
+    "src/collectives/joint_collectives.cu": "6347b9cfd684e0d2fa50df44474ba325789a798036e8184e38a8120ed9500266",
+    "include/uccl_lite/cpu_router/packet_pipeline.hpp": "7a83c8a9cb09768ca6ac873e2541480dcec118faae7e359681f4550832a0113c",
+    "src/cpu_router/collective_dispatch.cc": "c44a9834b8df62a622d572eea4026272bcc2be7fee9b1bb8a94bab085b4623d4",
+    "src/cpu_router/cpu_executor.cc": "266cfc78e2c2bae41f94b8fdf2176e6dcb5fd482740edd20c7368fee519f35f1",
+    "src/cpu_router/backend_policy.cc": "6d597bb8be519a499154343bbf350abf35e176def19f5661f54321521c50f4a2",
+    "src/cpu_router/packet_pipeline.cu": "95a925efa2f453fce2312df713b39e089386ac551517bd2bcff1e5c5d2b6c2d2",
+    "src/cpu_router/module.mk": "0261b2afbf04bb82f0d1c89ab1fd30045915e3ad8cd9d5534c0f1b941896564f",
+    "tests/cpu_router/dispatcher_cuda_check.cu": "12dddfe2ca688e6c6289280f64b3b91ccaa977d39fb70b92beb6ecc0b7dec9a8"
+  },
+  "host_checks": [
+    {
+      "test": "router_policy_check",
+      "returncode": 0,
+      "seconds": 0.004137654788792133
+    },
+    {
+      "test": "dispatcher_check",
+      "returncode": 0,
+      "seconds": 0.0036924220621585846
+    },
+    {
+      "test": "cpu_bf16_check",
+      "returncode": 0,
+      "seconds": 0.015515167266130447
+    },
+    {
+      "test": "router_core_check",
+      "returncode": 0,
+      "seconds": 0.009126914199441671
+    },
+    {
+      "test": "nccl_identity_check",
+      "returncode": 0,
+      "seconds": 0.0021378728561103344
+    }
+  ],
+  "gpu_checks": [
+    {
+      "test": "router_eager",
+      "argv": [
+        "build/uccl_lite_router_check",
+        "--gpus",
+        "4",
+        "--cpu-interleave-scatter",
+        "--packet-bytes",
+        "4194304",
+        "--delay-rank",
+        "3"
+      ],
+      "returncode": 0,
+      "seconds": 2.2729453439824283,
+      "binary_sha256": "7be68967823e6ffce686727fbef37f838d8035b86ce13829d23f48d14d5fa1ab",
+      "log_sha256": "4677b97f752cab804b492bd2ee9e433da1c965e715bf23d52f6d599ca7249763"
+    },
+    {
+      "test": "router_graph",
+      "argv": [
+        "build/uccl_lite_router_graph_check",
+        "--gpus",
+        "4",
+        "--cpu-interleave-scatter",
+        "--packet-bytes",
+        "4194304",
+        "--large"
+      ],
+      "returncode": 0,
+      "seconds": 3.593076166231185,
+      "binary_sha256": "0ef5d013624e466a09a4e1aa32b00cdcf3a7d19f0b64f57007844748c1cee2a3",
+      "log_sha256": "0412390f8e420627f3e68c8d922252be032669c671f9ae147df7622807581d58"
+    },
+    {
+      "test": "dispatcher_cuda",
+      "argv": [
+        "build/uccl_lite_dispatcher_cuda_check"
+      ],
+      "returncode": 0,
+      "seconds": 3.5642153439112008,
+      "binary_sha256": "b3af8bab143714baf9487975812bc26ef19f3dcaaeddd7ec4a162adf29655591",
+      "log_sha256": "567fc084915ef71df2d49d30f51213e8b9cff2467750ad71b38eafccdc7b5e08"
+    },
+    {
+      "test": "host_ring",
+      "argv": [
+        "build/uccl_lite_host_ring_check",
+        "4"
+      ],
+      "returncode": 0,
+      "seconds": 2.2815610128454864,
+      "binary_sha256": "6d2057beaa0086dc7d33a7673f5616daffce2e01f152fa6c102e03fdadf70da7",
+      "log_sha256": "6ac09d85111cb829bdaa50b59fdf0d674835fbd62d3b2db9c78bc4c4d60b2920"
+    },
+    {
+      "test": "joint_selftest",
+      "argv": [
+        "build/uccl_lite_joint_bench",
+        "--selftest",
+        "--gpus",
+        "4",
+        "--end",
+        "4096",
+        "--source-identity",
+        "integrated-622fb704"
+      ],
+      "returncode": 0,
+      "seconds": 2.256959526799619,
+      "binary_sha256": "70d7618b57e18a58e50f98a4b929d86df6211471bb91bc288f364c8e81fa7f9f",
+      "log_sha256": "0f1f7d21abec3e81b19fa70e157a9a3fbb4100cfa255d3a3e7223d797bc796bd"
+    },
+    {
+      "test": "four_aligned_selftest",
+      "argv": [
+        "build/uccl_lite_router_four_bench",
+        "--selftest",
+        "--gpus",
+        "4",
+        "--end",
+        "4096",
+        "--source-identity",
+        "integrated-622fb704"
+      ],
+      "returncode": 0,
+      "seconds": 2.2502800677902997,
+      "binary_sha256": "a2d5b42a974c34d7b26086c19370feed7080c4fb8f555876ee1d32a3cf7970ad",
+      "log_sha256": "0f1f7d21abec3e81b19fa70e157a9a3fbb4100cfa255d3a3e7223d797bc796bd"
+    },
+    {
+      "test": "four_mixed_selftest",
+      "argv": [
+        "build/uccl_lite_router_four_mixed",
+        "--selftest",
+        "--gpus",
+        "4",
+        "--end",
+        "4096",
+        "--source-identity",
+        "integrated-622fb704"
+      ],
+      "returncode": 0,
+      "seconds": 2.2527527739293873,
+      "binary_sha256": "911dc247f9a4c368709d9b76c63ba61228ae19551e9e655f28ea59893d050521",
+      "log_sha256": "0f1f7d21abec3e81b19fa70e157a9a3fbb4100cfa255d3a3e7223d797bc796bd"
+    },
+    {
+      "test": "large_ag_smoke",
+      "argv": [
+        "build/uccl_lite_router_four_bench",
+        "--backend",
+        "router",
+        "--gpus",
+        "4",
+        "--begin",
+        "4194304",
+        "--end",
+        "16777216",
+        "--op",
+        "allgather",
+        "--warmup",
+        "2",
+        "--repeats",
+        "1",
+        "--iters",
+        "2",
+        "--source-identity",
+        "integrated-622fb704"
+      ],
+      "returncode": 0,
+      "seconds": 2.2029903498478234,
+      "binary_sha256": "a2d5b42a974c34d7b26086c19370feed7080c4fb8f555876ee1d32a3cf7970ad",
+      "log_sha256": "db04769b173f47195400790828be3315f5f21260732067b5fed30f8fc3245cb6"
+    },
+    {
+      "test": "nccl_reference_smoke",
+      "argv": [
+        "build/uccl_lite_router_four_nccl_reference",
+        "--backend",
+        "nccl",
+        "--shm-only",
+        "--gpus",
+        "4",
+        "--begin",
+        "1024",
+        "--end",
+        "1024",
+        "--warmup",
+        "2",
+        "--repeats",
+        "1",
+        "--iters",
+        "2"
+      ],
+      "returncode": 0,
+      "seconds": 3.3682521381415427,
+      "binary_sha256": "cea62f960500ab9e100691c3b711ed2ac7d092b2422249ed015c8420c18daac5",
+      "log_sha256": "2bdf951d56431eab4d572d227b84416e335c71546f15377fcc8a94e216896c5a"
+    },
+    {
+      "test": "router_eager_eight",
+      "argv": [
+        "build/uccl_lite_router_check",
+        "--gpus",
+        "8",
+        "--cpu-interleave-scatter",
+        "--packet-bytes",
+        "4194304",
+        "--delay-rank",
+        "7"
+      ],
+      "returncode": 0,
+      "seconds": 3.72538889804855,
+      "binary_sha256": "7be68967823e6ffce686727fbef37f838d8035b86ce13829d23f48d14d5fa1ab",
+      "log_sha256": "bf2b00d177ff54fb71c3227962a8e0b1736a9ffc9151d49bf4f88e13a51f4ea2"
+    },
+    {
+      "test": "router_graph_eight",
+      "argv": [
+        "build/uccl_lite_router_graph_check",
+        "--gpus",
+        "8",
+        "--cpu-interleave-scatter",
+        "--packet-bytes",
+        "4194304",
+        "--large"
+      ],
+      "returncode": 0,
+      "seconds": 4.47748403204605,
+      "binary_sha256": "0ef5d013624e466a09a4e1aa32b00cdcf3a7d19f0b64f57007844748c1cee2a3",
+      "log_sha256": "ee54b7d97cbe0e174867df18ca0c7401e6d5f40f53f035ba94bb148faa34e00e"
+    },
+    {
+      "test": "host_ring_eight",
+      "argv": [
+        "build/uccl_lite_host_ring_check",
+        "8"
+      ],
+      "returncode": 0,
+      "seconds": 3.3421016596257687,
+      "binary_sha256": "6d2057beaa0086dc7d33a7673f5616daffce2e01f152fa6c102e03fdadf70da7",
+      "log_sha256": "a199ccc1bcd9b387b8e83afaa5879ede5f38cc0dd4920cde79406488fb7a2ff9"
+    },
+    {
+      "test": "eight_selftest",
+      "argv": [
+        "build/uccl_lite_router_eight_bench",
+        "--selftest",
+        "--gpus",
+        "8",
+        "--end",
+        "4096",
+        "--source-identity",
+        "integrated-622fb704"
+      ],
+      "returncode": 0,
+      "seconds": 4.717649864032865,
+      "binary_sha256": "f9d4dd057bddc3776b7c3884b585b890aa428058dc09fcd66db47e2412747e6d",
+      "log_sha256": "e87cc7264aaca29b55dad6eabfd97ecce65675aaf15f50aa9f0f435c4299a14e"
+    },
+    {
+      "test": "eight_mixed_selftest",
+      "argv": [
+        "build/uccl_lite_router_eight_mixed",
+        "--selftest",
+        "--gpus",
+        "8",
+        "--end",
+        "4096",
+        "--source-identity",
+        "integrated-622fb704"
+      ],
+      "returncode": 0,
+      "seconds": 4.438753287307918,
+      "binary_sha256": "05bca07593d0f4b0243f89d94f36adede307a8ef06b2bf2139bc497e2c635681",
+      "log_sha256": "e87cc7264aaca29b55dad6eabfd97ecce65675aaf15f50aa9f0f435c4299a14e"
+    },
+    {
+      "test": "eight_large_ag_smoke",
+      "argv": [
+        "build/uccl_lite_router_eight_bench",
+        "--backend",
+        "router",
+        "--gpus",
+        "8",
+        "--begin",
+        "4194304",
+        "--end",
+        "16777216",
+        "--op",
+        "allgather",
+        "--warmup",
+        "2",
+        "--repeats",
+        "1",
+        "--iters",
+        "2",
+        "--source-identity",
+        "integrated-622fb704"
+      ],
+      "returncode": 0,
+      "seconds": 3.3380424440838397,
+      "binary_sha256": "f9d4dd057bddc3776b7c3884b585b890aa428058dc09fcd66db47e2412747e6d",
+      "log_sha256": "dbbc6688092ba5c77789c59fe239af35083cbd5373ef8a876846ee4262b1bbae"
+    }
+  ],
+  "scope": "Correctness and build validation only; no fresh performance certification. Router four-port/host-ring/dispatcher tests use 0,1,4,5; joint/focused four-rank fixtures use 0,1,2,3; eight-rank fixtures use all devices.",
+  "limitations": [
+    "l41 cross-NUMA peer revalidation deferred because its shared evaluation lock was held; no GPU tests launched there.",
+    "PRO6000 not rerun for this integration.",
+    "No fresh full performance sweep, inference benchmark or overlap measurement."
+  ],
+  "preservation": "Upstream host-ring kernel, build module and compact benchmark match base byte-for-byte."
+}

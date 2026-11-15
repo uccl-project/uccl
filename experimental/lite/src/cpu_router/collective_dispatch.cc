@@ -237,6 +237,11 @@ CollectiveDispatcher::CollectiveDispatcher(Topology topology,
        options_.largeAllGatherPacketBytes > (32UL << 20) ||
        options_.largeAllGatherPacketBytes % 16))
     throw std::invalid_argument("invalid large AllGather packet size");
+  if (options_.autoLargeAllGatherPacketBytes &&
+      (options_.autoLargeAllGatherPacketBytes < 16 ||
+       options_.autoLargeAllGatherPacketBytes > (32UL << 20) ||
+       options_.autoLargeAllGatherPacketBytes % 16))
+    throw std::invalid_argument("invalid automatic large AllGather packet target");
   if (options_.smallReduceScatterPacketBytes &&
       (options_.smallReduceScatterPacketBytes < options_.minPacketBytes ||
        options_.smallReduceScatterPacketBytes > options_.packetBytes ||
@@ -325,6 +330,8 @@ CollectiveDispatcher::CollectiveDispatcher(Topology topology,
         << options_.smallAllGatherGpuProgressMaxBytes;
   if (options_.largeAllGatherPacketBytes)
     key << ";large-ag-packet-v1=" << options_.largeAllGatherPacketBytes;
+  if (options_.autoLargeAllGatherPacketBytes)
+    key << ";auto-large-ag-packet-v1=" << options_.autoLargeAllGatherPacketBytes;
   for (int cpu : options_.workerCpus) key << ";worker=" << cpu;
   for (int cpu : options_.gpuLaunchAllowedCpus)
     key << ";gpu-launch-allowed-cpu=" << cpu;
@@ -426,9 +433,12 @@ BackendDecision CollectiveDispatcher::decision(
 size_t CollectiveDispatcher::packetBytesFor(CollectiveCall const& call) const {
   if (options_.hostRingReduceScatter) return options_.packetBytes;
   if (call.collective == Collective::AllGather &&
-      call.workload().bytes >= (4UL << 20) &&
-      options_.largeAllGatherPacketBytes)
-    return options_.largeAllGatherPacketBytes;
+      call.workload().bytes >= (4UL << 20)) {
+    if (options_.largeAllGatherPacketBytes)
+      return options_.largeAllGatherPacketBytes;
+    if (options_.autoLargeAllGatherPacketBytes)
+      return std::max(options_.packetBytes, options_.autoLargeAllGatherPacketBytes);
+  }
   if (call.collective == Collective::AllReduce &&
       call.workload().bytes <= (4UL << 20) &&
       options_.smallAllReducePacketBytes)

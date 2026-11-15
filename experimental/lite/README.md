@@ -29,6 +29,7 @@ and small GEMMs can lose to NCCL; negative results are retained.
 | [Single-node collectives](docs/collectives.md) | AllReduce, AllGather, and ReduceScatter on one node. |
 | [Multi-node collectives](docs/multinode.md) | Collective implementations across nodes using local GPU access and network rails. |
 | [CPU router](docs/cpu-router.md) | Optional NUMA-aware path for local collectives, selected from measured benefit. |
+| [Retained router / peer optimizations](docs/retained-optimizations.md) | Optional BF16 joint interface, retained CPU/packet improvements, measured limitations and reproduction. |
 | [Fusion kernels](docs/fusion.md) | Combine collective communication with GEMM and MoE stages. |
 
 ## Get started

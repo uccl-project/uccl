@@ -162,3 +162,25 @@ $(BUILD)/uccl_lite_resident_collectives: src/collectives/resident_collectives.cu
 resident-check: $(BUILD)/uccl_lite_resident_check
 $(BUILD)/uccl_lite_resident_check: tests/collectives/resident_check.cu src/collectives/resident_collectives.cu src/collectives/peer_ag_rs.cu | $(BUILD)
 	$(NVCC) $(NVCC_FLAGS) -std=c++17 $(MSCCLPP_INC) -I$(NCCL_HOME)/include $< -o $@ -L$(NCCL_HOME)/lib -lnccl -Xlinker -rpath=$(NCCL_HOME)/lib
+
+# Joint peer/router experiment: reference excludes every mutable solution object.
+.PHONY: joint-bench joint-nccl-reference
+joint-bench: $(BUILD)/uccl_lite_joint_bench
+joint-nccl-reference: $(BUILD)/uccl_lite_joint_nccl_reference
+$(BUILD)/joint_collectives.o: src/collectives/joint_collectives.cu include/uccl_lite/joint_collectives.hpp | $(BUILD)
+	$(NVCC) $(NVCC_FLAGS) -std=c++17 $(ROUTER_INC) -c $< -o $@
+$(BUILD)/uccl_lite_joint_bench: benchmarks/joint/joint_bench.cu $(BUILD)/joint_collectives.o $(ROUTER_STATIC) | $(BUILD)
+	$(NVCC) $(NVCC_FLAGS) -std=c++17 $(ROUTER_INC) -I$(NCCL_HOME)/include $< $(BUILD)/joint_collectives.o $(ROUTER_STATIC) -L$(NCCL_HOME)/lib -lnccl -Xlinker -rpath=$(NCCL_HOME)/lib -Xcompiler=-pthread -ldl -o $@
+$(BUILD)/uccl_lite_joint_nccl_reference: benchmarks/joint/joint_bench.cu benchmarks/cpu_router/nccl_identity.hpp | $(BUILD)
+	$(NVCC) $(NVCC_FLAGS) -std=c++17 -DNCCL_REFERENCE_ONLY -I$(NCCL_HOME)/include $< -L$(NCCL_HOME)/lib -lnccl -Xlinker -rpath=$(NCCL_HOME)/lib -o $@
+
+# Frozen four/eight-rank router fixtures from the retained SHM experiment.
+.PHONY: joint-router-four joint-router-eight
+joint-router-four: $(BUILD)/uccl_lite_router_four_bench $(BUILD)/uccl_lite_router_four_nccl_reference $(BUILD)/uccl_lite_router_four_mixed
+joint-router-eight: $(BUILD)/uccl_lite_router_eight_bench $(BUILD)/uccl_lite_router_eight_nccl_reference $(BUILD)/uccl_lite_router_eight_mixed
+$(BUILD)/uccl_lite_router_%_bench: benchmarks/joint/focused/%_aligned.cu $(BUILD)/joint_collectives.o $(ROUTER_STATIC) | $(BUILD)
+	$(NVCC) $(NVCC_FLAGS) -std=c++17 $(ROUTER_INC) -Ibenchmarks/joint -I$(NCCL_HOME)/include $< $(BUILD)/joint_collectives.o $(ROUTER_STATIC) -L$(NCCL_HOME)/lib -lnccl -Xlinker -rpath=$(NCCL_HOME)/lib -Xcompiler=-pthread -ldl -o $@
+$(BUILD)/uccl_lite_router_%_mixed: benchmarks/joint/focused/%_mixed_alignment.cu $(BUILD)/joint_collectives.o $(ROUTER_STATIC) | $(BUILD)
+	$(NVCC) $(NVCC_FLAGS) -std=c++17 $(ROUTER_INC) -Ibenchmarks/joint -I$(NCCL_HOME)/include $< $(BUILD)/joint_collectives.o $(ROUTER_STATIC) -L$(NCCL_HOME)/lib -lnccl -Xlinker -rpath=$(NCCL_HOME)/lib -Xcompiler=-pthread -ldl -o $@
+$(BUILD)/uccl_lite_router_%_nccl_reference: benchmarks/joint/focused/%_aligned.cu benchmarks/cpu_router/nccl_identity.hpp | $(BUILD)
+	$(NVCC) $(NVCC_FLAGS) -std=c++17 -DNCCL_REFERENCE_ONLY -Ibenchmarks/joint -I$(NCCL_HOME)/include $< -L$(NCCL_HOME)/lib -lnccl -Xlinker -rpath=$(NCCL_HOME)/lib -o $@

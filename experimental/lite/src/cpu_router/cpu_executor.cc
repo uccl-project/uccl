@@ -253,8 +253,41 @@ __attribute__((target("avx512f,avx512bw"))) static void store(uint16_t* p,
   _mm256_storeu_si256(reinterpret_cast<__m256i*>(p),
                       _mm512_cvtepi32_epi16(_mm512_srli_epi32(rounded, 16)));
 }
+// Preserve the generic vector loop for every overlapping span, including
+// descriptor storage, because the unrolled path reads ahead of its stores.
+static bool disjoint(void const *a, size_t aBytes, void const *b,
+                     size_t bBytes) {
+  uintptr_t x = reinterpret_cast<uintptr_t>(a);
+  uintptr_t y = reinterpret_cast<uintptr_t>(b);
+  return x <= y ? y - x >= aBytes : x - y >= bBytes;
+}
+__attribute__((target("avx512f,avx512bw"))) static size_t
+sumTwoWide(MemorySpan const *src, uint16_t *out, size_t n) {
+  auto const *a = static_cast<uint16_t const *>(src[0].address);
+  auto const *b = static_cast<uint16_t const *>(src[1].address);
+  size_t i = 0;
+  for (; n - i >= 64; i += 64) {
+    __m512 v0 = _mm512_add_ps(_mm512_setzero_ps(), load(a + i));
+    __m512 v1 = _mm512_add_ps(_mm512_setzero_ps(), load(a + i + 16));
+    __m512 v2 = _mm512_add_ps(_mm512_setzero_ps(), load(a + i + 32));
+    __m512 v3 = _mm512_add_ps(_mm512_setzero_ps(), load(a + i + 48));
+    store(out + i, _mm512_add_ps(v0, load(b + i)));
+    store(out + i + 16, _mm512_add_ps(v1, load(b + i + 16)));
+    store(out + i + 32, _mm512_add_ps(v2, load(b + i + 32)));
+    store(out + i + 48, _mm512_add_ps(v3, load(b + i + 48)));
+  }
+  for (; n - i >= 16; i += 16)
+    store(out + i,
+          _mm512_add_ps(_mm512_add_ps(_mm512_setzero_ps(), load(a + i)),
+                        load(b + i)));
+  return i;
+}
 __attribute__((target("avx512f,avx512bw"))) static size_t sumWide(
     MemorySpan const* src, size_t count, uint16_t* out, size_t n) {
+  if (count == 2 && n >= 64 && disjoint(out, n * 2, src[0].address, n * 2) &&
+      disjoint(out, n * 2, src[1].address, n * 2) &&
+      disjoint(out, n * 2, src, 2 * sizeof(MemorySpan)))
+    return sumTwoWide(src, out, n);
   size_t i = 0;
   for (; i + 16 <= n; i += 16) {
     __m512 v = _mm512_setzero_ps();

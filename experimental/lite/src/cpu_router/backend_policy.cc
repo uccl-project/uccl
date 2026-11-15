@@ -116,9 +116,9 @@ BackendDecision BackendPolicy::select(Topology const& topology,
   // CPU model, or every NCCL setting that affects the crossover.
   if (!topology.identity.empty())
     for (auto it = measurements.rbegin(); it != measurements.rend(); ++it)
-      if (it->topologyIdentity == topology.identity &&
-          it->fallbackIdentity == fallbackIdentity &&
-          sameWorkload(it->workload, workload))
+      if (sameWorkload(it->workload, workload) &&
+          it->topologyIdentity == topology.identity &&
+          it->fallbackIdentity == fallbackIdentity)
         return evaluate(*it, minimumSpeedup, "local calibration");
   return {
       false,
