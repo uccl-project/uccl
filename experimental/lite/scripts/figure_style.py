@@ -60,12 +60,11 @@ def metric_direction(ax, higher: bool = False) -> None:
                   "edgecolor": "none"})
 
 
-def collective_panels(title: str):
+def collective_panels():
     """Keep labels readable when three collective figures share a README row."""
-    fig, axes = plt.subplots(2, 1, figsize=(4.6, 6.8))
-    fig.subplots_adjust(left=0.20, right=0.97, top=0.76, bottom=0.10,
+    fig, axes = plt.subplots(2, 1, figsize=(4.6, 6.0))
+    fig.subplots_adjust(left=0.20, right=0.97, top=0.85, bottom=0.10,
                         hspace=0.72)
-    fig.suptitle(title, y=0.98, fontsize=14, fontweight="bold")
     for ax in axes:
         ax.tick_params(axis="both", labelsize=12)
         ax.xaxis.label.set_size(12)
@@ -79,7 +78,7 @@ def collective_panels(title: str):
 def collective_legend(fig, ax) -> None:
     handles, labels = ax.get_legend_handles_labels()
     fig.legend(handles[::-1], labels[::-1], loc="upper center",
-               bbox_to_anchor=(0.5, 0.93), ncol=2, frameon=False,
+               bbox_to_anchor=(0.5, 1.0), ncol=2, frameon=False,
                fontsize=11.5, handlelength=1.6, columnspacing=0.8,
                handletextpad=0.5)
 

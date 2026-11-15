@@ -21,7 +21,7 @@ def plot(rows, name, timer, factor):
     latency_sizes = [1 << power for power in range(10, 21)]
     throughput_sizes = [1 << power for power in range(20, 31)]
     assert all(size in by_size for size in latency_sizes + throughput_sizes)
-    fig, axes = collective_panels(f"4×L4 · {name}")
+    fig, axes = collective_panels()
     for ax, sizes, measure, ylabel, ticks in (
         (axes[0], latency_sizes, lambda size, us: us, 'Latency (µs)',
          [1 << power for power in (10, 12, 14, 16, 18, 20)]),

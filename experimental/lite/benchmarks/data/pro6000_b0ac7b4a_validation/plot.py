@@ -63,7 +63,7 @@ def load():
 
 
 def make_figure(data, operation, title, factor):
-    fig, axes = collective_panels(f"RTX PRO 6000 ×2 · {title}")
+    fig, axes = collective_panels()
     for ax, powers, ylabel, throughput in (
         (axes[0], range(10, 21), "Latency (µs)", False),
         (axes[1], range(20, 31), "Bus throughput (GB/s)", True),

@@ -43,10 +43,7 @@ def load():
 
 
 def make_figure(data, mode, operation, factor):
-    title = dict(all_reduce="AllReduce", all_gather="AllGather",
-                 reduce_scatter="ReduceScatter")[operation]
-    testbed = 1 if mode == "gpu" else 2
-    fig, axes = collective_panels(f"Testbed {testbed}: 8×L4 · {title}")
+    fig, axes = collective_panels()
     for ax, sizes, ylabel, ticks, throughput in (
         (axes[0], [1 << power for power in range(10, 21)], "Latency (µs)",
          [1 << power for power in (10, 12, 14, 16, 18, 20)], False),
