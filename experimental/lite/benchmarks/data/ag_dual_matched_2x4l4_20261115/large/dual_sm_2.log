@@ -1,0 +1,143 @@
+# UCCL Lite two-node hierarchical AllGather, float32
+# timing=host enqueue+completion; slowest of eight ranks
+# rank 0 node mibura-sky-test-02 gpu 0 NVIDIA L4 rail 0 (mlx5_0)
+# rank 1 node mibura-sky-test-02 gpu 1 NVIDIA L4 rail 0 (mlx5_0)
+# rank 2 node mibura-sky-test-02 gpu 2 NVIDIA L4 rail 1 (mlx5_1)
+# rank 3 node mibura-sky-test-02 gpu 3 NVIDIA L4 rail 1 (mlx5_1)
+# rank 4 node mibura-sky-test-01 gpu 0 NVIDIA L4 rail 0 (mlx5_0)
+# rank 5 node mibura-sky-test-01 gpu 1 NVIDIA L4 rail 0 (mlx5_0)
+# rank 6 node mibura-sky-test-01 gpu 2 NVIDIA L4 rail 1 (mlx5_1)
+# rank 7 node mibura-sky-test-01 gpu 3 NVIDIA L4 rail 1 (mlx5_1)
+# local multicast, remote-rank IB exchange; rail map 0,0,1,1; RS pieces 1
+# local ring 0->1->3->2->0; AG ring; rail map 0,0,1,1; piece 2097152 B; pipeline >= 4194304 B
+#      size(B)        count   pieces   time(us)      algbw      busbw  maxrelerr
+# selected,allgather,2097152,dual-rdma-sm
+# ag_pipeline,piece_bytes=4194304,pieces=1,depth=4,blocks=1,threads=256,slots=2,dual=1,first_mask=2
+# sample,allgather,2097152,1,202.944,0.000e+00
+# sample,allgather,2097152,2,248.671,0.000e+00
+# sample,allgather,2097152,3,199.027,0.000e+00
+# sample,allgather,2097152,4,238.076,0.000e+00
+# sample,allgather,2097152,5,188.470,0.000e+00
+# sample,allgather,2097152,6,320.049,0.000e+00
+# sample,allgather,2097152,7,205.958,0.000e+00
+# sample,allgather,2097152,8,298.069,0.000e+00
+# sample,allgather,2097152,9,189.056,0.000e+00
+# sample,allgather,2097152,10,190.336,0.000e+00
+       2097152       524288        1     228.07       9.20       8.05    0.0e+00
+# selected,allgather,4194304,dual-rdma-sm
+# ag_pipeline,piece_bytes=4194304,pieces=1,depth=4,blocks=1,threads=256,slots=2,dual=1,first_mask=2
+# sample,allgather,4194304,1,326.434,0.000e+00
+# sample,allgather,4194304,2,347.110,0.000e+00
+# sample,allgather,4194304,3,606.715,0.000e+00
+# sample,allgather,4194304,4,340.148,0.000e+00
+# sample,allgather,4194304,5,348.996,0.000e+00
+# sample,allgather,4194304,6,336.832,0.000e+00
+# sample,allgather,4194304,7,332.018,0.000e+00
+# sample,allgather,4194304,8,348.950,0.000e+00
+# sample,allgather,4194304,9,336.482,0.000e+00
+# sample,allgather,4194304,10,441.066,0.000e+00
+       4194304      1048576        1     376.48      11.14       9.75    0.0e+00
+# selected,allgather,8388608,dual-rdma-sm
+# ag_pipeline,piece_bytes=4194304,pieces=1,depth=4,blocks=1,threads=256,slots=2,dual=1,first_mask=2
+# sample,allgather,8388608,1,663.818,0.000e+00
+# sample,allgather,8388608,2,664.204,0.000e+00
+# sample,allgather,8388608,3,700.727,0.000e+00
+# sample,allgather,8388608,4,688.129,0.000e+00
+# sample,allgather,8388608,5,655.181,0.000e+00
+# sample,allgather,8388608,6,677.179,0.000e+00
+# sample,allgather,8388608,7,670.235,0.000e+00
+# sample,allgather,8388608,8,662.916,0.000e+00
+# sample,allgather,8388608,9,674.419,0.000e+00
+# sample,allgather,8388608,10,701.889,0.000e+00
+       8388608      2097152        1     675.87      12.41      10.86    0.0e+00
+# selected,allgather,16777216,dual-rdma-sm
+# ag_pipeline,piece_bytes=4194304,pieces=1,depth=4,blocks=1,threads=256,slots=2,dual=1,first_mask=2
+# sample,allgather,16777216,1,1477.618,0.000e+00
+# sample,allgather,16777216,2,1326.583,0.000e+00
+# sample,allgather,16777216,3,1436.449,0.000e+00
+# sample,allgather,16777216,4,1437.758,0.000e+00
+# sample,allgather,16777216,5,1338.471,0.000e+00
+# sample,allgather,16777216,6,1349.946,0.000e+00
+# sample,allgather,16777216,7,1333.746,0.000e+00
+# sample,allgather,16777216,8,1344.372,0.000e+00
+# sample,allgather,16777216,9,1421.410,0.000e+00
+# sample,allgather,16777216,10,1402.303,0.000e+00
+      16777216      4194304        1    1386.87      12.10      10.59    0.0e+00
+# selected,allgather,33554432,dual-rdma-sm
+# ag_pipeline,piece_bytes=4194304,pieces=1,depth=4,blocks=1,threads=256,slots=2,dual=1,first_mask=2
+# sample,allgather,33554432,1,2695.049,0.000e+00
+# sample,allgather,33554432,2,2642.306,0.000e+00
+# sample,allgather,33554432,3,2693.511,0.000e+00
+# sample,allgather,33554432,4,2670.463,0.000e+00
+# sample,allgather,33554432,5,2715.627,0.000e+00
+# sample,allgather,33554432,6,2738.719,0.000e+00
+# sample,allgather,33554432,7,2686.162,0.000e+00
+# sample,allgather,33554432,8,2672.910,0.000e+00
+# sample,allgather,33554432,9,2667.098,0.000e+00
+# sample,allgather,33554432,10,2744.041,0.000e+00
+      33554432      8388608        1    2692.59      12.46      10.90    0.0e+00
+# selected,allgather,67108864,dual-rdma-sm
+# ag_pipeline,piece_bytes=4194304,pieces=2,depth=4,blocks=1,threads=256,slots=2,dual=1,first_mask=2
+# sample,allgather,67108864,1,6255.494,0.000e+00
+# sample,allgather,67108864,2,5905.918,0.000e+00
+# sample,allgather,67108864,3,6019.905,0.000e+00
+# sample,allgather,67108864,4,5812.115,0.000e+00
+# sample,allgather,67108864,5,5700.828,0.000e+00
+# sample,allgather,67108864,6,5651.034,0.000e+00
+# sample,allgather,67108864,7,5568.628,0.000e+00
+# sample,allgather,67108864,8,5745.295,0.000e+00
+# sample,allgather,67108864,9,5832.262,0.000e+00
+# sample,allgather,67108864,10,5785.587,0.000e+00
+      67108864     16777216        1    5827.71      11.52      10.08    0.0e+00
+# selected,allgather,134217728,dual-rdma-sm
+# ag_pipeline,piece_bytes=4194304,pieces=4,depth=4,blocks=1,threads=256,slots=2,dual=1,first_mask=2
+# sample,allgather,134217728,1,11662.916,0.000e+00
+# sample,allgather,134217728,2,11865.059,0.000e+00
+# sample,allgather,134217728,3,11766.096,0.000e+00
+# sample,allgather,134217728,4,11915.811,0.000e+00
+# sample,allgather,134217728,5,11833.278,0.000e+00
+# sample,allgather,134217728,6,12278.057,0.000e+00
+# sample,allgather,134217728,7,11776.929,0.000e+00
+# sample,allgather,134217728,8,12064.156,0.000e+00
+# sample,allgather,134217728,9,11945.946,0.000e+00
+# sample,allgather,134217728,10,11731.812,0.000e+00
+     134217728     33554432        1   11884.01      11.29       9.88    0.0e+00
+# selected,allgather,268435456,dual-rdma-sm
+# ag_pipeline,piece_bytes=4194304,pieces=8,depth=4,blocks=1,threads=256,slots=2,dual=1,first_mask=2
+# sample,allgather,268435456,1,23969.563,0.000e+00
+# sample,allgather,268435456,2,24277.496,0.000e+00
+# sample,allgather,268435456,3,24396.131,0.000e+00
+# sample,allgather,268435456,4,24338.738,0.000e+00
+# sample,allgather,268435456,5,23921.583,0.000e+00
+# sample,allgather,268435456,6,24643.531,0.000e+00
+# sample,allgather,268435456,7,24293.256,0.000e+00
+# sample,allgather,268435456,8,24256.856,0.000e+00
+# sample,allgather,268435456,9,23772.298,0.000e+00
+# sample,allgather,268435456,10,25047.457,0.000e+00
+     268435456     67108864        1   24291.69      11.05       9.67    0.0e+00
+# selected,allgather,536870912,dual-rdma-sm
+# ag_pipeline,piece_bytes=4194304,pieces=16,depth=4,blocks=1,threads=256,slots=2,dual=1,first_mask=2
+# sample,allgather,536870912,1,49338.233,0.000e+00
+# sample,allgather,536870912,2,48226.346,0.000e+00
+# sample,allgather,536870912,3,49074.057,0.000e+00
+# sample,allgather,536870912,4,49643.373,0.000e+00
+# sample,allgather,536870912,5,48384.099,0.000e+00
+# sample,allgather,536870912,6,49212.104,0.000e+00
+# sample,allgather,536870912,7,48784.741,0.000e+00
+# sample,allgather,536870912,8,48739.648,0.000e+00
+# sample,allgather,536870912,9,47715.200,0.000e+00
+# sample,allgather,536870912,10,48720.215,0.000e+00
+     536870912    134217728        1   48783.80      11.01       9.63    0.0e+00
+# selected,allgather,1073741824,dual-rdma-sm
+# ag_pipeline,piece_bytes=4194304,pieces=32,depth=4,blocks=1,threads=256,slots=2,dual=1,first_mask=2
+# sample,allgather,1073741824,1,97810.929,0.000e+00
+# sample,allgather,1073741824,2,95123.385,0.000e+00
+# sample,allgather,1073741824,3,94187.104,0.000e+00
+# sample,allgather,1073741824,4,95476.778,0.000e+00
+# sample,allgather,1073741824,5,97672.626,0.000e+00
+# sample,allgather,1073741824,6,96213.271,0.000e+00
+# sample,allgather,1073741824,7,98001.929,0.000e+00
+# sample,allgather,1073741824,8,97147.595,0.000e+00
+# sample,allgather,1073741824,9,97162.648,0.000e+00
+# sample,allgather,1073741824,10,98355.423,0.000e+00
+    1073741824    268435456        1   96715.17      11.10       9.71    0.0e+00

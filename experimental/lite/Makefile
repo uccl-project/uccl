@@ -29,7 +29,7 @@ COLLECTIVES := allreduce alltoall
 PEER_COLLECTIVES := peer_ag_rs
 NCCL_CONTROLS := nccl_4l4_mpi_baseline nccl_2x4l4_baseline
 MULTINODE := multinode_allreduce multinode_cpu_router host_hierarchical_allreduce
-HOST_MULTINODE := multinode_host_allgather
+HOST_MULTINODE := multinode_host_allgather multinode_host_rdma_allgather
 FUSION := dense_fusion fused_moe fused_moe_layer fused_moe_layer_qwen router_fusion_8l4
 PROBES := gemm_probe mma_gemm_probe mma_peak_probe moe_overlap_probe cutlass_gemm_probe hardware_profiler
 ALL_NAMES := $(COLLECTIVES) $(PEER_COLLECTIVES) $(NCCL_CONTROLS) $(MULTINODE) $(HOST_MULTINODE) host_allreduce $(FUSION) $(PROBES)
@@ -80,6 +80,10 @@ $(BUILD)/uccl_lite_multinode_cpu_router: src/collectives/multinode_allreduce.cu
 
 $(BUILD)/uccl_lite_multinode_host_allgather: src/collectives/multinode_host_allgather.cu | $(BUILD)
 	$(NVCC) $(NVCC_FLAGS) -std=c++17 $(MPI_INC) -I$(NCCL_HOME)/include $< -o $@ $(MPI_LIB) -L$(NCCL_HOME)/lib -lnccl -Xlinker -rpath=$(NCCL_HOME)/lib -lcudart -lpthread
+
+# Optional pre-registered host RDMA data plane; the MPI-only target stays independent.
+$(BUILD)/uccl_lite_multinode_host_rdma_allgather: src/collectives/multinode_host_allgather.cu | $(BUILD)
+	$(NVCC) $(NVCC_FLAGS) -std=c++20 -DUCCL_LITE_HOST_RDMA $(IB_INC) $(MPI_INC) -I$(NCCL_HOME)/include $< -o $@ $(IB_LIB) $(MPI_LIB) -L$(NCCL_HOME)/lib -lnccl -Xlinker -rpath=$(NCCL_HOME)/lib -lcudart -lpthread
 
 # This fallback deliberately has no MSCCL++ dependency or GPU-memory registration.
 $(BUILD)/uccl_lite_host_allreduce: src/collectives/host_allreduce.cu | $(BUILD)

@@ -1,0 +1,6 @@
+# Captured output and reproduction patches retain their original whitespace.
+*.log -whitespace
+*.txt -whitespace
+*.patch -whitespace
+# csv.writer produces valid CRLF records.
+*.csv whitespace=cr-at-eol

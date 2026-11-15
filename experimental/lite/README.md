@@ -129,10 +129,64 @@ workload from Testbed 1's SGLang serving and DDP/FSDP training.
   <tr><th>AllReduce</th><th>AllGather</th><th>ReduceScatter</th></tr>
   <tr>
     <td width="33%"><img src="docs/assets/collectives-2x4l4-allreduce-optimized.svg" alt="Two-node AllReduce latency and bus throughput, UCCL Lite versus NCCL" width="100%"></td>
-    <td width="33%"><img src="docs/assets/collectives-2x4l4-allgather-host-multicast.svg" alt="Two-node AllGather: host multicast at 1–256 KiB versus paired NCCL" width="100%"></td>
+    <td width="33%"><img src="docs/assets/collectives-2x4l4-allgather-host-router.svg" alt="Two-node FP32 AllGather: 1–8 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite CPU router versus paired NCCL Ring+Simple" width="100%"></td>
     <td width="33%"><img src="docs/assets/collectives-2x4l4-reducescatter-optimized.svg" alt="Two-node ReduceScatter latency and bus throughput, UCCL Lite versus NCCL" width="100%"></td>
   </tr>
 </table>
+
+AllGather uses the [November 15 CPU-router measurements](benchmarks/data/ag_host_router_2x4l4_20261115/README.md):
+eight L4 GPUs, FP32, complete output bytes per GPU, slowest-process host
+enqueue-to-completion timing, and three rounds of ten warmups plus ten checked
+calls. UCCL Lite and its NCCL 2.28.7 Ring+Simple control both use four MPI
+processes, two GPUs per NUMA group; NCCL is primed before comparison.
+The CPU-router curve uses one fixed 256 KiB chunk configuration throughout,
+reaching **12.1/16.0/18.6/20.1 GB/s at 1/2/4/8 MiB** and **21.9 GB/s at 1 GiB**.
+This path remains explicitly selected. AllReduce and ReduceScatter retain their
+[November 11 measurements](benchmarks/data/multinode_serial_20261111/README.md).
+
+#### Optimization notes (temporary)
+
+The main gains came from organizing data movement and progress around the NUMA
+layout. Each group's two GPUs upload adjacent pieces into a pinned host packet;
+the local HCA sends that packet to the remote groups. AllGather only copies and
+assembles shards here; no CPU reduction is involved. Here `N` denotes complete
+output bytes per GPU.
+
+- **Keep the GPU's own shard on the GPU.** Copy it from the original input to
+  its output position. This reduces host-to-GPU reads from `N` to `7N/8` per
+  GPU, while retaining the D2H upload needed by other consumers.
+- **Share local host packets.** GPUs in the other local NUMA group read the
+  source packet through a shared mapping, removing an intermediate CPU/MPI
+  payload copy and its completion wait. Cross-NUMA reads still occur.
+- **Advance ready work promptly.** With three slots, a completed upload can be
+  sent and an arrived packet can be consumed without waiting for a future
+  upload. Local output shards can be consumed while remote data is in flight.
+- **Make reuse depend on all readers.** A slot is released only after GPU
+  consumers, network sends and the peer's consumption ACK complete. Sharing
+  memory requires these credits to prevent a fast producer overwriting data.
+
+The checked 1-GiB AllGather comparison shows the cumulative effect:
+
+| Host configuration | Latency |
+| --- | ---: |
+| Original host pipeline | 66.26 ms |
+| 256 KiB chunks + own-shard retention + early consumption | 64.10 ms |
+| Add shared local packets | 51.21 ms |
+| Add readiness-driven progress | **42.92 ms** |
+
+The first transition bundles three changes; its gain cannot be assigned to any
+one of them. Sharing packets and improving progress account for the largest
+subsequent reductions. The final path has **35.2% lower latency than the
+original host pipeline** and **20.6% lower latency than the original GPU
+policy**. Host and GPU paths use four and eight MPI processes respectively;
+the host harness also retains its own four-process NCCL control.
+
+More network copies, smaller chunks, more workers, or matched P2P exchanges do
+not automatically improve end-to-end latency. Keep the negative measurements,
+use the same timing scope, and select a route only for validated placement,
+dtype, size and software identity. See the
+[detailed optimization lessons](docs/multinode-host-router.md#optimization-lessons)
+for the tradeoffs and validation boundaries.
 
 ### Fusion
 

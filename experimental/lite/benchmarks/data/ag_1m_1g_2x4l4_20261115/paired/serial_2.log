@@ -1,0 +1,255 @@
+# UCCL Lite two-node hierarchical AllGather, float32
+# timing=host enqueue+completion; slowest of eight ranks
+# rank 0 node mibura-sky-test-02 gpu 0 NVIDIA L4 rail 0 (mlx5_0)
+# rank 1 node mibura-sky-test-02 gpu 1 NVIDIA L4 rail 0 (mlx5_0)
+# rank 2 node mibura-sky-test-02 gpu 2 NVIDIA L4 rail 1 (mlx5_1)
+# rank 3 node mibura-sky-test-02 gpu 3 NVIDIA L4 rail 1 (mlx5_1)
+# rank 4 node mibura-sky-test-01 gpu 0 NVIDIA L4 rail 0 (mlx5_0)
+# rank 5 node mibura-sky-test-01 gpu 1 NVIDIA L4 rail 0 (mlx5_0)
+# rank 6 node mibura-sky-test-01 gpu 2 NVIDIA L4 rail 1 (mlx5_1)
+# rank 7 node mibura-sky-test-01 gpu 3 NVIDIA L4 rail 1 (mlx5_1)
+# local serial direct local AG, remote-rank IB exchange; rail map 0,0,1,1; RS pieces 1
+# local ring 0->1->3->2->0; AG ring; rail map 0,0,1,1; piece 2097152 B; pipeline >= 4194304 B
+#      size(B)        count   pieces   time(us)      algbw      busbw  maxrelerr
+# selected,allgather,1048576,serial-local
+# sample,allgather,1048576,1,83.867,0.000e+00
+# sample,allgather,1048576,2,92.953,0.000e+00
+# sample,allgather,1048576,3,90.884,0.000e+00
+# sample,allgather,1048576,4,83.805,0.000e+00
+# sample,allgather,1048576,5,87.809,0.000e+00
+# sample,allgather,1048576,6,85.405,0.000e+00
+# sample,allgather,1048576,7,87.364,0.000e+00
+# sample,allgather,1048576,8,95.946,0.000e+00
+# sample,allgather,1048576,9,84.715,0.000e+00
+# sample,allgather,1048576,10,85.947,0.000e+00
+# sample,allgather,1048576,11,84.801,0.000e+00
+# sample,allgather,1048576,12,87.273,0.000e+00
+# sample,allgather,1048576,13,95.739,0.000e+00
+# sample,allgather,1048576,14,85.878,0.000e+00
+# sample,allgather,1048576,15,90.854,0.000e+00
+# sample,allgather,1048576,16,86.162,0.000e+00
+# sample,allgather,1048576,17,84.171,0.000e+00
+# sample,allgather,1048576,18,91.863,0.000e+00
+# sample,allgather,1048576,19,84.236,0.000e+00
+# sample,allgather,1048576,20,91.988,0.000e+00
+       1048576       262144        1      88.08      11.90      10.42    0.0e+00
+# selected,allgather,2097152,serial-local
+# sample,allgather,2097152,1,167.769,0.000e+00
+# sample,allgather,2097152,2,165.202,0.000e+00
+# sample,allgather,2097152,3,181.468,0.000e+00
+# sample,allgather,2097152,4,158.042,0.000e+00
+# sample,allgather,2097152,5,168.713,0.000e+00
+# sample,allgather,2097152,6,164.140,0.000e+00
+# sample,allgather,2097152,7,188.591,0.000e+00
+# sample,allgather,2097152,8,174.079,0.000e+00
+# sample,allgather,2097152,9,174.474,0.000e+00
+# sample,allgather,2097152,10,168.456,0.000e+00
+# sample,allgather,2097152,11,234.018,0.000e+00
+# sample,allgather,2097152,12,171.539,0.000e+00
+# sample,allgather,2097152,13,254.954,0.000e+00
+# sample,allgather,2097152,14,173.913,0.000e+00
+# sample,allgather,2097152,15,172.380,0.000e+00
+# sample,allgather,2097152,16,154.904,0.000e+00
+# sample,allgather,2097152,17,202.685,0.000e+00
+# sample,allgather,2097152,18,177.665,0.000e+00
+# sample,allgather,2097152,19,164.558,0.000e+00
+# sample,allgather,2097152,20,156.676,0.000e+00
+       2097152       524288        1     178.71      11.73      10.27    0.0e+00
+# selected,allgather,4194304,serial-local
+# sample,allgather,4194304,1,323.995,0.000e+00
+# sample,allgather,4194304,2,336.935,0.000e+00
+# sample,allgather,4194304,3,328.075,0.000e+00
+# sample,allgather,4194304,4,406.468,0.000e+00
+# sample,allgather,4194304,5,363.960,0.000e+00
+# sample,allgather,4194304,6,323.091,0.000e+00
+# sample,allgather,4194304,7,551.805,0.000e+00
+# sample,allgather,4194304,8,647.661,0.000e+00
+# sample,allgather,4194304,9,315.919,0.000e+00
+# sample,allgather,4194304,10,347.876,0.000e+00
+# sample,allgather,4194304,11,502.560,0.000e+00
+# sample,allgather,4194304,12,463.555,0.000e+00
+# sample,allgather,4194304,13,492.707,0.000e+00
+# sample,allgather,4194304,14,481.455,0.000e+00
+# sample,allgather,4194304,15,327.165,0.000e+00
+# sample,allgather,4194304,16,355.280,0.000e+00
+# sample,allgather,4194304,17,358.488,0.000e+00
+# sample,allgather,4194304,18,377.716,0.000e+00
+# sample,allgather,4194304,19,473.885,0.000e+00
+# sample,allgather,4194304,20,388.976,0.000e+00
+       4194304      1048576        1     408.38      10.27       8.99    0.0e+00
+# selected,allgather,8388608,serial-local
+# sample,allgather,8388608,1,610.402,0.000e+00
+# sample,allgather,8388608,2,593.610,0.000e+00
+# sample,allgather,8388608,3,736.739,0.000e+00
+# sample,allgather,8388608,4,658.944,0.000e+00
+# sample,allgather,8388608,5,839.509,0.000e+00
+# sample,allgather,8388608,6,796.605,0.000e+00
+# sample,allgather,8388608,7,644.068,0.000e+00
+# sample,allgather,8388608,8,564.097,0.000e+00
+# sample,allgather,8388608,9,648.889,0.000e+00
+# sample,allgather,8388608,10,611.985,0.000e+00
+# sample,allgather,8388608,11,630.699,0.000e+00
+# sample,allgather,8388608,12,861.888,0.000e+00
+# sample,allgather,8388608,13,667.105,0.000e+00
+# sample,allgather,8388608,14,655.598,0.000e+00
+# sample,allgather,8388608,15,683.694,0.000e+00
+# sample,allgather,8388608,16,563.701,0.000e+00
+# sample,allgather,8388608,17,677.445,0.000e+00
+# sample,allgather,8388608,18,653.238,0.000e+00
+# sample,allgather,8388608,19,719.256,0.000e+00
+# sample,allgather,8388608,20,533.634,0.000e+00
+       8388608      2097152        1     667.56      12.57      11.00    0.0e+00
+# selected,allgather,16777216,serial-local
+# sample,allgather,16777216,1,1207.728,0.000e+00
+# sample,allgather,16777216,2,1088.705,0.000e+00
+# sample,allgather,16777216,3,1045.905,0.000e+00
+# sample,allgather,16777216,4,1079.273,0.000e+00
+# sample,allgather,16777216,5,1232.049,0.000e+00
+# sample,allgather,16777216,6,1132.008,0.000e+00
+# sample,allgather,16777216,7,1061.460,0.000e+00
+# sample,allgather,16777216,8,1036.957,0.000e+00
+# sample,allgather,16777216,9,1181.002,0.000e+00
+# sample,allgather,16777216,10,1219.830,0.000e+00
+# sample,allgather,16777216,11,1141.661,0.000e+00
+# sample,allgather,16777216,12,1064.864,0.000e+00
+# sample,allgather,16777216,13,1230.283,0.000e+00
+# sample,allgather,16777216,14,1282.355,0.000e+00
+# sample,allgather,16777216,15,1115.999,0.000e+00
+# sample,allgather,16777216,16,1058.660,0.000e+00
+# sample,allgather,16777216,17,1185.194,0.000e+00
+# sample,allgather,16777216,18,1177.083,0.000e+00
+# sample,allgather,16777216,19,1090.716,0.000e+00
+# sample,allgather,16777216,20,1231.497,0.000e+00
+      16777216      4194304        1    1143.16      14.68      12.84    0.0e+00
+# selected,allgather,33554432,serial-local
+# sample,allgather,33554432,1,2207.768,0.000e+00
+# sample,allgather,33554432,2,2545.847,0.000e+00
+# sample,allgather,33554432,3,2261.647,0.000e+00
+# sample,allgather,33554432,4,2476.279,0.000e+00
+# sample,allgather,33554432,5,2237.455,0.000e+00
+# sample,allgather,33554432,6,2349.365,0.000e+00
+# sample,allgather,33554432,7,2162.060,0.000e+00
+# sample,allgather,33554432,8,2387.769,0.000e+00
+# sample,allgather,33554432,9,2190.358,0.000e+00
+# sample,allgather,33554432,10,2409.857,0.000e+00
+# sample,allgather,33554432,11,2330.328,0.000e+00
+# sample,allgather,33554432,12,2448.431,0.000e+00
+# sample,allgather,33554432,13,2152.542,0.000e+00
+# sample,allgather,33554432,14,2504.540,0.000e+00
+# sample,allgather,33554432,15,2377.294,0.000e+00
+# sample,allgather,33554432,16,2319.726,0.000e+00
+# sample,allgather,33554432,17,2229.342,0.000e+00
+# sample,allgather,33554432,18,2367.385,0.000e+00
+# sample,allgather,33554432,19,2357.681,0.000e+00
+# sample,allgather,33554432,20,2190.140,0.000e+00
+      33554432      8388608        1    2325.29      14.43      12.63    0.0e+00
+# selected,allgather,67108864,serial-local
+# sample,allgather,67108864,1,4764.453,0.000e+00
+# sample,allgather,67108864,2,4715.353,0.000e+00
+# sample,allgather,67108864,3,4768.538,0.000e+00
+# sample,allgather,67108864,4,4971.702,0.000e+00
+# sample,allgather,67108864,5,4948.897,0.000e+00
+# sample,allgather,67108864,6,4977.731,0.000e+00
+# sample,allgather,67108864,7,4722.926,0.000e+00
+# sample,allgather,67108864,8,4745.769,0.000e+00
+# sample,allgather,67108864,9,4825.321,0.000e+00
+# sample,allgather,67108864,10,5022.261,0.000e+00
+# sample,allgather,67108864,11,5512.893,0.000e+00
+# sample,allgather,67108864,12,5425.424,0.000e+00
+# sample,allgather,67108864,13,5545.492,0.000e+00
+# sample,allgather,67108864,14,4953.207,0.000e+00
+# sample,allgather,67108864,15,4771.566,0.000e+00
+# sample,allgather,67108864,16,4901.597,0.000e+00
+# sample,allgather,67108864,17,5091.192,0.000e+00
+# sample,allgather,67108864,18,5426.319,0.000e+00
+# sample,allgather,67108864,19,4956.100,0.000e+00
+# sample,allgather,67108864,20,4800.989,0.000e+00
+      67108864     16777216        1    4992.39      13.44      11.76    0.0e+00
+# selected,allgather,134217728,serial-local
+# sample,allgather,134217728,1,10157.912,0.000e+00
+# sample,allgather,134217728,2,9859.274,0.000e+00
+# sample,allgather,134217728,3,10263.450,0.000e+00
+# sample,allgather,134217728,4,10043.073,0.000e+00
+# sample,allgather,134217728,5,9943.822,0.000e+00
+# sample,allgather,134217728,6,10089.334,0.000e+00
+# sample,allgather,134217728,7,9955.791,0.000e+00
+# sample,allgather,134217728,8,9881.205,0.000e+00
+# sample,allgather,134217728,9,10039.015,0.000e+00
+# sample,allgather,134217728,10,10376.056,0.000e+00
+# sample,allgather,134217728,11,9986.501,0.000e+00
+# sample,allgather,134217728,12,10239.240,0.000e+00
+# sample,allgather,134217728,13,10278.317,0.000e+00
+# sample,allgather,134217728,14,10170.940,0.000e+00
+# sample,allgather,134217728,15,10049.509,0.000e+00
+# sample,allgather,134217728,16,10308.326,0.000e+00
+# sample,allgather,134217728,17,10557.996,0.000e+00
+# sample,allgather,134217728,18,9981.589,0.000e+00
+# sample,allgather,134217728,19,9918.955,0.000e+00
+# sample,allgather,134217728,20,10111.081,0.000e+00
+     134217728     33554432        1   10110.57      13.27      11.62    0.0e+00
+# selected,allgather,268435456,serial-local
+# sample,allgather,268435456,1,21862.667,0.000e+00
+# sample,allgather,268435456,2,21859.806,0.000e+00
+# sample,allgather,268435456,3,22002.284,0.000e+00
+# sample,allgather,268435456,4,21850.932,0.000e+00
+# sample,allgather,268435456,5,21911.771,0.000e+00
+# sample,allgather,268435456,6,21829.730,0.000e+00
+# sample,allgather,268435456,7,21946.297,0.000e+00
+# sample,allgather,268435456,8,21783.934,0.000e+00
+# sample,allgather,268435456,9,21710.579,0.000e+00
+# sample,allgather,268435456,10,21836.996,0.000e+00
+# sample,allgather,268435456,11,21803.427,0.000e+00
+# sample,allgather,268435456,12,21960.264,0.000e+00
+# sample,allgather,268435456,13,21867.855,0.000e+00
+# sample,allgather,268435456,14,21942.638,0.000e+00
+# sample,allgather,268435456,15,22023.033,0.000e+00
+# sample,allgather,268435456,16,21953.548,0.000e+00
+# sample,allgather,268435456,17,21821.136,0.000e+00
+# sample,allgather,268435456,18,21943.593,0.000e+00
+# sample,allgather,268435456,19,21743.718,0.000e+00
+# sample,allgather,268435456,20,21742.009,0.000e+00
+     268435456     67108864        1   21869.81      12.27      10.74    0.0e+00
+# selected,allgather,536870912,serial-local
+# sample,allgather,536870912,1,44382.357,0.000e+00
+# sample,allgather,536870912,2,43988.581,0.000e+00
+# sample,allgather,536870912,3,44010.743,0.000e+00
+# sample,allgather,536870912,4,43896.187,0.000e+00
+# sample,allgather,536870912,5,43797.573,0.000e+00
+# sample,allgather,536870912,6,43715.886,0.000e+00
+# sample,allgather,536870912,7,44006.414,0.000e+00
+# sample,allgather,536870912,8,43793.086,0.000e+00
+# sample,allgather,536870912,9,43709.530,0.000e+00
+# sample,allgather,536870912,10,44163.299,0.000e+00
+# sample,allgather,536870912,11,44063.516,0.000e+00
+# sample,allgather,536870912,12,43876.425,0.000e+00
+# sample,allgather,536870912,13,43490.995,0.000e+00
+# sample,allgather,536870912,14,43810.980,0.000e+00
+# sample,allgather,536870912,15,44507.187,0.000e+00
+# sample,allgather,536870912,16,44067.687,0.000e+00
+# sample,allgather,536870912,17,44086.442,0.000e+00
+# sample,allgather,536870912,18,44535.148,0.000e+00
+# sample,allgather,536870912,19,43477.852,0.000e+00
+# sample,allgather,536870912,20,43796.717,0.000e+00
+     536870912    134217728        1   43958.83      12.21      10.69    0.0e+00
+# selected,allgather,1073741824,serial-local
+# sample,allgather,1073741824,1,87994.031,0.000e+00
+# sample,allgather,1073741824,2,88324.497,0.000e+00
+# sample,allgather,1073741824,3,88509.234,0.000e+00
+# sample,allgather,1073741824,4,87522.130,0.000e+00
+# sample,allgather,1073741824,5,88385.976,0.000e+00
+# sample,allgather,1073741824,6,88642.660,0.000e+00
+# sample,allgather,1073741824,7,88528.141,0.000e+00
+# sample,allgather,1073741824,8,88539.969,0.000e+00
+# sample,allgather,1073741824,9,89078.297,0.000e+00
+# sample,allgather,1073741824,10,88462.149,0.000e+00
+# sample,allgather,1073741824,11,88753.482,0.000e+00
+# sample,allgather,1073741824,12,88376.569,0.000e+00
+# sample,allgather,1073741824,13,87954.547,0.000e+00
+# sample,allgather,1073741824,14,88335.737,0.000e+00
+# sample,allgather,1073741824,15,88369.938,0.000e+00
+# sample,allgather,1073741824,16,87935.232,0.000e+00
+# sample,allgather,1073741824,17,87961.208,0.000e+00
+# sample,allgather,1073741824,18,88605.891,0.000e+00
+# sample,allgather,1073741824,19,87955.618,0.000e+00
+# sample,allgather,1073741824,20,88651.812,0.000e+00
+    1073741824    268435456        1   88344.36      12.15      10.63    0.0e+00

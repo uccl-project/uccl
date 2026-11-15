@@ -1,0 +1,169 @@
+# UCCL Lite two-node hierarchical AllGather, float32
+# timing=host enqueue+completion; slowest of eight ranks
+# rank 0 node mibura-sky-test-02 gpu 0 NVIDIA L4 rail 0 (mlx5_0)
+# rank 1 node mibura-sky-test-02 gpu 1 NVIDIA L4 rail 0 (mlx5_0)
+# rank 2 node mibura-sky-test-02 gpu 2 NVIDIA L4 rail 1 (mlx5_1)
+# rank 3 node mibura-sky-test-02 gpu 3 NVIDIA L4 rail 1 (mlx5_1)
+# rank 4 node mibura-sky-test-01 gpu 0 NVIDIA L4 rail 0 (mlx5_0)
+# rank 5 node mibura-sky-test-01 gpu 1 NVIDIA L4 rail 0 (mlx5_0)
+# rank 6 node mibura-sky-test-01 gpu 2 NVIDIA L4 rail 1 (mlx5_1)
+# rank 7 node mibura-sky-test-01 gpu 3 NVIDIA L4 rail 1 (mlx5_1)
+# local multicast, remote-rank IB exchange; rail map 0,0,1,1; RS pieces 1
+# local ring 0->1->3->2->0; AG ring; rail map 0,0,1,1; piece 2097152 B; pipeline >= 4194304 B
+#      size(B)        count   pieces   time(us)      algbw      busbw  maxrelerr
+# selected,allgather,1536,pipeline-ce
+# ag_pipeline,piece_bytes=65552,pieces=1,depth=3,blocks=4,threads=256,slots=2
+# sample,allgather,1536,1,98.781,0.000e+00
+# sample,allgather,1536,2,97.485,0.000e+00
+# sample,allgather,1536,3,101.619,0.000e+00
+# sample,allgather,1536,4,100.140,0.000e+00
+# sample,allgather,1536,5,96.913,0.000e+00
+# sample,allgather,1536,6,101.173,0.000e+00
+# sample,allgather,1536,7,98.569,0.000e+00
+# sample,allgather,1536,8,98.888,0.000e+00
+# sample,allgather,1536,9,95.869,0.000e+00
+# sample,allgather,1536,10,98.099,0.000e+00
+          1536          384        1      98.75       0.02       0.01    0.0e+00
+# selected,allgather,3072,pipeline-ce
+# ag_pipeline,piece_bytes=65552,pieces=1,depth=3,blocks=4,threads=256,slots=2
+# sample,allgather,3072,1,66.584,0.000e+00
+# sample,allgather,3072,2,62.083,0.000e+00
+# sample,allgather,3072,3,60.840,0.000e+00
+# sample,allgather,3072,4,60.738,0.000e+00
+# sample,allgather,3072,5,62.821,0.000e+00
+# sample,allgather,3072,6,65.167,0.000e+00
+# sample,allgather,3072,7,66.233,0.000e+00
+# sample,allgather,3072,8,60.541,0.000e+00
+# sample,allgather,3072,9,60.743,0.000e+00
+# sample,allgather,3072,10,59.581,0.000e+00
+          3072          768        1      62.53       0.05       0.04    0.0e+00
+# selected,allgather,6144,pipeline-ce
+# ag_pipeline,piece_bytes=65552,pieces=1,depth=3,blocks=4,threads=256,slots=2
+# sample,allgather,6144,1,61.656,0.000e+00
+# sample,allgather,6144,2,60.112,0.000e+00
+# sample,allgather,6144,3,61.387,0.000e+00
+# sample,allgather,6144,4,61.125,0.000e+00
+# sample,allgather,6144,5,60.692,0.000e+00
+# sample,allgather,6144,6,58.945,0.000e+00
+# sample,allgather,6144,7,59.654,0.000e+00
+# sample,allgather,6144,8,60.912,0.000e+00
+# sample,allgather,6144,9,61.544,0.000e+00
+# sample,allgather,6144,10,60.262,0.000e+00
+          6144         1536        1      60.63       0.10       0.09    0.0e+00
+# selected,allgather,12288,pipeline-ce
+# ag_pipeline,piece_bytes=65552,pieces=1,depth=3,blocks=4,threads=256,slots=2
+# sample,allgather,12288,1,59.134,0.000e+00
+# sample,allgather,12288,2,59.547,0.000e+00
+# sample,allgather,12288,3,60.377,0.000e+00
+# sample,allgather,12288,4,62.417,0.000e+00
+# sample,allgather,12288,5,59.540,0.000e+00
+# sample,allgather,12288,6,59.899,0.000e+00
+# sample,allgather,12288,7,66.232,0.000e+00
+# sample,allgather,12288,8,59.243,0.000e+00
+# sample,allgather,12288,9,59.674,0.000e+00
+# sample,allgather,12288,10,63.250,0.000e+00
+         12288         3072        1      60.93       0.20       0.18    0.0e+00
+# selected,allgather,24576,pipeline-ce
+# ag_pipeline,piece_bytes=65552,pieces=1,depth=3,blocks=4,threads=256,slots=2
+# sample,allgather,24576,1,59.676,0.000e+00
+# sample,allgather,24576,2,59.929,0.000e+00
+# sample,allgather,24576,3,59.513,0.000e+00
+# sample,allgather,24576,4,61.412,0.000e+00
+# sample,allgather,24576,5,59.454,0.000e+00
+# sample,allgather,24576,6,58.425,0.000e+00
+# sample,allgather,24576,7,59.830,0.000e+00
+# sample,allgather,24576,8,58.040,0.000e+00
+# sample,allgather,24576,9,58.629,0.000e+00
+# sample,allgather,24576,10,68.286,0.000e+00
+         24576         6144        1      60.32       0.41       0.36    0.0e+00
+# selected,allgather,49152,pipeline-ce
+# ag_pipeline,piece_bytes=65552,pieces=1,depth=3,blocks=4,threads=256,slots=2
+# sample,allgather,49152,1,60.154,0.000e+00
+# sample,allgather,49152,2,63.657,0.000e+00
+# sample,allgather,49152,3,59.709,0.000e+00
+# sample,allgather,49152,4,62.834,0.000e+00
+# sample,allgather,49152,5,59.629,0.000e+00
+# sample,allgather,49152,6,59.557,0.000e+00
+# sample,allgather,49152,7,59.118,0.000e+00
+# sample,allgather,49152,8,57.993,0.000e+00
+# sample,allgather,49152,9,58.272,0.000e+00
+# sample,allgather,49152,10,59.140,0.000e+00
+         49152        12288        1      60.01       0.82       0.72    0.0e+00
+# selected,allgather,98304,pipeline-ce
+# ag_pipeline,piece_bytes=65552,pieces=1,depth=3,blocks=4,threads=256,slots=2
+# sample,allgather,98304,1,58.759,0.000e+00
+# sample,allgather,98304,2,58.411,0.000e+00
+# sample,allgather,98304,3,62.165,0.000e+00
+# sample,allgather,98304,4,57.640,0.000e+00
+# sample,allgather,98304,5,60.047,0.000e+00
+# sample,allgather,98304,6,66.124,0.000e+00
+# sample,allgather,98304,7,58.126,0.000e+00
+# sample,allgather,98304,8,58.857,0.000e+00
+# sample,allgather,98304,9,60.375,0.000e+00
+# sample,allgather,98304,10,63.413,0.000e+00
+         98304        24576        1      60.39       1.63       1.42    0.0e+00
+# selected,allgather,196608,pipeline-ce
+# ag_pipeline,piece_bytes=65552,pieces=1,depth=3,blocks=4,threads=256,slots=2
+# sample,allgather,196608,1,59.832,0.000e+00
+# sample,allgather,196608,2,61.801,0.000e+00
+# sample,allgather,196608,3,60.111,0.000e+00
+# sample,allgather,196608,4,58.643,0.000e+00
+# sample,allgather,196608,5,60.209,0.000e+00
+# sample,allgather,196608,6,59.604,0.000e+00
+# sample,allgather,196608,7,62.340,0.000e+00
+# sample,allgather,196608,8,60.221,0.000e+00
+# sample,allgather,196608,9,58.205,0.000e+00
+# sample,allgather,196608,10,60.529,0.000e+00
+        196608        49152        1      60.15       3.27       2.86    0.0e+00
+# selected,allgather,393216,pipeline-ce
+# ag_pipeline,piece_bytes=65552,pieces=1,depth=3,blocks=4,threads=256,slots=2
+# sample,allgather,393216,1,68.672,0.000e+00
+# sample,allgather,393216,2,69.572,0.000e+00
+# sample,allgather,393216,3,69.573,0.000e+00
+# sample,allgather,393216,4,65.107,0.000e+00
+# sample,allgather,393216,5,68.776,0.000e+00
+# sample,allgather,393216,6,68.232,0.000e+00
+# sample,allgather,393216,7,69.053,0.000e+00
+# sample,allgather,393216,8,65.056,0.000e+00
+# sample,allgather,393216,9,73.802,0.000e+00
+# sample,allgather,393216,10,70.370,0.000e+00
+        393216        98304        1      68.82       5.71       5.00    0.0e+00
+# selected,allgather,786432,pipeline-ce
+# ag_pipeline,piece_bytes=65552,pieces=2,depth=3,blocks=4,threads=256,slots=2
+# sample,allgather,786432,1,100.032,0.000e+00
+# sample,allgather,786432,2,95.738,0.000e+00
+# sample,allgather,786432,3,99.595,0.000e+00
+# sample,allgather,786432,4,95.548,0.000e+00
+# sample,allgather,786432,5,102.118,0.000e+00
+# sample,allgather,786432,6,98.390,0.000e+00
+# sample,allgather,786432,7,98.080,0.000e+00
+# sample,allgather,786432,8,93.884,0.000e+00
+# sample,allgather,786432,9,96.565,0.000e+00
+# sample,allgather,786432,10,103.997,0.000e+00
+        786432       196608        1      98.39       7.99       6.99    0.0e+00
+# selected,allgather,1572864,pipeline-ce
+# ag_pipeline,piece_bytes=65552,pieces=3,depth=3,blocks=4,threads=256,slots=2
+# sample,allgather,1572864,1,163.378,0.000e+00
+# sample,allgather,1572864,2,165.410,0.000e+00
+# sample,allgather,1572864,3,157.392,0.000e+00
+# sample,allgather,1572864,4,178.771,0.000e+00
+# sample,allgather,1572864,5,159.769,0.000e+00
+# sample,allgather,1572864,6,140.632,0.000e+00
+# sample,allgather,1572864,7,170.158,0.000e+00
+# sample,allgather,1572864,8,170.041,0.000e+00
+# sample,allgather,1572864,9,143.815,0.000e+00
+# sample,allgather,1572864,10,166.850,0.000e+00
+       1572864       393216        1     161.62       9.73       8.52    0.0e+00
+# selected,allgather,3145728,pipeline-ce
+# ag_pipeline,piece_bytes=65552,pieces=6,depth=3,blocks=4,threads=256,slots=2
+# sample,allgather,3145728,1,284.577,0.000e+00
+# sample,allgather,3145728,2,272.594,0.000e+00
+# sample,allgather,3145728,3,311.378,0.000e+00
+# sample,allgather,3145728,4,300.376,0.000e+00
+# sample,allgather,3145728,5,291.815,0.000e+00
+# sample,allgather,3145728,6,295.203,0.000e+00
+# sample,allgather,3145728,7,302.858,0.000e+00
+# sample,allgather,3145728,8,284.763,0.000e+00
+# sample,allgather,3145728,9,244.514,0.000e+00
+# sample,allgather,3145728,10,293.156,0.000e+00
+       3145728       786432        1     288.12      10.92       9.55    0.0e+00

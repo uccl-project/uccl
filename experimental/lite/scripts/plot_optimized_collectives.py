@@ -6,6 +6,7 @@ import shutil
 
 from figure_style import ROOT, configure
 import plot_refresh_collectives as reference
+import plot_multinode_host_router as host_router
 
 
 OPTIMIZED = ROOT / "benchmarks/data/optimization_20261110"
@@ -67,6 +68,8 @@ def main() -> None:
             shutil.copyfile(
                 ROOT / "docs/assets" / f"{filename}.svg",
                 ROOT / "docs/assets/collectives-2x4l4-allgather-host-multicast.svg")
+
+    host_router.draw(args.preview)
 
 
 if __name__ == "__main__":

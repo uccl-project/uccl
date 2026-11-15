@@ -1,0 +1,29 @@
+{
+  "sizes": [
+    1048576,
+    2097152,
+    4194304,
+    8388608,
+    16777216,
+    33554432,
+    67108864,
+    134217728,
+    268435456,
+    536870912,
+    1073741824
+  ],
+  "configurations": [
+    "serial",
+    "ring",
+    "ce4096",
+    "nccl_default",
+    "nccl_simple"
+  ],
+  "rounds": 3,
+  "timed_calls_per_size_per_round": 20,
+  "total_timed_calls": 3300,
+  "output_error": 0,
+  "timing": "slowest-rank host enqueue-to-completion",
+  "dtype": "FP32",
+  "gpus": "2 x 4 NVIDIA L4"
+}

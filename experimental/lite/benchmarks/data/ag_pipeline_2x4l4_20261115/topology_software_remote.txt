@@ -1,0 +1,31 @@
+	[4mGPU0	GPU1	GPU2	GPU3	NIC0	NIC1	CPU Affinity	NUMA Affinity	GPU NUMA ID[0m
+GPU0	 X 	NODE	SYS	SYS	NODE	SYS	0,2,4,6,8,10	0		N/A
+GPU1	NODE	 X 	SYS	SYS	NODE	SYS	0,2,4,6,8,10	0		N/A
+GPU2	SYS	SYS	 X 	NODE	SYS	NODE	1,3,5,7,9,11	1		N/A
+GPU3	SYS	SYS	NODE	 X 	SYS	NODE	1,3,5,7,9,11	1		N/A
+NIC0	NODE	NODE	SYS	SYS	 X 	SYS				
+NIC1	SYS	SYS	NODE	NODE	SYS	 X 				
+
+Legend:
+
+  X    = Self
+  SYS  = Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)
+  NODE = Connection traversing PCIe as well as the interconnect between PCIe Host Bridges within a NUMA node
+  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)
+  PXB  = Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)
+  PIX  = Connection traversing at most a single PCIe bridge
+  NV#  = Connection traversing a bonded set of # NVLinks
+
+NIC Legend:
+
+  NIC0: mlx5_0
+  NIC1: mlx5_1
+
+name, driver_version
+NVIDIA L4, 580.178.04
+NVIDIA L4, 580.178.04
+NVIDIA L4, 580.178.04
+NVIDIA L4, 580.178.04
+c17336a4d3809e4104e12b1883c413e2b82061639a423b359b3301fcc681182b  /home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/ag_pipeline_20261115/uccl_lite_multinode_allreduce
+596d650299d33b86fb18f68d9394ce01996ee45e0181f68c6e5e9069189bfe70  /home/zhongjie/third_party/mscclpp/build-ib-pcieccl/lib/libmscclpp.so
+ad951367f06580b8b4597ef97772a1eda6bf7c0162967bcfef7efdc127ac5449  /home/zhongjie/third_party/nccl/build/lib/libnccl.so

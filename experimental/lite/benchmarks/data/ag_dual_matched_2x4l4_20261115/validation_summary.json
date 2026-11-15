@@ -1,0 +1,71 @@
+{
+  "small_timed_calls": 4620,
+  "large_timed_calls": 2100,
+  "geometry_timed_calls": 120,
+  "checks": {
+    "allreduce_regression.log": {
+      "sizes": 11,
+      "max_bytes": 1048576,
+      "output_error": 0
+    },
+    "dual-ce_consecutive.log": {
+      "sizes": 15,
+      "max_bytes": 16777216,
+      "output_error": 0
+    },
+    "dual-ce_first2_tails.log": {
+      "sizes": 12,
+      "max_bytes": 3145728,
+      "output_error": 0
+    },
+    "dual-sm_consecutive.log": {
+      "sizes": 15,
+      "max_bytes": 16777216,
+      "output_error": 0
+    },
+    "dual-sm_first2_tails.log": {
+      "sizes": 12,
+      "max_bytes": 3145728,
+      "output_error": 0
+    },
+    "matched-sm_consecutive.log": {
+      "sizes": 15,
+      "max_bytes": 16777216,
+      "output_error": 0
+    },
+    "matched-sm_first1_tails.log": {
+      "sizes": 12,
+      "max_bytes": 3145728,
+      "output_error": 0
+    },
+    "matched-sm_first2_tails.log": {
+      "sizes": 12,
+      "max_bytes": 3145728,
+      "output_error": 0
+    },
+    "matched_consecutive.log": {
+      "sizes": 15,
+      "max_bytes": 16777216,
+      "output_error": 0
+    },
+    "matched_first1_tails.log": {
+      "sizes": 12,
+      "max_bytes": 3145728,
+      "output_error": 0
+    },
+    "matched_first2_tails.log": {
+      "sizes": 12,
+      "max_bytes": 3145728,
+      "output_error": 0
+    },
+    "reducescatter_regression.log": {
+      "sizes": 11,
+      "max_bytes": 1048576,
+      "output_error": 0
+    }
+  },
+  "invalid_config_checks": [
+    "dual_with_matched: exit 2",
+    "bad_first_mask: exit 2"
+  ]
+}

@@ -1,0 +1,133 @@
+# UCCL Lite two-node hierarchical AllGather, float32
+# timing=host enqueue+completion; slowest of eight ranks
+# rank 0 node mibura-sky-test-02 gpu 0 NVIDIA L4 rail 0 (mlx5_0)
+# rank 1 node mibura-sky-test-02 gpu 1 NVIDIA L4 rail 0 (mlx5_0)
+# rank 2 node mibura-sky-test-02 gpu 2 NVIDIA L4 rail 1 (mlx5_1)
+# rank 3 node mibura-sky-test-02 gpu 3 NVIDIA L4 rail 1 (mlx5_1)
+# rank 4 node mibura-sky-test-01 gpu 0 NVIDIA L4 rail 0 (mlx5_0)
+# rank 5 node mibura-sky-test-01 gpu 1 NVIDIA L4 rail 0 (mlx5_0)
+# rank 6 node mibura-sky-test-01 gpu 2 NVIDIA L4 rail 1 (mlx5_1)
+# rank 7 node mibura-sky-test-01 gpu 3 NVIDIA L4 rail 1 (mlx5_1)
+# local multicast, remote-rank IB exchange; rail map 0,0,1,1; RS pieces 1
+# local ring 0->1->3->2->0; AG ring; rail map 0,0,1,1; piece 2097152 B; pipeline >= 4194304 B
+#      size(B)        count   pieces   time(us)      algbw      busbw  maxrelerr
+# selected,allgather,65536,pipeline-sm
+# sample,allgather,65536,1,29.971,0.000e+00
+# sample,allgather,65536,2,28.950,0.000e+00
+# sample,allgather,65536,3,29.392,0.000e+00
+# sample,allgather,65536,4,29.022,0.000e+00
+# sample,allgather,65536,5,29.195,0.000e+00
+# sample,allgather,65536,6,29.622,0.000e+00
+# sample,allgather,65536,7,29.285,0.000e+00
+# sample,allgather,65536,8,28.023,0.000e+00
+# sample,allgather,65536,9,29.674,0.000e+00
+# sample,allgather,65536,10,28.239,0.000e+00
+         65536        16384        1      29.14       2.25       1.97    0.0e+00
+# selected,allgather,131072,pipeline-sm
+# sample,allgather,131072,1,34.287,0.000e+00
+# sample,allgather,131072,2,34.059,0.000e+00
+# sample,allgather,131072,3,33.969,0.000e+00
+# sample,allgather,131072,4,34.000,0.000e+00
+# sample,allgather,131072,5,34.185,0.000e+00
+# sample,allgather,131072,6,33.695,0.000e+00
+# sample,allgather,131072,7,34.043,0.000e+00
+# sample,allgather,131072,8,33.388,0.000e+00
+# sample,allgather,131072,9,33.458,0.000e+00
+# sample,allgather,131072,10,33.072,0.000e+00
+        131072        32768        1      33.82       3.88       3.39    0.0e+00
+# selected,allgather,262144,pipeline-sm
+# sample,allgather,262144,1,54.140,0.000e+00
+# sample,allgather,262144,2,47.932,0.000e+00
+# sample,allgather,262144,3,51.594,0.000e+00
+# sample,allgather,262144,4,51.021,0.000e+00
+# sample,allgather,262144,5,48.002,0.000e+00
+# sample,allgather,262144,6,47.333,0.000e+00
+# sample,allgather,262144,7,48.754,0.000e+00
+# sample,allgather,262144,8,48.105,0.000e+00
+# sample,allgather,262144,9,54.063,0.000e+00
+# sample,allgather,262144,10,47.388,0.000e+00
+        262144        65536        1      49.83       5.26       4.60    0.0e+00
+# selected,allgather,524288,pipeline-sm
+# sample,allgather,524288,1,74.261,0.000e+00
+# sample,allgather,524288,2,52.793,0.000e+00
+# sample,allgather,524288,3,61.051,0.000e+00
+# sample,allgather,524288,4,63.475,0.000e+00
+# sample,allgather,524288,5,61.855,0.000e+00
+# sample,allgather,524288,6,59.326,0.000e+00
+# sample,allgather,524288,7,61.951,0.000e+00
+# sample,allgather,524288,8,78.503,0.000e+00
+# sample,allgather,524288,9,63.371,0.000e+00
+# sample,allgather,524288,10,64.467,0.000e+00
+        524288       131072        1      64.11       8.18       7.16    0.0e+00
+# selected,allgather,1048576,pipeline-sm
+# sample,allgather,1048576,1,124.030,0.000e+00
+# sample,allgather,1048576,2,126.699,0.000e+00
+# sample,allgather,1048576,3,127.473,0.000e+00
+# sample,allgather,1048576,4,109.728,0.000e+00
+# sample,allgather,1048576,5,116.373,0.000e+00
+# sample,allgather,1048576,6,136.526,0.000e+00
+# sample,allgather,1048576,7,121.445,0.000e+00
+# sample,allgather,1048576,8,127.008,0.000e+00
+# sample,allgather,1048576,9,129.019,0.000e+00
+# sample,allgather,1048576,10,113.700,0.000e+00
+       1048576       262144        1     123.20       8.51       7.45    0.0e+00
+# selected,allgather,2097152,pipeline-sm
+# sample,allgather,2097152,1,196.695,0.000e+00
+# sample,allgather,2097152,2,195.627,0.000e+00
+# sample,allgather,2097152,3,183.164,0.000e+00
+# sample,allgather,2097152,4,184.477,0.000e+00
+# sample,allgather,2097152,5,183.648,0.000e+00
+# sample,allgather,2097152,6,178.034,0.000e+00
+# sample,allgather,2097152,7,193.206,0.000e+00
+# sample,allgather,2097152,8,189.286,0.000e+00
+# sample,allgather,2097152,9,232.967,0.000e+00
+# sample,allgather,2097152,10,185.430,0.000e+00
+       2097152       524288        1     192.25      10.91       9.54    0.0e+00
+# selected,allgather,4194304,pipeline-sm
+# sample,allgather,4194304,1,282.572,0.000e+00
+# sample,allgather,4194304,2,296.566,0.000e+00
+# sample,allgather,4194304,3,378.324,0.000e+00
+# sample,allgather,4194304,4,305.572,0.000e+00
+# sample,allgather,4194304,5,318.816,0.000e+00
+# sample,allgather,4194304,6,315.150,0.000e+00
+# sample,allgather,4194304,7,275.511,0.000e+00
+# sample,allgather,4194304,8,338.774,0.000e+00
+# sample,allgather,4194304,9,309.284,0.000e+00
+# sample,allgather,4194304,10,310.083,0.000e+00
+       4194304      1048576        1     313.07      13.40      11.72    0.0e+00
+# selected,allgather,8388608,pipeline-sm
+# sample,allgather,8388608,1,549.377,0.000e+00
+# sample,allgather,8388608,2,564.864,0.000e+00
+# sample,allgather,8388608,3,809.966,0.000e+00
+# sample,allgather,8388608,4,590.615,0.000e+00
+# sample,allgather,8388608,5,538.247,0.000e+00
+# sample,allgather,8388608,6,598.539,0.000e+00
+# sample,allgather,8388608,7,540.337,0.000e+00
+# sample,allgather,8388608,8,678.930,0.000e+00
+# sample,allgather,8388608,9,602.221,0.000e+00
+# sample,allgather,8388608,10,530.326,0.000e+00
+       8388608      2097152        1     600.34      13.97      12.23    0.0e+00
+# selected,allgather,16777216,pipeline-sm
+# sample,allgather,16777216,1,1177.181,0.000e+00
+# sample,allgather,16777216,2,1215.426,0.000e+00
+# sample,allgather,16777216,3,1390.412,0.000e+00
+# sample,allgather,16777216,4,1288.436,0.000e+00
+# sample,allgather,16777216,5,1326.016,0.000e+00
+# sample,allgather,16777216,6,1212.778,0.000e+00
+# sample,allgather,16777216,7,1266.250,0.000e+00
+# sample,allgather,16777216,8,1220.039,0.000e+00
+# sample,allgather,16777216,9,1230.863,0.000e+00
+# sample,allgather,16777216,10,1330.406,0.000e+00
+      16777216      4194304        1    1265.78      13.25      11.60    0.0e+00
+# selected,allgather,33554432,pipeline-sm
+# sample,allgather,33554432,1,2808.254,0.000e+00
+# sample,allgather,33554432,2,2348.774,0.000e+00
+# sample,allgather,33554432,3,2447.500,0.000e+00
+# sample,allgather,33554432,4,2491.145,0.000e+00
+# sample,allgather,33554432,5,2596.349,0.000e+00
+# sample,allgather,33554432,6,2599.488,0.000e+00
+# sample,allgather,33554432,7,2478.401,0.000e+00
+# sample,allgather,33554432,8,2604.369,0.000e+00
+# sample,allgather,33554432,9,2450.783,0.000e+00
+# sample,allgather,33554432,10,2414.075,0.000e+00
+      33554432      8388608        1    2523.91      13.29      11.63    0.0e+00

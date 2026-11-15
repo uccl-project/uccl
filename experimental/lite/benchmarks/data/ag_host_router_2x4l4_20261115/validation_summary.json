@@ -1,0 +1,65 @@
+{
+  "timed_comparison_calls": 3630,
+  "comparison_sizes": 11,
+  "checks": {
+    "dispatcher_check.log": {
+      "passed": true
+    },
+    "dispatcher_cuda_check.log": {
+      "passed": true
+    },
+    "lean_multicast_dma.log": {
+      "timed_calls": 40,
+      "wrong": 0
+    },
+    "lean_paired_sm.log": {
+      "timed_calls": 40,
+      "wrong": 0
+    },
+    "multicast_w0_ready_delayed_tail.log": {
+      "timed_calls": 40,
+      "wrong": 0
+    },
+    "multicast_w0_steps_delayed_tail.log": {
+      "timed_calls": 40,
+      "wrong": 0
+    },
+    "multicast_w1_ready_delayed_tail.log": {
+      "timed_calls": 40,
+      "wrong": 0
+    },
+    "multicast_w1_steps_delayed_tail.log": {
+      "timed_calls": 40,
+      "wrong": 0
+    },
+    "pair_sm_upload_dma_download.log": {
+      "timed_calls": 40,
+      "wrong": 0
+    },
+    "rdma_w0_ready_delayed_tail.log": {
+      "timed_calls": 40,
+      "wrong": 0
+    },
+    "rdma_w0_steps_delayed_tail.log": {
+      "timed_calls": 40,
+      "wrong": 0
+    },
+    "rdma_w1_ready_delayed_tail.log": {
+      "timed_calls": 40,
+      "wrong": 0
+    },
+    "rdma_w1_steps_delayed_tail.log": {
+      "timed_calls": 40,
+      "wrong": 0
+    },
+    "router_eager.log": {
+      "passed": true
+    },
+    "router_graph.log": {
+      "passed": true
+    },
+    "router_policy_check.log": {
+      "passed": true
+    }
+  }
+}

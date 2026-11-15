@@ -1,0 +1,12 @@
+geometry round=1 mode=ce
+geometry round=1 mode=matched
+geometry round=1 mode=sm
+geometry round=1 mode=matched-sm
+geometry round=2 mode=matched-sm
+geometry round=2 mode=sm
+geometry round=2 mode=matched
+geometry round=2 mode=ce
+geometry round=3 mode=ce
+geometry round=3 mode=matched
+geometry round=3 mode=sm
+geometry round=3 mode=matched-sm
