@@ -7,11 +7,11 @@ import sys
 
 import matplotlib
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 
 DATA = Path(__file__).resolve().parent
 sys.path.insert(0, str(DATA.parents[2] / "scripts"))
-from figure_style import clean_axis, configure, save
+from figure_style import (clean_axis, collective_legend, collective_panels,
+                          configure, save)
 
 OPERATIONS = (("all_reduce", "allreduce", 14 / 8),
               ("all_gather", "allgather", 7 / 8),
@@ -43,13 +43,10 @@ def load():
 
 
 def make_figure(data, mode, operation, factor):
-    fig, axes = plt.subplots(1, 2, figsize=(10.8, 4.8))
-    fig.subplots_adjust(left=0.085, right=0.985, top=0.74, bottom=0.27, wspace=0.28)
     title = dict(all_reduce="AllReduce", all_gather="AllGather",
                  reduce_scatter="ReduceScatter")[operation]
     testbed = 1 if mode == "gpu" else 2
-    fig.suptitle(f"Testbed {testbed}: 8×L4 · {title}", y=0.98,
-                 fontsize=15, fontweight="bold")
+    fig, axes = collective_panels(f"Testbed {testbed}: 8×L4 · {title}")
     for ax, sizes, ylabel, ticks, throughput in (
         (axes[0], [1 << power for power in range(10, 21)], "Latency (µs)",
          [1 << power for power in (10, 12, 14, 16, 18, 20)], False),
@@ -93,10 +90,7 @@ def make_figure(data, mode, operation, factor):
                     markeredgecolor="white", markeredgewidth=0.7, label=label,
                     zorder=4 if is_uccl else 2)
         ax.set_ylim(0, upper * 1.13)
-    handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(handles[::-1], labels[::-1], loc="upper center",
-               bbox_to_anchor=(0.5, 0.91), ncol=2, frameon=False,
-               fontsize=10.5, handlelength=2.4, columnspacing=1.6)
+    collective_legend(fig, axes[0])
     return fig
 
 
