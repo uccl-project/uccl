@@ -70,6 +70,16 @@ No CPU reduction, NCCL implementation dependency, or serving hook is added to
 this path. The host engine depends on CUDA and MPI; MSCCL++ supplies the GPU
 ReduceScatter and its peer/network progress.
 
+## Small-message path
+
+The [small-message regression fix](../benchmarks/data/ar_small_fix_2x4l4_20261115/README.md)
+retains the single-CTA GPU AllReduce through 256 KiB when the explicit hybrid
+option is selected. From 512 KiB upward the combined GPU-RS/host-AG operation
+is unchanged. Small-only sweeps skip construction of the host-gather engine.
+This is a fixed cutoff measured on the documented two-node FP32 L4 topology;
+it does not enable an automatic application router. The previous all-hybrid
+measurements remain valid for their recorded configuration.
+
 ## Run and validate
 
 ```bash

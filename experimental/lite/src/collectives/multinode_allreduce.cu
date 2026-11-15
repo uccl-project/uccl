@@ -1267,6 +1267,9 @@ struct Config {
 };
 
 static constexpr size_t kSerialArMaxBytes = 1UL << 20;
+// On the measured two-node L4 topology, avoid the host phase handoff for
+// small AR messages. Larger messages retain the explicit hybrid path.
+static constexpr size_t kHybridSerialArMaxBytes = 1UL << 18;
 static constexpr size_t kSerialAgMaxBytes = 2UL << 20;
 static constexpr size_t kSerialRsMaxBytes = 1UL << 20;
 
@@ -1934,7 +1937,8 @@ int main(int argc, char** argv) {
   // received call i+1, by which time this rank has finished consuming call i.
   // The allocation already reserves two maximum-size RS shards for IB scratch.
   std::unique_ptr<uccl_lite::host_gather::Gather> hostGather;
-  if (cfg.hostGather)
+  if (cfg.hostGather &&
+      (cfg.allGather || cfg.maxBytes > kHybridSerialArMaxBytes))
     hostGather = std::make_unique<uccl_lite::host_gather::Gather>(
         rank, localComm, cfg.maxBytes / kWorld, cfg.hostPieceBytes);
   unsigned overlapSequence = 0;
@@ -2013,6 +2017,12 @@ int main(int argc, char** argv) {
         hierarchicalAllGather<<<cfg.blocks, cfg.threads, 0, stream>>>(
             localAg, ib, reinterpret_cast<float*>(buffer), count, layout,
             rank, localRank);
+      return;
+    }
+    if (hybridRs && bytes <= kHybridSerialArMaxBytes) {
+      hierarchicalAllReduceSerial<<<1, 256, 0, stream>>>(
+          localDirect, ib, reinterpret_cast<float*>(buffer), count, layout,
+          localRank, ringPosition(localRank));
       return;
     }
     if (cfg.reduceScatter || hybridRs) {
@@ -2197,7 +2207,9 @@ int main(int argc, char** argv) {
     }
     if (rank == 0) {
       char const* selected =
-          cfg.hostGather ? (hybridRs ? "gpu-rs-host-ag" : "host-ag-eight-rank")
+          cfg.hostGather ? (hybridRs ? (bytes <= kHybridSerialArMaxBytes
+                                          ? "serial-local" : "gpu-rs-host-ag")
+                                      : "host-ag-eight-rank")
           : cfg.allGather
               ? (cfg.agPipeline == 5   ? "matched-sm"
                  : cfg.agPipeline == 4 ? "matched-ce"

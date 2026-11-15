@@ -139,22 +139,21 @@ workload from Testbed 1's SGLang serving and DDP/FSDP training.
 <table>
   <tr><th>AllReduce</th><th>AllGather</th><th>ReduceScatter</th></tr>
   <tr>
-    <td width="33%"><img src="docs/assets/collectives-2x4l4-allreduce-current.svg" alt="Two-node FP32 AllReduce: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite versus NCCL" width="100%"></td>
+    <td width="33%"><img src="docs/assets/collectives-2x4l4-allreduce-small-fixed.svg" alt="Two-node FP32 AllReduce: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite versus NCCL" width="100%"></td>
     <td width="33%"><img src="docs/assets/collectives-2x4l4-allgather-host-router.svg" alt="Two-node FP32 AllGather: 1–8 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite CPU router versus paired NCCL Ring+Simple" width="100%"></td>
     <td width="33%"><img src="docs/assets/collectives-2x4l4-reducescatter-optimized.svg" alt="Two-node ReduceScatter latency and bus throughput, UCCL Lite versus NCCL" width="100%"></td>
   </tr>
 </table>
 
-AllReduce uses a [fresh full-range sweep of the current UCCL Lite source](benchmarks/data/ar_latency_2x4l4_20261115/README.md):
-**1 KiB–1 MiB latency** and **1 MiB–1 GiB bus throughput**, both from the same
-GPU ReduceScatter + shared-host packet AllGather path, with **all reduction
-arithmetic on GPUs**. Eight MPI ranks, FP32 input/output bytes per GPU,
-slowest-rank host enqueue-to-completion timing, and three UCCL Lite rounds of
-twenty warmups plus ten checked calls. NCCL reuses the two completed rounds.
-The host-piece configuration is fixed at
-256 KiB; the baseline is NCCL 2.28.7 Ring+Simple at every size. No historical
-small-message points or best-variant-per-size envelope enter this curve.
-This is an explicit eager path; no automatic dispatch policy changes.
+AllReduce uses the [small-message fix and fresh full-range measurements](benchmarks/data/ar_small_fix_2x4l4_20261115/README.md):
+**1 KiB–1 MiB latency** and **1 MiB–1 GiB bus throughput**. The explicit path
+uses single-CTA GPU AllReduce through 256 KiB and GPU ReduceScatter + shared-host
+packet AllGather above it; **all reduction arithmetic stays on GPUs**. Eight
+MPI ranks, FP32 input/output bytes per GPU, slowest-rank host enqueue-to-completion
+timing, and three rounds of twenty warmups plus ten checked calls. Host pieces
+remain fixed at 256 KiB. NCCL reuses the recorded Ring+Simple control without
+new measurements. The cutoff is fixed, not a best-variant-per-size envelope.
+This is an explicit eager path; no automatic serving dispatch policy changes.
 
 AllGather uses the [November 15 CPU-router measurements](benchmarks/data/ag_host_router_2x4l4_20261115/README.md):
 eight L4 GPUs, FP32, complete output bytes per GPU, slowest-process host

@@ -18,18 +18,17 @@ D2H aggregation, shared host packets, ready-driven progress, and host RDMA over
 
 ## Current AllReduce: full-range hybrid sweep
 
-![Current two-node FP32 AllReduce: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput](assets/collectives-2x4l4-allreduce-current.svg)
+![Current two-node FP32 AllReduce: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput](assets/collectives-2x4l4-allreduce-small-fixed.svg)
 
-Both panels use the [fresh current-source sweep](../benchmarks/data/ar_latency_2x4l4_20261115/README.md)
-of explicit GPU ReduceScatter + host-packet AllGather against NCCL 2.28.7
-Ring+Simple. Eight L4 GPUs across two nodes, FP32, eight MPI ranks,
-slowest-rank host enqueue-to-completion timing; three UCCL Lite rounds and two
-retained NCCL rounds, each with twenty warmups and ten checked calls per size.
-Host pieces are fixed at 256 KiB, with the
-existing GPU ReduceScatter size policy. No best-variant-per-size selection or
-historical small-message splice is used. The record preserves raw samples,
-round ranges, source/binary hashes, and the reproduction commands. This eager
-path remains explicitly selected.
+Both panels use the [small-message fix measurements](../benchmarks/data/ar_small_fix_2x4l4_20261115/README.md).
+The explicit path uses single-CTA GPU AllReduce through 256 KiB and GPU
+ReduceScatter + host-packet AllGather above it, avoiding the host handoff for
+small messages. Eight L4 GPUs across two nodes, FP32, eight MPI ranks,
+slowest-rank host enqueue-to-completion timing; three rounds of twenty warmups
+and ten checked calls per size. NCCL reuses the previously recorded control.
+Host pieces remain fixed at 256 KiB, with the established GPU ReduceScatter
+size policy. The cutoff is fixed, not a measured best-variant-per-size envelope.
+Raw samples, ranges, hashes and reproduction commands remain in the record.
 
 ## Current AllGather: NUMA host router
 
