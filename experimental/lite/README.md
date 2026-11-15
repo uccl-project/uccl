@@ -48,11 +48,15 @@ validation and calibrated backend selection. See the
 
 ## Measured results
 
-### SGLang end-to-end
+### End-to-end serving and training
 
 #### Testbed 1
 
-![SGLang whole-batch latency, UCCL Lite versus NCCL](docs/assets/sglang-e2e-latency-8l4.svg)
+![Fresh SGLang whole-batch latency and gains, UCCL Lite versus NCCL](docs/assets/sglang-large-prefill-e2e-8l4.svg)
+
+![Full training-step latency and gains for DDP and experimental adapted FSDP](docs/assets/training-large-message-e2e-8l4.svg)
+
+[Measurements, raw data, and reproduction](integration/nccl_lite/e2e_large_messages_8l4_20261115.md) · [Earlier serving profile](docs/assets/sglang-e2e-latency-8l4.svg)
 
 ### Single-node collectives
 

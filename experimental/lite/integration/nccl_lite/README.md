@@ -1,6 +1,22 @@
 # UCCL Lite NCCL AG/RS/AR compatibility layer
 
-## Best end-to-end result
+This is an experimental **single-node, eight-process, BF16** NCCL compatibility
+layer for AllGather, ReduceScatter(SUM), and AllReduce(SUM). It forwards other
+NCCL calls used by the installed SGLang PyNccl wrapper to the real NCCL
+library. It is not a complete NCCL ABI implementation.
+
+## End-to-end results · 8×L4
+
+![GLM-4.5-Air-FP8 whole-batch serving latency and gains](../../docs/assets/sglang-large-prefill-e2e-8l4.svg)
+
+![Full training-step latency and gains for DDP and experimental adapted FSDP](../../docs/assets/training-large-message-e2e-8l4.svg)
+
+[Methodology, raw data, and reproduction](e2e_large_messages_8l4_20261115.md) · [FSDP adapter boundary](e2e_large_messages_8l4_20261115.md#fsdp-compatibility-boundary)
+
+<details>
+<summary>Earlier measurements and implementation notes</summary>
+
+### Earlier serving profile
 
 GLM-4.5-Air-FP8 on 8×NVIDIA L4, SGLang TP8/DP8/EP8. Workload: 64 concurrent
 requests, 256 input and 32 output tokens each; 32 running requests maximum.
@@ -8,11 +24,6 @@ Three-run median whole-batch latency: **UCCL-Lite 14.72 s vs NCCL 15.84 s
 (7.1% lower)**. This workload includes queueing.
 
 ![Whole-batch latency bar chart](../../docs/assets/sglang-e2e-latency-8l4.svg)
-
-This is an experimental **single-node, eight-process, BF16** NCCL compatibility
-layer for AllGather, ReduceScatter(SUM), and AllReduce(SUM). It forwards other
-NCCL calls used by the installed SGLang PyNccl wrapper to the real NCCL
-library. It is not a complete NCCL ABI implementation.
 
 The [EP8 fusion boundary inventory](fusion_candidate_20261112.md) records the
 actual SGLang producer/consumer chain and request shapes for adapting the
@@ -193,6 +204,8 @@ The first two windows were replayed in one client invocation, and window
 16738 in a separate invocation, with `--minutes 16738`. Use the same two
 invocations for each backend; the deterministic prompt selection depends on
 the order of windows in an invocation.
+
+</details>
 
 ## Build and checks
 

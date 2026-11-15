@@ -1,0 +1,34 @@
+{
+  "host": "wxz-l4",
+  "git_head": "bbc5bbb4f5ebf8ddafe9a11b46a4a486d8bdd546",
+  "source_sha256": {
+    "include/uccl_lite/multiprocess_collectives.h": "0ea2f1782b9322013c643b4aac2c0daacfa7e4578acf2e91f82a11e325f4ff9a",
+    "include/uccl_lite/multiprocess_packet_ag.h": "f86b7ea9aee6f90f95c67411fd12daab499d2802eefddc45d78ae8ed9fb6dcaa",
+    "integration/nccl_lite/Makefile": "f21f6ae3324e2c224409353aa6184cdf96de537c892acb119616ccd366f03a37",
+    "integration/nccl_lite/bench_e2e_workloads.py": "7cc1f953914e504a9ab1eabd3314a6b4360c4a70f630e8338abfc7152ea41491",
+    "integration/nccl_lite/bench_training_step.py": "b6498d0bb1cc3136d9c3666d2696caddb08dcc05909093f035ed7690e1da6470",
+    "integration/nccl_lite/launch_glm45_air.sh": "338c4c4d38632becd95e5bbc6387b383bb59d7a65b0244ab668793566a6554cf",
+    "integration/nccl_lite/nccl_compat.cc": "19d0d8f029d98bc77fd1b596c06bf994a8de3788558c386cca580ba6dad84a39",
+    "integration/nccl_lite/plot_e2e_comparison.py": "d862d4f923172ced080f7e29477580d940bb18ae58ea262db2eca712580bc617",
+    "integration/nccl_lite/run_e2e_comparison.py": "c3686f8ead22650bda6f3d5ec57c2212c7ad0854afdb11ad911351888b527286",
+    "integration/nccl_lite/run_packet_8l4.sh": "fa4628865b779e0c1256098b9075c07f27685d6272f2ec3e1b4cc009895d7854",
+    "integration/nccl_lite/run_training_comparison.py": "ad8f8cf82f02dc4a9b6952c3d269184cb4685231c5ffc0c812e0fb64eff023eb",
+    "integration/nccl_lite/summarize_e2e_comparison.py": "9b2c3c62993dfbf7f0184b71d28d44165e0ab7ed21d55b6416a29f6868c6d832",
+    "src/collectives/multiprocess_collectives.cc": "ebb5f30c87a8e69b39de4bb9eb75bc76dc0b52650289bab165d128a923c154a1",
+    "src/collectives/multiprocess_packet_ag.cu": "6f2c8d5c75a8cdd8964cab188e1ab57d2fffe396039b5f70a22ad6bda275f92e",
+    "src/cpu_router/cpu_executor.cc": "266cfc78e2c2bae41f94b8fdf2176e6dcb5fd482740edd20c7368fee519f35f1"
+  },
+  "build_command": "make -B -C integration/nccl_lite -j2 CUDA_HOME=/usr/local/cuda-12.9 NCCL_HOME=/data/wxzheng/kt-venv/lib/python3.11/site-packages/nvidia/nccl",
+  "cuda_compiler": "nvcc: NVIDIA (R) Cuda compiler driver\nCopyright (c) 2005-2025 NVIDIA Corporation\nBuilt on Wed_Apr__9_19:24:57_PDT_2025\nCuda compilation tools, release 12.9, V12.9.41\nBuild cuda_12.9.r12.9/compiler.35813241_0\n",
+  "checkpoint": "/data/wxzheng/cache/huggingface/models--zai-org--GLM-4.5-Air-FP8/snapshots/f9a9c5acf5e543cd24d659a056c5dbcda78ffcfc",
+  "checkpoint_metadata_sha256": {
+    "config.json": "98d8ed7063680c7a08da77bd056fedf78455862c3b49e3ac0eeaf15fb5a70da6",
+    "model.safetensors.index.json": "ff7ea673539490633e533ac6dc9d76a1e5ddcb56d80f62247dbc4b93b44bd970"
+  },
+  "collective_source_worktree_status": "",
+  "artifact_sha256": {
+    "integration/nccl_lite/e2e_large_messages_8l4_20261115.md": "ebf12e755e28af99c86b60a8344c45ef19f2ea5a7caec8d24813eac69e6e9af7",
+    "docs/assets/sglang-large-prefill-e2e-8l4.svg": "5380de25d6b93392675069eae652ff6c5a4b1cc66cea213aec6c5acc318d7d83",
+    "docs/assets/training-large-message-e2e-8l4.svg": "b02cd14d60458370384b450bb3b12a8731076231d045be514205e4b2dc0043e7"
+  }
+}

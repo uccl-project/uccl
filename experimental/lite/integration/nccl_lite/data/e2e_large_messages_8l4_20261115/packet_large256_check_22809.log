@@ -1,0 +1,60 @@
+UCCL Lite NCCL proxy: communicator rank=5/8 id=e11b91e42e51c0e3
+UCCL Lite NCCL proxy: communicator rank=4/8 id=e11b91e42e51c0e3
+UCCL Lite NCCL proxy: communicator rank=3/8 id=e11b91e42e51c0e3
+UCCL Lite NCCL proxy: communicator rank=1/8 id=e11b91e42e51c0e3
+UCCL Lite NCCL proxy: communicator rank=2/8 id=e11b91e42e51c0e3
+UCCL Lite NCCL proxy: communicator rank=0/8 id=e11b91e42e51c0e3
+UCCL Lite NCCL proxy: communicator rank=7/8 id=e11b91e42e51c0e3
+UCCL Lite NCCL proxy: communicator rank=6/8 id=e11b91e42e51c0e3
+UCCL Lite packet mode AG=1 RS=1 AR=1 retain_rs=1 split_credits=1 scratch=1 pipeline_ag=1 hier_rs=1
+UCCL Lite packet worker device=3 CPU=23
+UCCL Lite packet worker device=3 isolated CPU=23 scheduler_threads=15
+UCCL Lite packet worker device=0 CPU=5
+UCCL Lite NCCL proxy: rank=3 op=AR BF16 count=2048
+UCCL Lite packet worker device=2 CPU=17
+UCCL Lite packet worker device=2 isolated CPU=17 scheduler_threads=15
+UCCL Lite packet worker device=1 CPU=11
+UCCL Lite packet worker device=1 isolated CPU=11 scheduler_threads=15
+UCCL Lite NCCL proxy: rank=2 op=AR BF16 count=2048
+UCCL Lite NCCL proxy: rank=1 op=AR BF16 count=2048
+UCCL Lite packet worker device=5 CPU=35
+UCCL Lite packet worker device=5 isolated CPU=35 scheduler_threads=15
+UCCL Lite packet worker device=6 CPU=41
+UCCL Lite packet worker device=4 CPU=29
+UCCL Lite packet worker device=7 CPU=47
+UCCL Lite packet worker device=6 isolated CPU=41 scheduler_threads=15
+UCCL Lite packet worker device=4 isolated CPU=29 scheduler_threads=15
+UCCL Lite NCCL proxy: rank=5 op=AR BF16 count=2048
+UCCL Lite NCCL proxy: rank=6 op=AR BF16 count=2048
+UCCL Lite NCCL proxy: rank=4 op=AR BF16 count=2048
+UCCL Lite packet worker device=0 isolated CPU=5 scheduler_threads=15
+UCCL Lite NCCL proxy: rank=0 op=AR BF16 count=2048
+UCCL Lite packet worker device=7 isolated CPU=47 scheduler_threads=15
+UCCL Lite NCCL proxy: rank=7 op=AR BF16 count=2048
+UCCL Lite NCCL proxy: rank=5 op=RS BF16 count=128
+UCCL Lite NCCL proxy: rank=7 op=RS BF16 count=128
+UCCL Lite NCCL proxy: rank=2 op=RS BF16 count=128
+UCCL Lite NCCL proxy: rank=4 op=RS BF16 count=128
+UCCL Lite NCCL proxy: rank=6 op=RS BF16 count=128
+UCCL Lite NCCL proxy: rank=0 op=RS BF16 count=128
+UCCL Lite NCCL proxy: rank=3 op=RS BF16 count=128
+UCCL Lite NCCL proxy: rank=1 op=RS BF16 count=128
+UCCL Lite NCCL proxy: rank=5 op=AG BF16 count=16777216
+UCCL Lite NCCL proxy: rank=7 op=AG BF16 count=16777216
+UCCL Lite NCCL proxy: rank=4 op=AG BF16 count=16777216
+UCCL Lite NCCL proxy: rank=2 op=AG BF16 count=16777216
+UCCL Lite NCCL proxy: rank=6 op=AG BF16 count=16777216
+UCCL Lite NCCL proxy: rank=3 op=AG BF16 count=16777216
+{"op": "AR", "bytes": 268435456, "mib": 256.0, "warmup": 1, "iterations": 1, "repeats": 1, "isolate_worker": true, "isolate_helper": true, "max_rank_median_ms": 71.69427490234375, "repeat_max_rank_median_ms": [71.69427490234375], "rank_repeat_medians_ms": [[71.69427490234375], [71.68307495117188], [71.6779556274414], [71.6779556274414], [71.67385864257812], [71.66464233398438], [71.68409729003906], [71.67180633544922]], "rank0_median_ms": 71.69427490234375}
+UCCL Lite NCCL proxy: rank=1 op=AG BF16 count=16777216
+UCCL Lite NCCL proxy: rank=0 op=AG BF16 count=16777216
+{"op": "AG", "bytes": 268435456, "mib": 256.0, "warmup": 1, "iterations": 1, "repeats": 1, "isolate_worker": true, "isolate_helper": true, "max_rank_median_ms": 41.859073638916016, "repeat_max_rank_median_ms": [41.859073638916016], "rank_repeat_medians_ms": [[41.859073638916016], [41.76793670654297], [41.602046966552734], [41.609214782714844], [41.55801773071289], [41.55904006958008], [41.51603317260742], [41.657344818115234]], "rank0_median_ms": 41.859073638916016}
+{"op": "RS", "bytes": 268435456, "mib": 256.0, "warmup": 1, "iterations": 1, "repeats": 1, "isolate_worker": true, "isolate_helper": true, "max_rank_median_ms": 42.06079864501953, "repeat_max_rank_median_ms": [42.06079864501953], "rank_repeat_medians_ms": [[42.056705474853516], [42.052608489990234], [42.047489166259766], [42.049537658691406], [42.04441452026367], [42.045440673828125], [42.06079864501953], [42.045440673828125]], "rank0_median_ms": 42.056705474853516}
+UCCL Lite NCCL proxy: rank=7 completed AG=2 RS=22 AR=22 AG_GEMM=0 RS_SUM2=0 RS_READY=0
+UCCL Lite NCCL proxy: rank=6 completed AG=2 RS=22 AR=22 AG_GEMM=0 RS_SUM2=0 RS_READY=0
+UCCL Lite NCCL proxy: rank=1 completed AG=2 RS=22 AR=22 AG_GEMM=0 RS_SUM2=0 RS_READY=0
+UCCL Lite NCCL proxy: rank=3 completed AG=2 RS=22 AR=22 AG_GEMM=0 RS_SUM2=0 RS_READY=0
+UCCL Lite NCCL proxy: rank=2 completed AG=2 RS=22 AR=22 AG_GEMM=0 RS_SUM2=0 RS_READY=0
+UCCL Lite NCCL proxy: rank=5 completed AG=2 RS=22 AR=22 AG_GEMM=0 RS_SUM2=0 RS_READY=0
+UCCL Lite NCCL proxy: rank=0 completed AG=2 RS=22 AR=22 AG_GEMM=0 RS_SUM2=0 RS_READY=0
+UCCL Lite NCCL proxy: rank=4 completed AG=2 RS=22 AR=22 AG_GEMM=0 RS_SUM2=0 RS_READY=0

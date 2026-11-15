@@ -1,0 +1,58 @@
+UCCL Lite NCCL proxy: communicator rank=7/8 id=602a8d8ed1459cb6
+UCCL Lite NCCL proxy: communicator rank=3/8 id=602a8d8ed1459cb6
+UCCL Lite NCCL proxy: communicator rank=5/8 id=602a8d8ed1459cb6
+UCCL Lite NCCL proxy: communicator rank=1/8 id=602a8d8ed1459cb6
+UCCL Lite NCCL proxy: communicator rank=0/8 id=602a8d8ed1459cb6
+UCCL Lite packet mode AG=1 RS=1 AR=1 retain_rs=1 split_credits=1 scratch=1 pipeline_ag=1 hier_rs=1
+UCCL Lite NCCL proxy: communicator rank=4/8 id=602a8d8ed1459cb6
+UCCL Lite NCCL proxy: communicator rank=6/8 id=602a8d8ed1459cb6
+UCCL Lite NCCL proxy: communicator rank=2/8 id=602a8d8ed1459cb6
+UCCL Lite packet worker device=6 CPU=41
+UCCL Lite packet worker device=6 isolated CPU=41 scheduler_threads=13
+UCCL Lite NCCL proxy: rank=6 op=AG BF16 count=8
+UCCL Lite packet worker device=7 CPU=47
+UCCL Lite packet worker device=4 CPU=29
+UCCL Lite packet worker device=4 isolated CPU=29 scheduler_threads=13
+UCCL Lite NCCL proxy: rank=4 op=AG BF16 count=8
+UCCL Lite packet worker device=5 CPU=35
+UCCL Lite packet worker device=5 isolated CPU=35 scheduler_threads=13
+UCCL Lite NCCL proxy: rank=5 op=AG BF16 count=8
+UCCL Lite packet worker device=0 CPU=5
+UCCL Lite packet worker device=0 isolated CPU=5 scheduler_threads=13
+UCCL Lite NCCL proxy: rank=0 op=AG BF16 count=8
+UCCL Lite packet worker device=1 CPU=11
+UCCL Lite packet worker device=2 CPU=17
+UCCL Lite packet worker device=1 isolated CPU=11 scheduler_threads=13
+UCCL Lite packet worker device=2 isolated CPU=17 scheduler_threads=13
+UCCL Lite NCCL proxy: rank=1 op=AG BF16 count=8
+UCCL Lite NCCL proxy: rank=2 op=AG BF16 count=8
+UCCL Lite packet worker device=3 CPU=23
+UCCL Lite packet worker device=3 isolated CPU=23 scheduler_threads=13
+UCCL Lite NCCL proxy: rank=3 op=AG BF16 count=8
+UCCL Lite packet worker device=7 isolated CPU=47 scheduler_threads=13
+UCCL Lite NCCL proxy: rank=7 op=AG BF16 count=8
+UCCL Lite NCCL proxy: rank=4 op=RS BF16 count=8
+UCCL Lite NCCL proxy: rank=6 op=RS BF16 count=8
+UCCL Lite NCCL proxy: rank=7 op=RS BF16 count=8
+UCCL Lite NCCL proxy: rank=3 op=RS BF16 count=8
+UCCL Lite NCCL proxy: rank=0 op=RS BF16 count=8
+UCCL Lite NCCL proxy: rank=1 op=RS BF16 count=8
+UCCL Lite NCCL proxy: rank=5 op=RS BF16 count=8
+UCCL Lite NCCL proxy: rank=2 op=RS BF16 count=8
+UCCL Lite NCCL proxy: rank=7 op=AR BF16 count=8
+UCCL Lite NCCL proxy: rank=4 op=AR BF16 count=8
+UCCL Lite NCCL proxy: rank=6 op=AR BF16 count=8
+UCCL Lite NCCL proxy: rank=0 op=AR BF16 count=8
+UCCL Lite NCCL proxy: rank=3 op=AR BF16 count=8
+UCCL Lite NCCL proxy: rank=5 op=AR BF16 count=8
+UCCL Lite NCCL proxy: rank=1 op=AR BF16 count=8
+UCCL Lite NCCL proxy: rank=2 op=AR BF16 count=8
+UCCL Lite NCCL proxy: rank=0 completed AG=8 RS=8 AR=13 AG_GEMM=0 RS_SUM2=0 RS_READY=0
+UCCL Lite NCCL proxy: rank=3 completed AG=8 RS=8 AR=13 AG_GEMM=0 RS_SUM2=0 RS_READY=0
+UCCL Lite NCCL proxy: rank=1 completed AG=8 RS=8 AR=13 AG_GEMM=0 RS_SUM2=0 RS_READY=0
+UCCL Lite NCCL proxy: rank=4 completed AG=8 RS=8 AR=13 AG_GEMM=0 RS_SUM2=0 RS_READY=0
+UCCL Lite NCCL proxy: rank=7 completed AG=8 RS=8 AR=13 AG_GEMM=0 RS_SUM2=0 RS_READY=0
+UCCL Lite NCCL proxy: rank=6 completed AG=8 RS=8 AR=13 AG_GEMM=0 RS_SUM2=0 RS_READY=0
+UCCL Lite NCCL proxy: rank=5 completed AG=8 RS=8 AR=13 AG_GEMM=0 RS_SUM2=0 RS_READY=0
+UCCL Lite NCCL proxy: rank=2 completed AG=8 RS=8 AR=13 AG_GEMM=0 RS_SUM2=0 RS_READY=0
+UCCL Lite NCCL AG/RS/AR 8-process check passed
