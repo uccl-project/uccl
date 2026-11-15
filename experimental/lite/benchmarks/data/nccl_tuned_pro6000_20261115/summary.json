@@ -1,0 +1,69 @@
+{
+  "valid": true,
+  "timed_invocations": 25200,
+  "measured_source": "b0ac7b4a + archived NCCL-only allocation/window patch",
+  "selection": {
+    "frozen_utc": "2026-11-15T04:56:08.199901+00:00",
+    "rule": "Choose lowest geometric-mean calibration latency among configurations that beat both bracketed default controls by >=5%; otherwise keep default.",
+    "schedule_sha256": "8251cbf95b469c2f8fb069eca0a8affdc417abc894b2790e56055548b8c645e9",
+    "calibration_runs_sha256": "7df11901dbbac9fd51cea2d225d61a6abfb709ee2b13581c1120c9e4c726b9d1",
+    "supplement_runs_sha256": "a966013efa6613db06c51e5633cc6c6bca0b48e116bba6bb402f87c2ab581890",
+    "final_measurements_used": false
+  },
+  "operations": {
+    "allreduce": {
+      "full_geomean_speedup": 1.089126863943669,
+      "wins": 15,
+      "large_geomean_speedup": 1.17025341510625,
+      "one_gib": {
+        "operation": "allreduce",
+        "bytes": 1073741824,
+        "configuration": "registered_buffer1m_threads128",
+        "forward_us": 29214.87999,
+        "reverse_us": 29220.000265000002,
+        "nccl_default_forward_us": 33165.487290000005,
+        "nccl_default_reverse_us": 33933.984755,
+        "central_us": 29217.440127500002,
+        "bus_GB_s": 36.75003078005366,
+        "default_bus_GB_s": 32.00447905998125,
+        "speedup_vs_fresh_default": 1.1482777367248667
+      }
+    },
+    "allgather": {
+      "full_geomean_speedup": 1.134994048865959,
+      "wins": 15,
+      "large_geomean_speedup": 1.276367886132077,
+      "one_gib": {
+        "operation": "allgather",
+        "bytes": 1073741824,
+        "configuration": "registered_buffer1m",
+        "forward_us": 14643.856049999999,
+        "reverse_us": 14641.83998,
+        "nccl_default_forward_us": 18779.82426,
+        "nccl_default_reverse_us": 18863.279345000003,
+        "central_us": 14642.848015,
+        "bus_GB_s": 36.66437782117484,
+        "default_bus_GB_s": 28.52426397321231,
+        "speedup_vs_fresh_default": 1.2853750706979528
+      }
+    },
+    "reducescatter": {
+      "full_geomean_speedup": 1.0765255115730799,
+      "wins": 14,
+      "large_geomean_speedup": 1.1767241288325634,
+      "one_gib": {
+        "operation": "reducescatter",
+        "bytes": 1073741824,
+        "configuration": "buffer1m",
+        "forward_us": 14675.13609,
+        "reverse_us": 14524.576185,
+        "nccl_default_forward_us": 16987.82444,
+        "nccl_default_reverse_us": 17557.663915,
+        "central_us": 14599.856137499999,
+        "bus_GB_s": 36.772342613776665,
+        "default_bus_GB_s": 31.081969748579052,
+        "speedup_vs_fresh_default": 1.183076327247817
+      }
+    }
+  }
+}

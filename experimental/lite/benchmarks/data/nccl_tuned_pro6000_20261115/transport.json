@@ -1,0 +1,685 @@
+[
+  {
+    "operation": "allreduce",
+    "bytes": 1024,
+    "configuration": "default",
+    "copy_engine": false,
+    "selection": "Algo RING proto LL channel{Lo..Hi}={0..0}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_00_debug.log"
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 2048,
+    "configuration": "default",
+    "copy_engine": false,
+    "selection": "Algo RING proto LL channel{Lo..Hi}={0..0}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_00_debug.log"
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 4096,
+    "configuration": "registered_buffer1m",
+    "copy_engine": false,
+    "selection": "Algo RING proto LL channel{Lo..Hi}={0..0}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_01_debug.log"
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 8192,
+    "configuration": "default",
+    "copy_engine": false,
+    "selection": "Algo RING proto LL channel{Lo..Hi}={0..0}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_02_debug.log"
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 16384,
+    "configuration": "default",
+    "copy_engine": false,
+    "selection": "Algo RING proto LL channel{Lo..Hi}={0..1}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_02_debug.log"
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 32768,
+    "configuration": "default",
+    "copy_engine": false,
+    "selection": "Algo RING proto LL channel{Lo..Hi}={0..3}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_02_debug.log"
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 65536,
+    "configuration": "default",
+    "copy_engine": false,
+    "selection": "Algo RING proto LL channel{Lo..Hi}={0..3}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_02_debug.log"
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 131072,
+    "configuration": "default",
+    "copy_engine": false,
+    "selection": "Algo RING proto LL channel{Lo..Hi}={0..3}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_02_debug.log"
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 262144,
+    "configuration": "default",
+    "copy_engine": false,
+    "selection": "Algo RING proto LL channel{Lo..Hi}={0..3}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_02_debug.log"
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 524288,
+    "configuration": "simple",
+    "copy_engine": false,
+    "selection": "Algo RING proto SIMPLE channel{Lo..Hi}={0..3}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_03_debug.log"
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 1048576,
+    "configuration": "registered_buffer1m_threads128",
+    "copy_engine": false,
+    "selection": "Algo RING proto SIMPLE channel{Lo..Hi}={0..3}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_04_debug.log"
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 2097152,
+    "configuration": "registered_buffer1m_threads128",
+    "copy_engine": false,
+    "selection": "Algo RING proto SIMPLE channel{Lo..Hi}={0..3}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_04_debug.log"
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 4194304,
+    "configuration": "registered_buffer1m_threads128",
+    "copy_engine": false,
+    "selection": "Algo RING proto SIMPLE channel{Lo..Hi}={0..3}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_04_debug.log"
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 8388608,
+    "configuration": "registered_buffer1m_threads128",
+    "copy_engine": false,
+    "selection": "Algo RING proto SIMPLE channel{Lo..Hi}={0..3}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_04_debug.log"
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 16777216,
+    "configuration": "registered_buffer1m_threads128",
+    "copy_engine": false,
+    "selection": "Algo RING proto SIMPLE channel{Lo..Hi}={0..3}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_04_debug.log"
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 33554432,
+    "configuration": "registered_buffer1m_threads128",
+    "copy_engine": false,
+    "selection": "Algo RING proto SIMPLE channel{Lo..Hi}={0..3}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_04_debug.log"
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 67108864,
+    "configuration": "registered_buffer1m_threads128",
+    "copy_engine": false,
+    "selection": "Algo RING proto SIMPLE channel{Lo..Hi}={0..3}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_04_debug.log"
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 134217728,
+    "configuration": "registered_buffer1m_threads128",
+    "copy_engine": false,
+    "selection": "Algo RING proto SIMPLE channel{Lo..Hi}={0..3}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_04_debug.log"
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 268435456,
+    "configuration": "registered_buffer1m_threads128",
+    "copy_engine": false,
+    "selection": "Algo RING proto SIMPLE channel{Lo..Hi}={0..3}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_04_debug.log"
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 536870912,
+    "configuration": "registered_buffer1m_threads128",
+    "copy_engine": false,
+    "selection": "Algo RING proto SIMPLE channel{Lo..Hi}={0..3}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_04_debug.log"
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 1073741824,
+    "configuration": "registered_buffer1m_threads128",
+    "copy_engine": false,
+    "selection": "Algo RING proto SIMPLE channel{Lo..Hi}={0..3}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_04_debug.log"
+  },
+  {
+    "operation": "allgather",
+    "bytes": 1024,
+    "configuration": "default",
+    "copy_engine": false,
+    "selection": "Algo RING proto LL channel{Lo..Hi}={0..0}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_05_debug.log"
+  },
+  {
+    "operation": "allgather",
+    "bytes": 2048,
+    "configuration": "default",
+    "copy_engine": false,
+    "selection": "Algo RING proto LL channel{Lo..Hi}={0..0}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_05_debug.log"
+  },
+  {
+    "operation": "allgather",
+    "bytes": 4096,
+    "configuration": "registered_peer_read",
+    "copy_engine": false,
+    "selection": "Algo RING proto LL channel{Lo..Hi}={0..0}",
+    "channel_transports": [
+      "P2P/direct pointer/read"
+    ],
+    "log": "trace_06_debug.log"
+  },
+  {
+    "operation": "allgather",
+    "bytes": 8192,
+    "configuration": "buffer1m",
+    "copy_engine": false,
+    "selection": "Algo RING proto LL channel{Lo..Hi}={0..0}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_07_debug.log"
+  },
+  {
+    "operation": "allgather",
+    "bytes": 16384,
+    "configuration": "channels8",
+    "copy_engine": false,
+    "selection": "Algo RING proto LL channel{Lo..Hi}={0..1}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_08_debug.log"
+  },
+  {
+    "operation": "allgather",
+    "bytes": 32768,
+    "configuration": "channels16",
+    "copy_engine": false,
+    "selection": "Algo RING proto LL channel{Lo..Hi}={0..3}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_09_debug.log"
+  },
+  {
+    "operation": "allgather",
+    "bytes": 65536,
+    "configuration": "registered_channels8",
+    "copy_engine": false,
+    "selection": "Algo RING proto LL channel{Lo..Hi}={0..7}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_10_debug.log"
+  },
+  {
+    "operation": "allgather",
+    "bytes": 131072,
+    "configuration": "buffer1m_channels8",
+    "copy_engine": false,
+    "selection": "Algo RING proto LL channel{Lo..Hi}={0..7}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_11_debug.log"
+  },
+  {
+    "operation": "allgather",
+    "bytes": 262144,
+    "configuration": "channels8",
+    "copy_engine": false,
+    "selection": "Algo RING proto LL channel{Lo..Hi}={0..7}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_12_debug.log"
+  },
+  {
+    "operation": "allgather",
+    "bytes": 524288,
+    "configuration": "channels16",
+    "copy_engine": false,
+    "selection": "Algo RING proto LL channel{Lo..Hi}={0..15}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_13_debug.log"
+  },
+  {
+    "operation": "allgather",
+    "bytes": 1048576,
+    "configuration": "threads128",
+    "copy_engine": false,
+    "selection": "Algo RING proto SIMPLE channel{Lo..Hi}={0..3}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_14_debug.log"
+  },
+  {
+    "operation": "allgather",
+    "bytes": 2097152,
+    "configuration": "registered_buffer1m_threads128",
+    "copy_engine": false,
+    "selection": "Algo RING proto SIMPLE channel{Lo..Hi}={0..3}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_15_debug.log"
+  },
+  {
+    "operation": "allgather",
+    "bytes": 4194304,
+    "configuration": "registered_buffer1m_threads128",
+    "copy_engine": false,
+    "selection": "Algo RING proto SIMPLE channel{Lo..Hi}={0..3}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_15_debug.log"
+  },
+  {
+    "operation": "allgather",
+    "bytes": 8388608,
+    "configuration": "registered_buffer1m_threads128",
+    "copy_engine": false,
+    "selection": "Algo RING proto SIMPLE channel{Lo..Hi}={0..3}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_15_debug.log"
+  },
+  {
+    "operation": "allgather",
+    "bytes": 16777216,
+    "configuration": "zero_cta",
+    "copy_engine": true,
+    "selection": "cudaMemcpy",
+    "channel_transports": [],
+    "log": "trace_16_debug.log"
+  },
+  {
+    "operation": "allgather",
+    "bytes": 33554432,
+    "configuration": "zero_cta",
+    "copy_engine": true,
+    "selection": "cudaMemcpy",
+    "channel_transports": [],
+    "log": "trace_16_debug.log"
+  },
+  {
+    "operation": "allgather",
+    "bytes": 67108864,
+    "configuration": "zero_cta",
+    "copy_engine": true,
+    "selection": "cudaMemcpy",
+    "channel_transports": [],
+    "log": "trace_16_debug.log"
+  },
+  {
+    "operation": "allgather",
+    "bytes": 134217728,
+    "configuration": "zero_cta",
+    "copy_engine": true,
+    "selection": "cudaMemcpy",
+    "channel_transports": [],
+    "log": "trace_16_debug.log"
+  },
+  {
+    "operation": "allgather",
+    "bytes": 268435456,
+    "configuration": "zero_cta",
+    "copy_engine": true,
+    "selection": "cudaMemcpy",
+    "channel_transports": [],
+    "log": "trace_16_debug.log"
+  },
+  {
+    "operation": "allgather",
+    "bytes": 536870912,
+    "configuration": "registered_buffer1m",
+    "copy_engine": false,
+    "selection": "Algo RING proto SIMPLE channel{Lo..Hi}={0..3}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_17_debug.log"
+  },
+  {
+    "operation": "allgather",
+    "bytes": 1073741824,
+    "configuration": "registered_buffer1m",
+    "copy_engine": false,
+    "selection": "Algo RING proto SIMPLE channel{Lo..Hi}={0..3}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_17_debug.log"
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 1024,
+    "configuration": "default",
+    "copy_engine": false,
+    "selection": "Algo RING proto LL channel{Lo..Hi}={0..0}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_18_debug.log"
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 2048,
+    "configuration": "default",
+    "copy_engine": false,
+    "selection": "Algo RING proto LL channel{Lo..Hi}={0..0}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_18_debug.log"
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 4096,
+    "configuration": "registered_peer_read",
+    "copy_engine": false,
+    "selection": "Algo RING proto LL channel{Lo..Hi}={0..0}",
+    "channel_transports": [
+      "P2P/direct pointer/read"
+    ],
+    "log": "trace_19_debug.log"
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 8192,
+    "configuration": "registered",
+    "copy_engine": false,
+    "selection": "Algo RING proto LL channel{Lo..Hi}={0..0}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_20_debug.log"
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 16384,
+    "configuration": "default",
+    "copy_engine": false,
+    "selection": "Algo RING proto LL channel{Lo..Hi}={0..1}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_21_debug.log"
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 32768,
+    "configuration": "default",
+    "copy_engine": false,
+    "selection": "Algo RING proto LL channel{Lo..Hi}={0..3}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_21_debug.log"
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 65536,
+    "configuration": "buffer16m",
+    "copy_engine": false,
+    "selection": "Algo RING proto LL channel{Lo..Hi}={0..3}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_22_debug.log"
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 131072,
+    "configuration": "channels8",
+    "copy_engine": false,
+    "selection": "Algo RING proto LL channel{Lo..Hi}={0..7}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_23_debug.log"
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 262144,
+    "configuration": "registered_channels8",
+    "copy_engine": false,
+    "selection": "Algo RING proto LL channel{Lo..Hi}={0..7}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_24_debug.log"
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 524288,
+    "configuration": "channels16",
+    "copy_engine": false,
+    "selection": "Algo RING proto LL channel{Lo..Hi}={0..15}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_25_debug.log"
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 1048576,
+    "configuration": "threads128",
+    "copy_engine": false,
+    "selection": "Algo RING proto SIMPLE channel{Lo..Hi}={0..3}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_26_debug.log"
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 2097152,
+    "configuration": "channels16",
+    "copy_engine": false,
+    "selection": "Algo RING proto SIMPLE channel{Lo..Hi}={0..15}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_27_debug.log"
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 4194304,
+    "configuration": "channels16",
+    "copy_engine": false,
+    "selection": "Algo RING proto SIMPLE channel{Lo..Hi}={0..15}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_27_debug.log"
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 8388608,
+    "configuration": "channels16",
+    "copy_engine": false,
+    "selection": "Algo RING proto SIMPLE channel{Lo..Hi}={0..15}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_27_debug.log"
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 16777216,
+    "configuration": "channels16",
+    "copy_engine": false,
+    "selection": "Algo RING proto SIMPLE channel{Lo..Hi}={0..15}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_27_debug.log"
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 33554432,
+    "configuration": "buffer8m_channels16",
+    "copy_engine": false,
+    "selection": "Algo RING proto SIMPLE channel{Lo..Hi}={0..15}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_28_debug.log"
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 67108864,
+    "configuration": "registered_buffer1m",
+    "copy_engine": false,
+    "selection": "Algo RING proto SIMPLE channel{Lo..Hi}={0..3}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_29_debug.log"
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 134217728,
+    "configuration": "registered_buffer1m",
+    "copy_engine": false,
+    "selection": "Algo RING proto SIMPLE channel{Lo..Hi}={0..3}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_29_debug.log"
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 268435456,
+    "configuration": "registered_buffer1m",
+    "copy_engine": false,
+    "selection": "Algo RING proto SIMPLE channel{Lo..Hi}={0..3}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_29_debug.log"
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 536870912,
+    "configuration": "buffer1m",
+    "copy_engine": false,
+    "selection": "Algo RING proto SIMPLE channel{Lo..Hi}={0..3}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_30_debug.log"
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 1073741824,
+    "configuration": "buffer1m",
+    "copy_engine": false,
+    "selection": "Algo RING proto SIMPLE channel{Lo..Hi}={0..3}",
+    "channel_transports": [
+      "P2P/direct pointer"
+    ],
+    "log": "trace_30_debug.log"
+  }
+]

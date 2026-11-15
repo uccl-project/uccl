@@ -1,0 +1,188 @@
+[
+  {
+    "op": "allreduce",
+    "config": "default",
+    "begin": 1024,
+    "end": 2048
+  },
+  {
+    "op": "allreduce",
+    "config": "registered_buffer1m",
+    "begin": 4096,
+    "end": 4096
+  },
+  {
+    "op": "allreduce",
+    "config": "default",
+    "begin": 8192,
+    "end": 262144
+  },
+  {
+    "op": "allreduce",
+    "config": "simple",
+    "begin": 524288,
+    "end": 524288
+  },
+  {
+    "op": "allreduce",
+    "config": "registered_buffer1m_threads128",
+    "begin": 1048576,
+    "end": 1073741824
+  },
+  {
+    "op": "allgather",
+    "config": "default",
+    "begin": 1024,
+    "end": 2048
+  },
+  {
+    "op": "allgather",
+    "config": "registered_peer_read",
+    "begin": 4096,
+    "end": 4096
+  },
+  {
+    "op": "allgather",
+    "config": "buffer1m",
+    "begin": 8192,
+    "end": 8192
+  },
+  {
+    "op": "allgather",
+    "config": "channels8",
+    "begin": 16384,
+    "end": 16384
+  },
+  {
+    "op": "allgather",
+    "config": "channels16",
+    "begin": 32768,
+    "end": 32768
+  },
+  {
+    "op": "allgather",
+    "config": "registered_channels8",
+    "begin": 65536,
+    "end": 65536
+  },
+  {
+    "op": "allgather",
+    "config": "buffer1m_channels8",
+    "begin": 131072,
+    "end": 131072
+  },
+  {
+    "op": "allgather",
+    "config": "channels8",
+    "begin": 262144,
+    "end": 262144
+  },
+  {
+    "op": "allgather",
+    "config": "channels16",
+    "begin": 524288,
+    "end": 524288
+  },
+  {
+    "op": "allgather",
+    "config": "threads128",
+    "begin": 1048576,
+    "end": 1048576
+  },
+  {
+    "op": "allgather",
+    "config": "registered_buffer1m_threads128",
+    "begin": 2097152,
+    "end": 8388608
+  },
+  {
+    "op": "allgather",
+    "config": "zero_cta",
+    "begin": 16777216,
+    "end": 268435456
+  },
+  {
+    "op": "allgather",
+    "config": "registered_buffer1m",
+    "begin": 536870912,
+    "end": 1073741824
+  },
+  {
+    "op": "reducescatter",
+    "config": "default",
+    "begin": 1024,
+    "end": 2048
+  },
+  {
+    "op": "reducescatter",
+    "config": "registered_peer_read",
+    "begin": 4096,
+    "end": 4096
+  },
+  {
+    "op": "reducescatter",
+    "config": "registered",
+    "begin": 8192,
+    "end": 8192
+  },
+  {
+    "op": "reducescatter",
+    "config": "default",
+    "begin": 16384,
+    "end": 32768
+  },
+  {
+    "op": "reducescatter",
+    "config": "buffer16m",
+    "begin": 65536,
+    "end": 65536
+  },
+  {
+    "op": "reducescatter",
+    "config": "channels8",
+    "begin": 131072,
+    "end": 131072
+  },
+  {
+    "op": "reducescatter",
+    "config": "registered_channels8",
+    "begin": 262144,
+    "end": 262144
+  },
+  {
+    "op": "reducescatter",
+    "config": "channels16",
+    "begin": 524288,
+    "end": 524288
+  },
+  {
+    "op": "reducescatter",
+    "config": "threads128",
+    "begin": 1048576,
+    "end": 1048576
+  },
+  {
+    "op": "reducescatter",
+    "config": "channels16",
+    "begin": 2097152,
+    "end": 16777216
+  },
+  {
+    "op": "reducescatter",
+    "config": "buffer8m_channels16",
+    "begin": 33554432,
+    "end": 33554432
+  },
+  {
+    "op": "reducescatter",
+    "config": "registered_buffer1m",
+    "begin": 67108864,
+    "end": 268435456
+  },
+  {
+    "op": "reducescatter",
+    "config": "buffer1m",
+    "begin": 536870912,
+    "end": 1073741824
+  }
+]
