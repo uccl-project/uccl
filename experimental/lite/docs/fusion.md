@@ -9,6 +9,13 @@ measure GEMM + AllReduce, GEMM + ReduceScatter, and AllGather + GEMM
 on the two-NUMA host. The refreshed four-GPU direct-peer results
 below use a different testbed and timing scope.
 
+The [November 15 eight-L4 review](../benchmarks/data/fusion_review_8l4_20261115/README.md)
+adds fresh sequential controls using the optimized standalone collective
+schedule. Historical fusion figures do not validate those later changes or
+establish a gain over the new sequential control. GPU progress and host-ring RS
+cannot simply be enabled on the resident GEMM path; the review records the
+API restrictions, checked measurements, and remaining regressions.
+
 ## November 10 four-L4 refresh
 
 The new FP16 dense comparison uses l40 (`mibura-sky-test-01`), four L4s in a

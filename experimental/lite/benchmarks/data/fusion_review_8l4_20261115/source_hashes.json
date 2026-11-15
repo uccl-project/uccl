@@ -1,0 +1,7 @@
+{
+  "scripts/run_fusion_review_8l4.py": "142e8a339b82e6b4aba5e400c867eb6c38425c2831a3f15d3d8288d00ca7fe71",
+  "benchmarks/fusion/router_fusion_8l4.cu": "69e6b48a1686b6b598a5b71dfdc9a953fd5fdad5f9decdb0910214fb114e82a9",
+  "benchmarks/cpu_router/compact_transport.cuh": "2e32dc847caed1f3c38182e7ada8fd10e46535892c00d8e6157adbb9efa9cfcb",
+  "src/cpu_router/packet_pipeline.cu": "95a925efa2f453fce2312df713b39e089386ac551517bd2bcff1e5c5d2b6c2d2",
+  "include/uccl_lite/cpu_router/packet_pipeline.hpp": "7a83c8a9cb09768ca6ac873e2541480dcec118faae7e359681f4550832a0113c"
+}

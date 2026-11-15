@@ -1,0 +1,42 @@
+{
+  "command": [
+    "/home/wxzheng/uccl-zhongjie-dev/experimental/lite/build/fusion_review_8l4_20261115/uccl_lite_router_fusion_8l4",
+    "--op",
+    "gemm-ar",
+    "--m",
+    "8192",
+    "--n",
+    "5120",
+    "--k",
+    "3200",
+    "--router-profile",
+    "current",
+    "--packet-kib",
+    "512",
+    "--warmup",
+    "2",
+    "--repeats",
+    "3",
+    "--iterations",
+    "10",
+    "--samples",
+    "/home/wxzheng/uccl-zhongjie-dev/experimental/lite/benchmarks/data/fusion_review_8l4_20261115/packet_ar_512_1.csv"
+  ],
+  "environment": {
+    "HOME": "/home/wxzheng",
+    "PATH": "/home/wxzheng/.codex/packages/standalone/releases/0.157.0-x86_64-unknown-linux-musl/codex-path:/home/wxzheng/.local/bin:/usr/local/cuda/bin:/home/wxzheng/.codex/tmp/arg0/codex-arg0ff3On7:/home/wxzheng/.codex/packages/standalone/releases/0.157.0-x86_64-unknown-linux-musl/codex-path:/home/wxzheng/.local/bin:/home/wxzheng/.local/bin:/home/wxzheng/.local/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/snap/bin",
+    "LD_LIBRARY_PATH": "/home/wxzheng/uccl-zhongjie-dev/experimental/lite/build/nccl-2.28.9/lib:/usr/local/cuda-12.9/lib64",
+    "NCCL_NET": "Socket",
+    "NCCL_NET_PLUGIN": "none",
+    "NCCL_IB_DISABLE": "1"
+  },
+  "testbed": "gpu",
+  "started_utc": "2026-11-15T14:56:17.714733+00:00",
+  "binary_sha256": "9a39ce28c8b10ceebd90eb09bd58b4dbee7b202aa237d05c0fd6a413bd34353a",
+  "gpu_users_before": [],
+  "returncode": 0,
+  "seconds": 11.350765800103545,
+  "timed_out": false,
+  "foreign_gpu_users": [],
+  "gpu_users_after": []
+}

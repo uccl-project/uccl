@@ -1,0 +1,5 @@
+# Keep the evidence for this fixed experiment, including excluded attempts.
+!*.csv
+!*.json
+!*.log
+!*.txt

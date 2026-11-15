@@ -1,7 +1,8 @@
 // Eight-GPU BF16 dense fusion: resident GEMM/CPU router versus separate
 // cuBLAS/CPU router and cuBLAS/NCCL for AG+GEMM, GEMM+AR, and GEMM+RS.
-#include "uccl_lite/cpu_router/packet_pipeline.hpp"
+#include "../cpu_router/compact_transport.cuh"
 #include "uccl_lite/cpu_router/memory.hpp"
+#include "uccl_lite/cpu_router/packet_pipeline.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -51,7 +52,8 @@ __global__ void verify(__nv_bfloat16 const* p, size_t count, float scale,
     float factor = gather ? float(row / localM + 1) * float(rank + 1) : 36.f;
     float expected = scale * factor * float(1 + row % 4) *
                      float(1 + col % 4);
-    if (fabsf(__bfloat162float(p[i]) - expected) > expected * 0.02f)
+    float actual = __bfloat162float(p[i]);
+    if (!isfinite(actual) || fabsf(actual - expected) > expected * 0.02f)
       atomicAdd(errors, 1);
   }
 }
@@ -72,7 +74,8 @@ int main(int argc, char** argv) {
         transportBlocks = 64, fusedTransportCrew = 0, workersPerNode = 23,
         scatterWorkersPerNode = 16, transportGrainKib = 16, gemmMGroup = 0,
         selectedMethod = -1;
-    bool gather = false, scatter = false;
+    bool gather = false, scatter = false, batchCpuJobs = false;
+    std::string routerProfile = "historical";
     std::string samplePath;
     for (int i = 1; i < argc; ++i) {
       if (i + 1 >= argc) throw std::runtime_error("missing option value");
@@ -87,6 +90,12 @@ int main(int argc, char** argv) {
       }
       if (arg == "--samples") {
         samplePath = argv[i];
+        continue;
+      }
+      if (arg == "--router-profile") {
+        routerProfile = argv[i];
+        if (routerProfile != "historical" && routerProfile != "current")
+          throw std::runtime_error("invalid --router-profile");
         continue;
       }
       if (arg == "--method") {
@@ -118,6 +127,8 @@ int main(int argc, char** argv) {
         scatterWorkersPerNode = value;
       else if (arg == "--transport-grain-kib") transportGrainKib = value;
       else if (arg == "--gemm-m-group") gemmMGroup = value;
+      else if (arg == "--batch-cpu-jobs")
+        batchCpuJobs = value != 0;
       else throw std::runtime_error("unknown option " + arg);
     }
     if (m <= 0 || n <= 0 || k <= 0 || n % 8 || k % 8 ||
@@ -138,7 +149,9 @@ int main(int argc, char** argv) {
     int available = 0;
     check(cudaGetDeviceCount(&available));
     if (available < ranks) throw std::runtime_error("eight GPUs required");
-    const char* operation = gather ? "ag-gemm" : scatter ? "gemm-rs" : "gemm-ar";
+    char const* operation = gather    ? "ag-gemm"
+                            : scatter ? "gemm-rs"
+                                      : "gemm-ar";
     size_t aCount = size_t(gather ? m / ranks : m) * k,
            bCount = size_t(n) * k,
            cCount = size_t(m) * n,
@@ -198,6 +211,7 @@ int main(int argc, char** argv) {
     options.scatterWorkersPerNode = scatterWorkersPerNode;
     options.transportGrainBytes = size_t(transportGrainKib) << 10;
     options.gemmMGroup = gemmMGroup;
+    options.batchCpuJobs = batchCpuJobs;
     auto router = std::make_unique<PacketPipeline>(options);
     router->prepare(ports);
     if (gather)
@@ -211,6 +225,59 @@ int main(int argc, char** argv) {
                              : scatter
                              ? PacketProgram::reduceScatter(outputCount, ranks)
                              : PacketProgram::allReduce(cCount, ranks);
+
+    // Benchmark-only control. Keep resident GEMM preparation/occupancy and its
+    // CPU reduction contract independent of the standalone collective schedule.
+    // "current" follows compact_collectives' explicit benchmark schedule; it
+    // does not install a production routing policy.
+    std::unique_ptr<PacketPipeline> separateRouter;
+    std::unique_ptr<uccl_lite::compact_experiment::Transport> mini;
+    if (routerProfile == "current") {
+      size_t bytes = (gather ? size_t(m) * k : cCount) * 2;
+      PacketPipelineOptions standalone;
+      standalone.packetBytes = 512UL << 10;
+      standalone.batchCpuJobs = true;
+      standalone.gpuLaunchWorkersPerNode = 4;
+      if (gather) {
+        standalone.reduction = ReductionPlacement::Gpu;
+        standalone.gpuProgress = true;
+        standalone.agPerSourceProgress = true;
+        if (bytes >= (4UL << 20)) standalone.packetBytes = 2UL << 20;
+      } else if (scatter) {
+        if (bytes <= (4UL << 20) && bytes >= (256UL << 10))
+          standalone.packetBytes = 128UL << 10;
+        if (bytes <= (64UL << 10) || bytes == (128UL << 10)) {
+          standalone.reduction = ReductionPlacement::Gpu;
+          standalone.gpuProgress = true;
+        } else if (bytes >= (1UL << 20) && bytes <= (8UL << 20)) {
+          standalone.reduction = ReductionPlacement::Gpu;
+          standalone.gpuProgress = true;
+          standalone.hostRingReduceScatter = true;
+          standalone.packetBytes = std::max(size_t(128UL << 10), bytes / ranks);
+          standalone.transportBlocks = 16;
+        } else if (bytes <= (1UL << 20)) {
+          standalone.scatterWorkersPerNode = 4;
+        }
+      } else {
+        if (bytes <= (4UL << 20)) standalone.packetBytes = 128UL << 10;
+        if (bytes <= 8192) {
+          standalone.reduction = ReductionPlacement::Gpu;
+          standalone.gpuProgress = true;
+        } else if (bytes <= (4UL << 20)) {
+          standalone.workersPerNode = 4;
+          standalone.transportBlocks = 16;
+        }
+      }
+      if (gather && bytes >= (256UL << 10) && bytes <= (1UL << 20))
+        mini = std::make_unique<uccl_lite::compact_experiment::Transport>(
+            ports, bytes, 16);
+      else {
+        separateRouter = std::make_unique<PacketPipeline>(standalone);
+        separateRouter->prepare(ports);
+      }
+    }
+    std::printf("# router_profile=%s fused_batch_cpu_jobs=%d\n",
+                routerProfile.c_str(), int(batchCpuJobs));
 
     auto sync = [&] {
       for (int r = 0; r < ranks; ++r) {
@@ -234,6 +301,16 @@ int main(int argc, char** argv) {
       }
     };
     auto run = [&](int method) {
+      // Reject stale output and unwritten/NaN values. Poisoning and its stream
+      // completion are outside complete-operation timing.
+      if (method < 3) {
+        for (int r = 0; r < ranks; ++r) {
+          check(cudaSetDevice(r));
+          check(cudaMemsetAsync(rank[r].output.data(), 0xff, outputCount * 2,
+                                rank[r].stream));
+        }
+        sync();
+      }
       for (int r = 0; r < ranks; ++r) {
         check(cudaSetDevice(r));
         check(cudaEventRecord(rank[r].start, rank[r].stream));
@@ -265,7 +342,12 @@ int main(int argc, char** argv) {
         }
       } else if (method == 1) {
         if (!gather) gemm();
-        router->enqueue(plan, binding);
+        if (mini)
+          mini->gather(aCount * ranks, ports);
+        else if (separateRouter)
+          separateRouter->enqueue(plan, binding);
+        else
+          router->enqueue(plan, binding);
         if (gather) gemm();
       } else if (method == 2) {
         router->enqueueGemm(plan, binding);
@@ -301,13 +383,13 @@ int main(int argc, char** argv) {
         int errors = 0;
         check(cudaMemcpy(&errors, rank[r].errors.data(), sizeof(int),
                          cudaMemcpyDeviceToHost));
-        if (errors) throw std::runtime_error("wrong result at rank " +
-                                             std::to_string(r) + ": " +
-                                             std::to_string(errors));
+        if (errors)
+          throw std::runtime_error("wrong result at rank " + std::to_string(r) +
+                                   ": " + std::to_string(errors));
       }
       return double(worst);
     };
-    const char* names[] = {"cublas+nccl", "cublas+router", "fused+router",
+    char const* names[] = {"cublas+nccl", "cublas+router", "fused+router",
                            "cublas-only", "resident-only"};
     std::vector<double> samples[5];
     std::ofstream sampleFile;
@@ -346,6 +428,8 @@ int main(int argc, char** argv) {
                   v.front(), v[v.size() / 2],
                   v.back(), v.size());
     }
+    mini.reset();
+    separateRouter.reset();
     router.reset();
     for (int r = 0; r < ranks; ++r) {
       check(cudaSetDevice(r));

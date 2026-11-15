@@ -1,0 +1,11 @@
+--- measured_source_v1/router_fusion_8l4.cu
++++ router_fusion_8l4.cu
+@@ -343,7 +343,7 @@
+       } else if (method == 1) {
+         if (!gather) gemm();
+         if (mini)
+-          mini->gather(aCount, ports);
++          mini->gather(aCount * ranks, ports);
+         else if (separateRouter)
+           separateRouter->enqueue(plan, binding);
+         else

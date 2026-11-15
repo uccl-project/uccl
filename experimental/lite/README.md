@@ -202,6 +202,42 @@ for the tradeoffs and validation boundaries.
 
 #### Testbed 1
 
+The [November 15 fusion review](benchmarks/data/fusion_review_8l4_20261115/results.md)
+compares resident fusion with the optimized standalone collective schedule on
+`wxz-l4`: eight L4s split 4+4 across two NUMA nodes, BF16, CUDA 12.9.41,
+NCCL 2.28.9. Two reversed runs cover two model-derived `(N,K)` pairs and
+24 operation/shape combinations. Each method has 30 checked calls per run;
+latency is the slowest GPU's complete-operation CUDA-event duration, including
+host enqueue gaps and excluding preparation and validation. Values are medians
+of the two run medians, with no best variant selected per size.
+
+With the existing resident settings, fusion has lower aggregate medians than
+cuBLAS+NCCL at 24/24 points and than cuBLAS+the optimized UCCL collective at
+17/24. These counts are descriptive, with several near ties. Regressions remain:
+32B AG+GEMM at `M=64` takes 0.2038 versus 0.1510 ms for the optimized sequential
+path, or 34.9% longer. The fused comparison also changes cuBLAS to CUTLASS GEMM,
+so gains cannot be attributed solely to overlap.
+
+A separate fixed-cap comparison increases the resident GEMM+AR packet from
+128 to **512 KiB**. All four tested prefill shapes improve in both reversed
+runs, reducing fused latency by **7.5%–19.4%** and beating the paired optimized
+sequential path by **9.0%–12.2%**. Each cap uses fresh interleaved controls and
+the same repetition/timing method; this table does not select a cap per shape.
+
+| Model-derived `(N,K)` | M | Fused 128 KiB (ms) | Fused 512 KiB (ms) | Optimized sequential (ms) |
+| --- | ---: | ---: | ---: | ---: |
+| 9B `(4096,1536)` | 2048 | 5.6717 | 4.5722 | 5.0417 |
+| 9B `(4096,1536)` | 8192 | 20.5703 | 17.3258 | 19.0403 |
+| 32B `(5120,3200)` | 2048 | 6.4269 | 5.9433 | 6.6668 |
+| 32B `(5120,3200)` | 8192 | 24.5233 | 21.9891 | 25.0494 |
+
+The 512-KiB cap remains an explicit option for these validated shapes;
+production routing and defaults are unchanged. GPU progress and host-ring RS
+cannot simply be enabled on resident GEMM. The
+[method, validation and reproduction record](benchmarks/data/fusion_review_8l4_20261115/README.md)
+includes all samples, negative results, failed/interrupted attempts and source
+hashes. The figures below retain their historical November 11 configurations.
+
 ##### GEMM + AllReduce
 
 ![Eight-L4 GEMM plus AllReduce decode latency bars for four model shapes at M=1,32,64](docs/assets/fusion-8l4-model-gemm-ar-decode-m64-labeled-bars.svg)

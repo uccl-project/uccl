@@ -1,0 +1,9 @@
+{
+  "git_head": "2eac25d41f3ad80218e09a74ceb685ebe7e52fdc",
+  "nccl_version": 22809,
+  "nccl_library": "/data/zhongjie/vllm-dsv4-venv/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2",
+  "nccl_sha256": "1c8618b866734cbdd5401715d6178be763ece283b7f808ecf86dedab211162c1",
+  "nvcc": "nvcc: NVIDIA (R) Cuda compiler driver\nCopyright (c) 2005-2025 NVIDIA Corporation\nBuilt on Wed_Apr__9_19:24:57_PDT_2025\nCuda compilation tools, release 12.9, V12.9.41\nBuild cuda_12.9.r12.9/compiler.35813241_0\n",
+  "submission_cpu": 47,
+  "build_command": "make -j2 router_fusion_8l4 router-checks BUILD=build/fusion_review_8l4_20261115 CUDA_HOME=/usr/local/cuda-12.9 CUTLASS_HOME=/data/zhongjie/cutlass-v4.5.0 NCCL_HOME=build/nccl-2.28.9"
+}
