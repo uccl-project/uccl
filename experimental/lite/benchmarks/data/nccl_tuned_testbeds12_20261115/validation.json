@@ -1,0 +1,10 @@
+{
+  "plotted_cases": 252,
+  "validation_runs_per_case": 2,
+  "timed_calls_including_prefixes": 25620,
+  "checked_warmups": 12810,
+  "all_selected_configurations_traced": true,
+  "per_size_calibrated_schedule": true,
+  "validation_used_for_selection": false,
+  "all_sweeps_start_at_1kib": true
+}

@@ -1,0 +1,19 @@
+{
+  "README.md": "1298d89dff9270f4c3c640e6f587eeb4a02130fc6a76af8a4e882378d07e925c",
+  "analyze.py": "a546f2eeb97be82d7a103d70fbb8ff5fde0bffa0a2dadc50170531ec21ebd3fe",
+  "calibration_cases.csv": "0dc6b1e2e6ab06352f992cc82cb51b5b3c13c68245ddcb68bd4b690f3793c004",
+  "candidates.json": "23bf4d1544d2b6469dadab5a2ab91979409d9ace25ace0c7fb6f1ce92755c42b",
+  "figures.json": "d2615a2b51c70d612be3ec6785002d4ee80678b24d525283eb01e57a24c03876",
+  "hardware.json": "4e37c78382781741fe94d5364ae76fd5483b719caf076f59d8889273bbc9d574",
+  "measurements.tar.gz": "d9303d182db3e1c53a9ba2fe40ee7f73e353eebd7cf1e42faba6096ea2771043",
+  "raw_checksums.json": "76c235ba73e695eaa37b12b6b86fd5bf201a1701246e3b726d5c2db8230d28e2",
+  "run.py": "c318cf43fd90f61ad210a7e2392a8221cd65491f94156666c613ac16c3af4b9e",
+  "schedule.json": "b04fdadcba1a1e463e1978e7a172dcdde25ca12455f8e9e88011ca3cb46f2bd0",
+  "segments.json": "a9b639075c2b80d455a6f2fd912b97de7ab9c11a6d83f339661c7471425324c3",
+  "select.py": "21cf5e0bafba9a2a9c46ac84ca39a2512c7835d1c9988004f7b29b059759c03e",
+  "selection.json": "87c79244fe45aff5235903ff5c5c37a138c7a31a258751c3999487129fbb1c6a",
+  "source_manifest.json": "ad7253255d4b73d06d100dcc5f7aa588a5b3be9dbfe4698f4d6790bcdb489135",
+  "summary.csv": "625eedbe628863002bc8fa8c9e29b706617929871dd00db277dab319c6774895",
+  "transport.json": "1012bc81515fe1d60f119cd1a8bd3931476c55925cbdab63d9bb747a153e9b04",
+  "validation.json": "62e6722759ded23c6b84797d20a7eb9d0f61714b36bafac26168b53ea679076f"
+}

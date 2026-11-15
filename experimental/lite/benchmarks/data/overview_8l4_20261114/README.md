@@ -1,5 +1,13 @@
 # Eight-L4 GPU and SHM overview figures
 
+The Testbed 1/2 figures show **UCCL Lite**, **NCCL CE (tuned)**,
+**NCCL SM (tuned)** and **NCCL (default)**, using the RTX PRO 6000 ×2 figure
+layout. SM (tuned) is the tuned default NCCL implementation; CE (tuned) enables
+its copy-engine-assisted transports. The two tuned curves come from
+[independent calibration and validation](../nccl_tuned_testbeds12_20261115/README.md).
+The original UCCL and default-NCCL curves retain their recorded source,
+configuration and measurements below.
+
 All six ordinary-call figures use **complete 1 KiB–1 GiB measurements**.
 AR/AG retain [the full refresh](../full_refresh_8l4_20261114/README.md);
 RS uses the subsequent [ring recovery confirmation](../rs_recovery_8l4_20261114/README.md)
@@ -36,10 +44,12 @@ Both testbeds use the same fixed UCCL schedule:
 
 This schedule was fixed before the full sweeps; it is not a per-size minimum or
 an automatic-routing policy. The report retains regressions against the base
-router and NCCL. All six plotted NCCL curves are paired with their UCCL samples
-in the same experiment.
+router and NCCL. The six original default-NCCL curves were paired with their UCCL samples
+in the same experiment. The new tuned references have their own validation
+runs, documented in the linked tuning report.
 
-GPU mode leaves NCCL P2P policy at its default. SHM mode explicitly disables
+For the original UCCL/default measurements, GPU mode leaves NCCL P2P policy
+at its default. SHM mode explicitly disables
 CUDA peer access and NCCL P2P. The recorded initialization probes show 16 SHM
 channel edges in **both** modes on this host, so these curves must not be
 interpreted as measured P2P-versus-SHM transport throughput. UCCL uses mapped
@@ -58,7 +68,7 @@ resident result is extrapolated to 1 GiB.
 [summary.csv](summary.csv) contains exactly **126 points**, including
 implementation labels and per-collective source paths. AR/AG measurements
 remain tied to their earlier source; they are not revalidation of this revision.
-First run
+To reconstruct the historical base dataset, first run
 `python3 scripts/summarize_full_8l4.py` from the Lite root; it rejects missing
 runs, samples, or size points. Then run:
 
@@ -68,7 +78,10 @@ python3 benchmarks/data/overview_8l4_20261114/build.py
 python3 benchmarks/data/overview_8l4_20261114/plot.py --preview
 ```
 
-`build.py` rejects historical or incomplete inputs. `plot.py` writes six SVGs
+`build.py` rejects historical or incomplete inputs. For the current four-series figures, keep the new tuning dataset’s validated
+`summary.csv` alongside this dataset and run `plot.py --preview`.
+
+`plot.py` writes six SVGs
 under `docs/assets/` and PNG/PDF previews under `build/figures/`. Throughput is
 decimal GB/s, `bytes / latency_us / 1000`, scaled by 14/8 for AR and 7/8 for
 AG/RS. Source and figure hashes are recorded in `provenance.json`, and this
