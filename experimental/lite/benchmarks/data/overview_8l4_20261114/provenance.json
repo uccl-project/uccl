@@ -17,10 +17,11 @@
       1073741824
     ]
   },
-  "historical_points": 0,
   "series": [
-    "UCCL-Lite",
-    "NCCL 2.28.9 or NCCL SHM"
+    "UCCL Lite",
+    "NCCL CE (tuned)",
+    "NCCL SM (tuned)",
+    "NCCL (default)"
   ],
   "figures": [
     "docs/assets/collectives-8l4-allreduce-overview.svg",
@@ -32,18 +33,25 @@
   ],
   "source_sha256": {
     "benchmarks/data/full_refresh_8l4_20261114/summary.csv": "b871f1d376f802c086cf1571022f45932919aae2e4804180b61f0171a43a149a",
-    "benchmarks/data/rs_recovery_8l4_20261114/summary.csv": "2eda94ad5e60ef2b49f87b2a70bc9d1435be6ca33c0f5c332a6827def4f92f2c"
+    "benchmarks/data/rs_recovery_8l4_20261114/summary.csv": "2eda94ad5e60ef2b49f87b2a70bc9d1435be6ca33c0f5c332a6827def4f92f2c",
+    "benchmarks/data/nccl_tuned_testbeds12_20261115/summary.csv": "625eedbe628863002bc8fa8c9e29b706617929871dd00db277dab319c6774895"
   },
   "figure_sha256": {
-    "docs/assets/collectives-8l4-allreduce-overview.svg": "f6dbbb9f8a43a8088fad63d4c56a8d8510fd4830ac0197d7bbb5f459d007a531",
-    "docs/assets/collectives-8l4-allgather-overview.svg": "becdc408f0a8b561a6a28f06b534b9bd00db6bc026dee2a4e07f436d69a0973c",
-    "docs/assets/collectives-8l4-reducescatter-overview.svg": "d31dcdce9ed916c29f5a84bbb1ca65c29d265f59d01ed5a4f2eaafec72aa29cb",
-    "docs/assets/collectives-8l4-shm-allreduce-overview.svg": "b05bb7963d88c2ecbd73bcd1c477c7930474c575aa6a8390f24b27784cd70f86",
-    "docs/assets/collectives-8l4-shm-allgather-overview.svg": "87a45e93a91456e72a3d51b648880fdd00ee96e170670d67b1881264aa3de585",
-    "docs/assets/collectives-8l4-shm-reducescatter-overview.svg": "13df4553cf4257b0f9d663d87cb2c3e30f597ce45b8a15d68ae55a3b5815d780"
+    "docs/assets/collectives-8l4-allreduce-overview.svg": "f9288de81a0b2e63870665e2448775de19b529fbaaf22b1b0e4ecf9d0c5a8161",
+    "docs/assets/collectives-8l4-allgather-overview.svg": "58f03f0c64475cc4c2610e311e6498395680803c41c9a66db5b9ebb8ff1b9476",
+    "docs/assets/collectives-8l4-reducescatter-overview.svg": "404da9366b4d930fbeee997c74a186a2929e4d7100a2085d402bf12b02a73912",
+    "docs/assets/collectives-8l4-shm-allreduce-overview.svg": "c225a1c2751e0d143392cb45bb4f7cbc7048cf4f9edc8a3f1c4e187faf4c339c",
+    "docs/assets/collectives-8l4-shm-allgather-overview.svg": "c7c5202c96f357ff3836e1c74661b8256b7dac1498b84cdd8b4cdb57c996aa10",
+    "docs/assets/collectives-8l4-shm-reducescatter-overview.svg": "26acfafb1e553df86335ef19002335ded65dedb4a9ffc0cd0489016580ab408f"
   },
-  "per_size_best_variant": false,
-  "plotting_environment": "Python 3.10, Matplotlib 3.10.9; scripts/figure_style.py",
+  "plotting_environment": "Python 3.10.12, Matplotlib 3.10.7",
   "resident_figure": "Separate earlier transfer_4to8_20261114 experiment; unchanged in this full ordinary-call refresh",
-  "note": "AR/AG retain 84 paired full-refresh points at their recorded revision; RS replaces all 42 points from the four ring-recovery sweeps. Each curve has complete paired controls and no mixed historical tail."
+  "note": "AR/AG retain 84 paired full-refresh points at their recorded revision; RS replaces all 42 points from the four ring-recovery sweeps. Each curve has complete paired controls and no mixed historical tail.",
+  "base_measurements_revalidated": false,
+  "tuned_baselines": "benchmarks/data/nccl_tuned_testbeds12_20261115",
+  "tuned_selection": "Per-size calibration; fixed before independent validation",
+  "base_per_size_best_variant": false,
+  "base_had_historical_tails": false,
+  "retained_base_series_points": 252,
+  "new_tuned_series_points": 252
 }

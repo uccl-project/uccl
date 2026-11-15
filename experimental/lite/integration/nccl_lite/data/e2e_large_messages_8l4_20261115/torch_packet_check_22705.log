@@ -1,0 +1,68 @@
+make: Entering directory '/home/wxzheng/uccl-zhongjie-dev/experimental/lite/integration/nccl_lite'
+LD_PRELOAD=/home/wxzheng/uccl-zhongjie-dev/experimental/lite/integration/nccl_lite/build/libuccl_lite_nccl_compat.so UCCL_LITE_REAL_NCCL=/data/wxzheng/kt-venv/lib/python3.11/site-packages/nvidia/nccl/lib/libnccl.so.2 UCCL_LITE_NCCL_ENABLE=1 NCCL_NET=Socket NCCL_NET_PLUGIN=none NCCL_CUMEM_ENABLE=0 NCCL_NVLS_ENABLE=0 /data/wxzheng/kt-venv/bin/torchrun --standalone --nproc-per-node=8 test_torch.py
+UCCL Lite NCCL proxy: communicator rank=0/8 id=c610c4fda3376a6c
+UCCL Lite NCCL proxy: communicator rank=4/8 id=c610c4fda3376a6c
+UCCL Lite NCCL proxy: communicator rank=6/8 id=c610c4fda3376a6c
+UCCL Lite NCCL proxy: communicator rank=2/8 id=c610c4fda3376a6c
+UCCL Lite NCCL proxy: communicator rank=7/8 id=c610c4fda3376a6c
+UCCL Lite packet mode AG=1 RS=1 AR=1 retain_rs=1 split_credits=1 scratch=1 pipeline_ag=1 hier_rs=1
+UCCL Lite NCCL proxy: communicator rank=1/8 id=c610c4fda3376a6c
+UCCL Lite NCCL proxy: communicator rank=5/8 id=c610c4fda3376a6c
+UCCL Lite NCCL proxy: communicator rank=3/8 id=c610c4fda3376a6c
+UCCL Lite packet worker device=2 CPU=17
+UCCL Lite packet worker device=2 isolated CPU=17 scheduler_threads=15
+UCCL Lite NCCL proxy: rank=2 op=AG BF16 count=8
+UCCL Lite packet worker device=6 CPU=41
+UCCL Lite packet worker device=6 isolated CPU=41 scheduler_threads=15
+UCCL Lite NCCL proxy: rank=6 op=AG BF16 count=8
+UCCL Lite packet worker device=1 CPU=11
+UCCL Lite packet worker device=1 isolated CPU=11 scheduler_threads=15
+UCCL Lite packet worker device=0 CPU=5
+UCCL Lite packet worker device=3 CPU=23
+UCCL Lite NCCL proxy: rank=1 op=AG BF16 count=8
+UCCL Lite packet worker device=3 isolated CPU=23 scheduler_threads=15
+UCCL Lite NCCL proxy: rank=3 op=AG BF16 count=8
+UCCL Lite packet worker device=5 CPU=35
+UCCL Lite packet worker device=5 isolated CPU=35 scheduler_threads=15
+UCCL Lite NCCL proxy: rank=5 op=AG BF16 count=8
+UCCL Lite packet worker device=7 CPU=47
+UCCL Lite packet worker device=7 isolated CPU=47 scheduler_threads=15
+UCCL Lite NCCL proxy: rank=7 op=AG BF16 count=8
+UCCL Lite packet worker device=4 CPU=29
+UCCL Lite packet worker device=4 isolated CPU=29 scheduler_threads=15
+UCCL Lite NCCL proxy: rank=4 op=AG BF16 count=8
+UCCL Lite packet worker device=0 isolated CPU=5 scheduler_threads=15
+UCCL Lite NCCL proxy: rank=0 op=AG BF16 count=8
+UCCL Lite NCCL proxy: rank=6 op=RS BF16 count=8
+UCCL Lite NCCL proxy: rank=5 op=RS BF16 count=8
+UCCL Lite NCCL proxy: rank=7 op=RS BF16 count=8
+UCCL Lite NCCL proxy: rank=1 op=RS BF16 count=8
+UCCL Lite NCCL proxy: rank=3 op=RS BF16 count=8
+UCCL Lite NCCL proxy: rank=2 op=RS BF16 count=8
+UCCL Lite NCCL proxy: rank=4 op=RS BF16 count=8
+UCCL Lite NCCL proxy: rank=0 op=RS BF16 count=8
+UCCL Lite NCCL proxy: rank=5 op=AR BF16 count=8
+UCCL Lite NCCL proxy: rank=1 op=AR BF16 count=8
+UCCL Lite NCCL proxy: rank=4 op=AR BF16 count=8
+UCCL Lite NCCL proxy: rank=2 op=AR BF16 count=8
+UCCL Lite NCCL proxy: rank=6 op=AR BF16 count=8
+UCCL Lite NCCL proxy: rank=0 op=AR BF16 count=8
+UCCL Lite NCCL proxy: rank=3 op=AR BF16 count=8
+UCCL Lite NCCL proxy: rank=7 op=AR BF16 count=8
+UCCL Lite NCCL proxy: rank=3 completed AG=3 RS=3 AR=3 AG_GEMM=0 RS_SUM2=0 RS_READY=0
+UCCL Lite NCCL proxy: rank=6 completed AG=3 RS=3 AR=3 AG_GEMM=0 RS_SUM2=0 RS_READY=0
+UCCL Lite NCCL proxy: rank=4 completed AG=3 RS=3 AR=3 AG_GEMM=0 RS_SUM2=0 RS_READY=0
+UCCL Lite NCCL proxy: rank=2 completed AG=3 RS=3 AR=3 AG_GEMM=0 RS_SUM2=0 RS_READY=0
+UCCL Lite NCCL proxy: rank=0 completed AG=3 RS=3 AR=3 AG_GEMM=0 RS_SUM2=0 RS_READY=0
+UCCL Lite NCCL proxy: rank=5 completed AG=3 RS=3 AR=3 AG_GEMM=0 RS_SUM2=0 RS_READY=0
+UCCL Lite NCCL proxy: rank=1 completed AG=3 RS=3 AR=3 AG_GEMM=0 RS_SUM2=0 RS_READY=0
+UCCL Lite NCCL proxy: rank=7 completed AG=3 RS=3 AR=3 AG_GEMM=0 RS_SUM2=0 RS_READY=0
+rank 0: torch AG/RS/AR passed
+rank 7: torch AG/RS/AR passed
+rank 2: torch AG/RS/AR passed
+rank 1: torch AG/RS/AR passed
+rank 3: torch AG/RS/AR passed
+rank 5: torch AG/RS/AR passed
+rank 6: torch AG/RS/AR passed
+rank 4: torch AG/RS/AR passed
+make: Leaving directory '/home/wxzheng/uccl-zhongjie-dev/experimental/lite/integration/nccl_lite'

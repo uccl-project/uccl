@@ -1,0 +1,322 @@
+[
+  {
+    "testbed": "gpu",
+    "op": "ar",
+    "engine": "ce",
+    "config": "ce_recv_p2p_affinity",
+    "begin": 1024,
+    "end": 65536
+  },
+  {
+    "testbed": "gpu",
+    "op": "ar",
+    "engine": "ce",
+    "config": "ce_send_p2p_affinity",
+    "begin": 131072,
+    "end": 262144
+  },
+  {
+    "testbed": "gpu",
+    "op": "ar",
+    "engine": "ce",
+    "config": "ce_recv_affinity",
+    "begin": 524288,
+    "end": 1073741824
+  },
+  {
+    "testbed": "gpu",
+    "op": "ar",
+    "engine": "sm",
+    "config": "sm_default_affinity",
+    "begin": 1024,
+    "end": 2097152
+  },
+  {
+    "testbed": "gpu",
+    "op": "ar",
+    "engine": "sm",
+    "config": "sm_buffer1m_ch4",
+    "begin": 4194304,
+    "end": 1073741824
+  },
+  {
+    "testbed": "gpu",
+    "op": "ag",
+    "engine": "ce",
+    "config": "ce_ag_b8m_c4",
+    "begin": 1024,
+    "end": 8192
+  },
+  {
+    "testbed": "gpu",
+    "op": "ag",
+    "engine": "ce",
+    "config": "ce_send_affinity",
+    "begin": 16384,
+    "end": 262144
+  },
+  {
+    "testbed": "gpu",
+    "op": "ag",
+    "engine": "ce",
+    "config": "ce_recv_affinity",
+    "begin": 524288,
+    "end": 1073741824
+  },
+  {
+    "testbed": "gpu",
+    "op": "ag",
+    "engine": "sm",
+    "config": "sm_default_p2p",
+    "begin": 1024,
+    "end": 8192
+  },
+  {
+    "testbed": "gpu",
+    "op": "ag",
+    "engine": "sm",
+    "config": "sm_ag_b16m_c8",
+    "begin": 16384,
+    "end": 262144
+  },
+  {
+    "testbed": "gpu",
+    "op": "ag",
+    "engine": "sm",
+    "config": "sm_default_affinity",
+    "begin": 524288,
+    "end": 2097152
+  },
+  {
+    "testbed": "gpu",
+    "op": "ag",
+    "engine": "sm",
+    "config": "sm_ag_b8m_c4",
+    "begin": 4194304,
+    "end": 1073741824
+  },
+  {
+    "testbed": "gpu",
+    "op": "rs",
+    "engine": "ce",
+    "config": "ce_recv_affinity",
+    "begin": 1024,
+    "end": 16384
+  },
+  {
+    "testbed": "gpu",
+    "op": "rs",
+    "engine": "ce",
+    "config": "ce_send_affinity",
+    "begin": 32768,
+    "end": 4194304
+  },
+  {
+    "testbed": "gpu",
+    "op": "rs",
+    "engine": "ce",
+    "config": "ce_recv_affinity",
+    "begin": 8388608,
+    "end": 1073741824
+  },
+  {
+    "testbed": "gpu",
+    "op": "rs",
+    "engine": "sm",
+    "config": "sm_rs_b8m_c4",
+    "begin": 1024,
+    "end": 1024
+  },
+  {
+    "testbed": "gpu",
+    "op": "rs",
+    "engine": "sm",
+    "config": "sm_default_p2p",
+    "begin": 2048,
+    "end": 32768
+  },
+  {
+    "testbed": "gpu",
+    "op": "rs",
+    "engine": "sm",
+    "config": "sm_rs_b8m_c4",
+    "begin": 65536,
+    "end": 131072
+  },
+  {
+    "testbed": "gpu",
+    "op": "rs",
+    "engine": "sm",
+    "config": "sm_default_affinity",
+    "begin": 262144,
+    "end": 2097152
+  },
+  {
+    "testbed": "gpu",
+    "op": "rs",
+    "engine": "sm",
+    "config": "sm_ch8",
+    "begin": 4194304,
+    "end": 1073741824
+  },
+  {
+    "testbed": "shm",
+    "op": "ar",
+    "engine": "ce",
+    "config": "ce_recv_affinity",
+    "begin": 1024,
+    "end": 1024
+  },
+  {
+    "testbed": "shm",
+    "op": "ar",
+    "engine": "ce",
+    "config": "ce_send_affinity",
+    "begin": 2048,
+    "end": 16384
+  },
+  {
+    "testbed": "shm",
+    "op": "ar",
+    "engine": "ce",
+    "config": "ce_recv_affinity",
+    "begin": 32768,
+    "end": 65536
+  },
+  {
+    "testbed": "shm",
+    "op": "ar",
+    "engine": "ce",
+    "config": "ce_send_affinity",
+    "begin": 131072,
+    "end": 262144
+  },
+  {
+    "testbed": "shm",
+    "op": "ar",
+    "engine": "ce",
+    "config": "ce_recv_affinity",
+    "begin": 524288,
+    "end": 1073741824
+  },
+  {
+    "testbed": "shm",
+    "op": "ar",
+    "engine": "sm",
+    "config": "sm_default",
+    "begin": 1024,
+    "end": 1024
+  },
+  {
+    "testbed": "shm",
+    "op": "ar",
+    "engine": "sm",
+    "config": "sm_default_affinity",
+    "begin": 2048,
+    "end": 2097152
+  },
+  {
+    "testbed": "shm",
+    "op": "ar",
+    "engine": "sm",
+    "config": "sm_buffer1m_ch4",
+    "begin": 4194304,
+    "end": 1073741824
+  },
+  {
+    "testbed": "shm",
+    "op": "ag",
+    "engine": "ce",
+    "config": "ce_recv_affinity",
+    "begin": 1024,
+    "end": 8192
+  },
+  {
+    "testbed": "shm",
+    "op": "ag",
+    "engine": "ce",
+    "config": "ce_send_affinity",
+    "begin": 16384,
+    "end": 262144
+  },
+  {
+    "testbed": "shm",
+    "op": "ag",
+    "engine": "ce",
+    "config": "ce_recv_affinity",
+    "begin": 524288,
+    "end": 1073741824
+  },
+  {
+    "testbed": "shm",
+    "op": "ag",
+    "engine": "sm",
+    "config": "sm_ag_b8m_c4",
+    "begin": 1024,
+    "end": 1024
+  },
+  {
+    "testbed": "shm",
+    "op": "ag",
+    "engine": "sm",
+    "config": "sm_default_affinity",
+    "begin": 2048,
+    "end": 2097152
+  },
+  {
+    "testbed": "shm",
+    "op": "ag",
+    "engine": "sm",
+    "config": "sm_ag_b8m_c4",
+    "begin": 4194304,
+    "end": 1073741824
+  },
+  {
+    "testbed": "shm",
+    "op": "rs",
+    "engine": "ce",
+    "config": "ce_rs_b8m_c4",
+    "begin": 1024,
+    "end": 2048
+  },
+  {
+    "testbed": "shm",
+    "op": "rs",
+    "engine": "ce",
+    "config": "ce_recv_affinity",
+    "begin": 4096,
+    "end": 16384
+  },
+  {
+    "testbed": "shm",
+    "op": "rs",
+    "engine": "ce",
+    "config": "ce_send_affinity",
+    "begin": 32768,
+    "end": 2097152
+  },
+  {
+    "testbed": "shm",
+    "op": "rs",
+    "engine": "ce",
+    "config": "ce_recv_affinity",
+    "begin": 4194304,
+    "end": 1073741824
+  },
+  {
+    "testbed": "shm",
+    "op": "rs",
+    "engine": "sm",
+    "config": "sm_default_affinity",
+    "begin": 1024,
+    "end": 4194304
+  },
+  {
+    "testbed": "shm",
+    "op": "rs",
+    "engine": "sm",
+    "config": "sm_ch8",
+    "begin": 8388608,
+    "end": 1073741824
+  }
+]

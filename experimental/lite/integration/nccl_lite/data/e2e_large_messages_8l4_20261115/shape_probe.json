@@ -1,0 +1,69 @@
+{
+  "timing_valid": false,
+  "probe_case": "8:1024:1",
+  "trace_offset": 183140,
+  "includes_client_health_check": true,
+  "server_profile": {
+    "mem_fraction_static": 0.9,
+    "chunked_prefill_size": 8192,
+    "proxy_capacity_bytes": 134217728
+  },
+  "histogram": [
+    {
+      "op": "AG",
+      "complete_bytes_per_gpu": 65536,
+      "calls": 45
+    },
+    {
+      "op": "AG",
+      "complete_bytes_per_gpu": 303104,
+      "calls": 3
+    },
+    {
+      "op": "AG",
+      "complete_bytes_per_gpu": 2121728,
+      "calls": 1
+    },
+    {
+      "op": "AG",
+      "complete_bytes_per_gpu": 2424832,
+      "calls": 1
+    },
+    {
+      "op": "AR",
+      "complete_bytes_per_gpu": 8192,
+      "calls": 183
+    },
+    {
+      "op": "AR",
+      "complete_bytes_per_gpu": 57344,
+      "calls": 1
+    },
+    {
+      "op": "AR",
+      "complete_bytes_per_gpu": 65536,
+      "calls": 1
+    },
+    {
+      "op": "AR",
+      "complete_bytes_per_gpu": 8388608,
+      "calls": 90
+    },
+    {
+      "op": "AR",
+      "complete_bytes_per_gpu": 58728448,
+      "calls": 90
+    },
+    {
+      "op": "RS",
+      "complete_bytes_per_gpu": 65536,
+      "calls": 45
+    }
+  ],
+  "initial_analysis_assertion": {
+    "assumed_minimum_bytes": 67108864,
+    "actual_maximum_bytes": 58728448,
+    "met": false,
+    "note": "The analysis assumed at least 64 MiB. The completed diagnostic instead observed 56 MiB AR. This was an incorrect size expectation, not a collective/request failure. No traced timing is used."
+  }
+}

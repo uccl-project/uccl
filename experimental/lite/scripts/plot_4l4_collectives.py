@@ -5,9 +5,9 @@ import math
 
 import matplotlib
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 
-from figure_style import ROOT, clean_axis, configure, save as save_figure
+from figure_style import (ROOT, clean_axis, collective_legend, collective_panels,
+                          configure, save as save_figure)
 
 TUNED = ROOT / "benchmarks/data/nccl_tuned_4l4_20261115/cases.csv"
 
@@ -21,9 +21,7 @@ def plot(rows, name, timer, factor):
     latency_sizes = [1 << power for power in range(10, 21)]
     throughput_sizes = [1 << power for power in range(20, 31)]
     assert all(size in by_size for size in latency_sizes + throughput_sizes)
-    fig, axes = plt.subplots(1, 2, figsize=(10.8, 4.8))
-    fig.subplots_adjust(left=.085, right=.985, top=.74, bottom=.27, wspace=.28)
-    fig.suptitle(f"4×L4 · {name}", y=.98, fontsize=15, fontweight="bold")
+    fig, axes = collective_panels()
     for ax, sizes, measure, ylabel, ticks in (
         (axes[0], latency_sizes, lambda size, us: us, 'Latency (µs)',
          [1 << power for power in (10, 12, 14, 16, 18, 20)]),
@@ -63,10 +61,7 @@ def plot(rows, name, timer, factor):
                     markeredgecolor='white', markeredgewidth=.7, label=label,
                     zorder=4 if is_uccl else 2)
         ax.set_ylim(0, upper * 1.13)
-    handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(handles[::-1], labels[::-1], loc='upper center',
-               bbox_to_anchor=(.5, .91), ncol=2, frameon=False,
-               fontsize=10.5, handlelength=2.4, columnspacing=1.6)
+    collective_legend(fig, axes[0])
     save_figure(fig, f'collectives-4l4-{name.lower()}-all-sizes', preview=True)
 
 def size_name(n):
@@ -74,7 +69,7 @@ def size_name(n):
 
 
 if __name__ == "__main__":
-    configure()
+    configure(black_axes=True)
     data = ROOT / "benchmarks/data/small_medium_4l4_20261113"
     for prefix, name, timer, factor in (
         ("ar", "AllReduce", "4 processes, host timer", 1.5),

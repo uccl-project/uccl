@@ -1,0 +1,41 @@
+{
+  "series": [
+    "UCCL Lite",
+    "NCCL CE (tuned)",
+    "NCCL SM (tuned)",
+    "NCCL (default)"
+  ],
+  "figure_sha256": {
+    "docs/assets/collectives-8l4-allreduce-overview.svg": "f9288de81a0b2e63870665e2448775de19b529fbaaf22b1b0e4ecf9d0c5a8161",
+    "docs/assets/collectives-8l4-allgather-overview.svg": "58f03f0c64475cc4c2610e311e6498395680803c41c9a66db5b9ebb8ff1b9476",
+    "docs/assets/collectives-8l4-reducescatter-overview.svg": "404da9366b4d930fbeee997c74a186a2929e4d7100a2085d402bf12b02a73912",
+    "docs/assets/collectives-8l4-shm-allreduce-overview.svg": "c225a1c2751e0d143392cb45bb4f7cbc7048cf4f9edc8a3f1c4e187faf4c339c",
+    "docs/assets/collectives-8l4-shm-allgather-overview.svg": "c7c5202c96f357ff3836e1c74661b8256b7dac1498b84cdd8b4cdb57c996aa10",
+    "docs/assets/collectives-8l4-shm-reducescatter-overview.svg": "26acfafb1e553df86335ef19002335ded65dedb4a9ffc0cd0489016580ab408f"
+  },
+  "base_curves_unchanged": true,
+  "visual_inspection": "All six PNG previews inspected: four legends, complete axes and ranges visible without clipping.",
+  "base_source_sha256": "61d6c1a90d05b991a932474ad3dd61c645952e368f62a499104ec60804c862d1",
+  "tuned_source_sha256": "625eedbe628863002bc8fa8c9e29b706617929871dd00db277dab319c6774895",
+  "plotted_unique_series_points": 504,
+  "plotted_cases": 252,
+  "validation_runs_per_case": 2,
+  "timed_calls_including_prefixes": 25620,
+  "checked_warmups": 12810,
+  "all_selected_configurations_traced": true,
+  "per_size_calibrated_schedule": true,
+  "validation_used_for_selection": false,
+  "all_sweeps_start_at_1kib": true,
+  "failed_attempts": [
+    "refine_gpu_ce_ar_b16m_c8"
+  ],
+  "conservatively_skipped_configurations": [
+    "refine_gpu_ce_ag_b16m_c8",
+    "refine_gpu_ce_rs_b16m_c8",
+    "refine_shm_ce_ar_b16m_c8",
+    "refine_shm_ce_ag_b16m_c8",
+    "refine_shm_ce_rs_b16m_c8"
+  ],
+  "plotting_environment": "Python 3.10.12, Matplotlib 3.10.7",
+  "reference_layout": "benchmarks/data/pro6000_b0ac7b4a_validation/plot.py"
+}

@@ -1,0 +1,18 @@
+{
+  "torch": "2.9.1+cu128",
+  "torch_cuda": "12.8",
+  "nccl": [
+    2,
+    27,
+    5
+  ],
+  "sglang": "0.0.0.dev0",
+  "transformers": "5.6.0.post5",
+  "triton": "3.5.1",
+  "installed_source_sha256": {
+    "/data/wxzheng/kt-venv/lib/python3.11/site-packages/sglang/srt/server_args.py": "6de607f3c94d0bfa864ce4d33cc05cb1ea8165fb6fdede3961fe84b071739e52",
+    "/data/wxzheng/kt-venv/lib/python3.11/site-packages/sglang/srt/models/glm4_moe.py": "82388bafaf217b301bf0c0fd6002d7e66983158a187e4bb8bb7946dc3786d193",
+    "/data/wxzheng/kt-venv/lib/python3.11/site-packages/sglang/srt/layers/communicator.py": "49da6cc452dae64df6630a7dc04fe12f541cd2f7d5aaf07ebc19a22b56ea2aa5"
+  },
+  "topology": "\t\u001b[4mGPU0\tGPU1\tGPU2\tGPU3\tGPU4\tGPU5\tGPU6\tGPU7\tCPU Affinity\tNUMA Affinity\tGPU NUMA ID\u001b[0m\nGPU0\t X \tPHB\tPHB\tPHB\tSYS\tSYS\tSYS\tSYS\t0-23,48-71\t0\t\tN/A\nGPU1\tPHB\t X \tPHB\tPHB\tSYS\tSYS\tSYS\tSYS\t0-23,48-71\t0\t\tN/A\nGPU2\tPHB\tPHB\t X \tPHB\tSYS\tSYS\tSYS\tSYS\t0-23,48-71\t0\t\tN/A\nGPU3\tPHB\tPHB\tPHB\t X \tSYS\tSYS\tSYS\tSYS\t0-23,48-71\t0\t\tN/A\nGPU4\tSYS\tSYS\tSYS\tSYS\t X \tPHB\tPHB\tPHB\t24-47,72-95\t1\t\tN/A\nGPU5\tSYS\tSYS\tSYS\tSYS\tPHB\t X \tPHB\tPHB\t24-47,72-95\t1\t\tN/A\nGPU6\tSYS\tSYS\tSYS\tSYS\tPHB\tPHB\t X \tPHB\t24-47,72-95\t1\t\tN/A\nGPU7\tSYS\tSYS\tSYS\tSYS\tPHB\tPHB\tPHB\t X \t24-47,72-95\t1\t\tN/A\n\nLegend:\n\n  X    = Self\n  SYS  = Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)\n  NODE = Connection traversing PCIe as well as the interconnect between PCIe Host Bridges within a NUMA node\n  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)\n  PXB  = Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)\n  PIX  = Connection traversing at most a single PCIe bridge\n  NV#  = Connection traversing a bonded set of # NVLinks\n"
+}

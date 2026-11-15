@@ -1,0 +1,171 @@
+{
+  "serving": {
+    "8:1024:1": {
+      "run_medians_s": {
+        "nccl": [
+          3.088600039947778,
+          3.0978286229074
+        ],
+        "packet": [
+          2.6259455401450396,
+          2.6427834169007838
+        ]
+      },
+      "nccl_s": 3.093214331427589,
+      "packet_s": 2.6343644785229117,
+      "latency_reduction_pct": 14.834078849392496,
+      "speedup": 1.174178575761071,
+      "samples_per_backend": {
+        "nccl": 6,
+        "packet": 6
+      },
+      "exact_text_match_all_runs": true,
+      "input_tokens_per_s": {
+        "nccl": 2648.3777463358656,
+        "packet": 3109.668410269962
+      }
+    },
+    "32:1024:1": {
+      "run_medians_s": {
+        "nccl": [
+          11.597253468818963,
+          11.657593107782304
+        ],
+        "packet": [
+          9.5645374590531,
+          9.590606664773077
+        ]
+      },
+      "nccl_s": 11.627423288300633,
+      "packet_s": 9.577572061913088,
+      "latency_reduction_pct": 17.629453882960288,
+      "speedup": 1.2140261867137645,
+      "samples_per_backend": {
+        "nccl": 6,
+        "packet": 6
+      },
+      "exact_text_match_all_runs": true,
+      "input_tokens_per_s": {
+        "nccl": 2818.165227799933,
+        "packet": 3421.32638503528
+      }
+    },
+    "32:2048:1": {
+      "run_medians_s": {
+        "nccl": [
+          23.388361057732254,
+          23.504141456913203
+        ],
+        "packet": [
+          19.144957050215453,
+          19.105813330039382
+        ]
+      },
+      "nccl_s": 23.44625125732273,
+      "packet_s": 19.125385190127417,
+      "latency_reduction_pct": 18.42881414079285,
+      "speedup": 1.2259230872602638,
+      "samples_per_backend": {
+        "nccl": 6,
+        "packet": 6
+      },
+      "exact_text_match_all_runs": true,
+      "input_tokens_per_s": {
+        "nccl": 2795.158990695018,
+        "packet": 3426.6499392561195
+      }
+    },
+    "64:256:32": {
+      "run_medians_s": {
+        "nccl": [
+          15.132018673233688,
+          15.190679809078574
+        ],
+        "packet": [
+          14.144213416613638,
+          14.0551130278036
+        ]
+      },
+      "nccl_s": 15.161349241156131,
+      "packet_s": 14.09966322220862,
+      "latency_reduction_pct": 7.002582699338655,
+      "speedup": 1.0752986792815897,
+      "samples_per_backend": {
+        "nccl": 6,
+        "packet": 6
+      },
+      "exact_text_match_all_runs": false,
+      "input_tokens_per_s": {
+        "nccl": 1080.64260900507,
+        "packet": 1162.013570238563
+      }
+    },
+    "32:2048:32": {
+      "run_medians_s": {
+        "nccl": [
+          28.022470593918115
+        ],
+        "packet": [
+          23.716688678134233
+        ]
+      },
+      "nccl_s": 28.022470593918115,
+      "packet_s": 23.716688678134233,
+      "latency_reduction_pct": 15.36546144763693,
+      "speedup": 1.1815507204323017,
+      "samples_per_backend": {
+        "nccl": 3,
+        "packet": 3
+      },
+      "exact_text_match_all_runs": false,
+      "input_tokens_per_s": {
+        "nccl": 2338.6945765668384,
+        "packet": 2763.286261813664
+      }
+    }
+  },
+  "training": {
+    "fsdp": {
+      "run_medians_s": {
+        "nccl": [
+          0.7266192459501326,
+          0.7229815430473536
+        ],
+        "packet": [
+          0.580333478981629,
+          0.5878883807454258
+        ]
+      },
+      "nccl_s": 0.7248003944987431,
+      "packet_s": 0.5841109298635274,
+      "latency_reduction_pct": 19.410787535858564,
+      "speedup": 1.2408608663907155,
+      "parameter_sample_max_abs_difference": 0.0,
+      "loss_max_abs_difference": 0.0009403228759765625,
+      "parameters": 637847552,
+      "gradient_bytes": 1275695104,
+      "timed_steps_per_run": 10
+    },
+    "ddp": {
+      "run_medians_s": {
+        "nccl": [
+          0.5283405201043934,
+          0.5321266609244049
+        ],
+        "packet": [
+          0.40288628404960036,
+          0.40732517885044217
+        ]
+      },
+      "nccl_s": 0.5302335905143991,
+      "packet_s": 0.40510573145002127,
+      "latency_reduction_pct": 23.598629227353683,
+      "speedup": 1.3088770396224698,
+      "parameter_sample_max_abs_difference": 0.0,
+      "loss_max_abs_difference": 0.00103759765625,
+      "parameters": 637847552,
+      "gradient_bytes": 1275695104,
+      "timed_steps_per_run": 10
+    }
+  }
+}
