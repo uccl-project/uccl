@@ -4,7 +4,7 @@
 
 **Collectives and communication–GEMM fusion for PCIe GPU nodes.**
 
-[Get started](#get-started) · [Results](#measured-results) · [CPU router](#optional-cpu-router) · [Documentation](#documentation)
+[Results](#measured-results) · [CPU router](#optional-cpu-router) · [Documentation](#documentation)
 
 </div>
 
@@ -29,7 +29,6 @@ and small GEMMs can lose to NCCL; negative results are retained.
 | [Single-node collectives](docs/collectives.md) | AllReduce, AllGather, and ReduceScatter on one node. |
 | [Multi-node collectives](docs/multinode.md) | Collective implementations across nodes using local GPU access and network rails. |
 | [CPU router](docs/cpu-router.md) | Optional NUMA-aware path for local collectives, selected from measured benefit. |
-| [Retained router / peer optimizations](docs/retained-optimizations.md) | Optional BF16 joint interface, retained CPU/packet improvements, measured limitations and reproduction. |
 | [Fusion kernels](docs/fusion.md) | Combine collective communication with GEMM and MoE stages. |
 
 The RTX PRO 6000 BF16 peer path shares inline copy/reduction primitives with
@@ -37,26 +36,6 @@ four-L4 FP32 peer collectives and the eight-L4 BF16 local fallback. One prepared
 peer executor owns the two/four-rank CUDA schedule; the joint layer owns
 validation and calibrated backend selection. See the
 [shared implementation and refactor checks](docs/retained-optimizations.md#shared-collective-components).
-
-## Get started
-
-From the UCCL repository root on the 8xL4 GPU host:
-
-```bash
-cd experimental/lite
-make -j2 adaptive-collectives \
-  CUDA_HOME=/usr/local/cuda-12.9 \
-  CUTLASS_HOME=/data/zhongjie/cutlass-v4.5.0 \
-  NCCL_HOME=build/nccl-2.28.9
-./build/uccl_lite_collectives --gpus 8 --fallback nccl \
-  --backend force --op allreduce --begin 1048576 --end 1048576 \
-  --warmup 1 --iterations 1 --repeats 3
-```
-
-The eight-GPU benchmark checks every invocation. Verify the device order with
-`nvidia-smi topo -m` before running them. The 2+2 four-GPU programs need their
-own machine. [Build details](docs/build.md) cover NCCL, CUTLASS, MSCCL++, and
-the two-node launcher.
 
 ## Measured results
 
@@ -85,27 +64,21 @@ timing scope, repetitions, variant selection and limitations.
 
 ![ReduceScatter: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput](docs/assets/collectives-4l4-reducescatter-all-sizes.svg)
 
-#### Prepared resident mode for small and medium messages
-
-![Four-L4 experimental prepared resident collectives, 1 KiB–1 MiB](docs/assets/collectives-4l4-resident-1k-1m.svg)
-
-![Four-L4 experimental prepared resident collectives, 16 B–1 MiB](docs/assets/collectives-4l4-resident-small-medium.svg)
-
 #### RTX PRO 6000 ×2
 
 [BF16 methods and data](benchmarks/data/pro6000_b0ac7b4a_validation/README.md) · [Tuned NCCL](benchmarks/data/nccl_tuned_pro6000_20261115/README.md) · [Ascending-only NCCL](benchmarks/data/nccl_ascending_pro6000_20261115/README.md).
 
 ##### AllReduce on RTX PRO 6000 ×2
 
-![PRO6000 x2 AllReduce: UCCL Lite, default NCCL, two-order tuned NCCL and ascending-only memcpy NCCL](docs/assets/collectives-pro6000x2-allreduce-overview.svg)
+![PRO6000 x2 AllReduce: UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (default P2P)](docs/assets/collectives-pro6000x2-allreduce-overview.svg)
 
 ##### AllGather on RTX PRO 6000 ×2
 
-![PRO6000 x2 AllGather: UCCL Lite, default NCCL, two-order tuned NCCL and ascending-only memcpy NCCL](docs/assets/collectives-pro6000x2-allgather-overview.svg)
+![PRO6000 x2 AllGather: UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (default P2P)](docs/assets/collectives-pro6000x2-allgather-overview.svg)
 
 ##### ReduceScatter on RTX PRO 6000 ×2
 
-![PRO6000 x2 ReduceScatter: UCCL Lite, default NCCL, two-order tuned NCCL and ascending-only memcpy NCCL](docs/assets/collectives-pro6000x2-reducescatter-overview.svg)
+![PRO6000 x2 ReduceScatter: UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (default P2P)](docs/assets/collectives-pro6000x2-reducescatter-overview.svg)
 
 #### 8xL4 GPU
 
@@ -122,12 +95,6 @@ timing scope, repetitions, variant selection and limitations.
 ##### ReduceScatter on single 8xL4 GPU
 
 ![8xL4 GPU ReduceScatter: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite versus NCCL](docs/assets/collectives-8l4-reducescatter-overview.svg)
-
-##### Prepared resident collectives on 8xL4 GPU
-
-[Experimental resident timing and validation](benchmarks/data/transfer_4to8_20261114/results.md).
-
-![8xL4 prepared resident AR, AG and RS versus matched NCCL graph controls, 1–64 KiB](docs/assets/collectives-8l4-resident-small.svg)
 
 #### 8xL4 SHM
 

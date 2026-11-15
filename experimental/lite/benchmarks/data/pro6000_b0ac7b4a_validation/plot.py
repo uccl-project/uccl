@@ -83,10 +83,10 @@ def make_figure(data, operation, title, factor):
         ax.set_ylabel(ylabel)
         upper = 0.0
         for prefix, label, color, marker, linestyle in (
-            ("nccl_", "NCCL 2.29.7 (default P2P)", "#D65A00", "s", (0, (5, 2.5))),
-            ("tuned_", "NCCL tuned (both size orders)", "#168B67", "D", (0, (2, 1.5))),
-            ("ascending_", "NCCL memcpy tuned (ascending)", "#8C49AD", "^", (0, (6, 2, 1, 2))),
-            ("", "UCCL Lite (joint/P2P)", "#0068B5", "o", "-"),
+            ("nccl_", "NCCL (default P2P)", "#D65A00", "s", (0, (5, 2.5))),
+            ("tuned_", "NCCL SM (tuned)", "#168B67", "D", (0, (2, 1.5))),
+            ("ascending_", "NCCL CE (tuned)", "#8C49AD", "^", (0, (6, 2, 1, 2))),
+            ("", "UCCL Lite", "#0068B5", "o", "-"),
         ):
             orders = ("run1", "run2") if prefix == "ascending_" else ("forward", "reverse")
             runs = [[float(data[operation, size][f"{prefix}{order}_us"])
