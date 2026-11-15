@@ -285,8 +285,24 @@ L 597.051388 112.144696
    <g id="text_26">
     <text style="font-weight: 700; font-size: 14px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #0068b5" x="577.944689" y="103.472197" transform="rotate(-0 577.944689 103.472197)">↓ 15.4%</text>
    </g>
-   <g id="legend_1">
+   <g id="text_27">
     <g id="patch_13">
+     <path d="M 517.905 75.55392
+L 635.04 75.55392
+Q 638.64 75.55392 638.64 71.95392
+L 638.64 59.952983
+Q 638.64 56.352983 635.04 56.352983
+L 517.905 56.352983
+Q 514.305 56.352983 514.305 59.952983
+L 514.305 71.95392
+Q 514.305 75.55392 517.905 75.55392
+z
+" style="fill: #eaf3fa"/>
+    </g>
+    <text style="font-weight: 700; font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #0068b5" x="635.04" y="69.071108" transform="rotate(-0 635.04 69.071108)">↓ Lower is better</text>
+   </g>
+   <g id="legend_1">
+    <g id="patch_14">
      <path d="M 82.08 102.862125
 L 106.08 102.862125
 L 106.08 94.462125
@@ -294,10 +310,10 @@ L 82.08 94.462125
 z
 " style="fill: #f6c99f"/>
     </g>
-    <g id="text_27">
+    <g id="text_28">
      <text style="font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #172a3a" x="115.68" y="102.862125" transform="rotate(-0 115.68 102.862125)">NCCL (default)</text>
     </g>
-    <g id="patch_14">
+    <g id="patch_15">
      <path d="M 82.08 120.863063
 L 106.08 120.863063
 L 106.08 112.463063
@@ -305,15 +321,15 @@ L 82.08 112.463063
 z
 " style="fill: #0068b5"/>
     </g>
-    <g id="text_28">
+    <g id="text_29">
      <text style="font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #172a3a" x="115.68" y="120.863063" transform="rotate(-0 115.68 120.863063)">UCCL Lite</text>
     </g>
    </g>
   </g>
-  <g id="text_29">
+  <g id="text_30">
    <text style="font-weight: 700; font-size: 16px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #172a3a" x="324" y="22.5255" transform="rotate(-0 324 22.5255)">GLM-4.5-Air-FP8 serving · 8×NVIDIA L4</text>
   </g>
-  <g id="text_30">
+  <g id="text_31">
    <text style="font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #172a3a" x="324" y="41.472" transform="rotate(-0 324 41.472)">Whole client batch · includes queueing</text>
   </g>
  </g>

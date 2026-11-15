@@ -52,6 +52,14 @@ def clean_axis(ax) -> None:
     ax.tick_params(axis="both", which="both", length=0, pad=7)
 
 
+def metric_direction(ax, higher: bool = False) -> None:
+    label = "↑ Higher is better" if higher else "↓ Lower is better"
+    ax.text(1, 1.06, label, transform=ax.transAxes, ha="right", va="bottom",
+            fontsize=12, fontweight="bold", color="#0068B5", clip_on=False,
+            bbox={"boxstyle": "round,pad=0.3", "facecolor": "#EAF3FA",
+                  "edgecolor": "none"})
+
+
 def collective_panels(title: str):
     """Keep labels readable when three collective figures share a README row."""
     fig, axes = plt.subplots(2, 1, figsize=(4.6, 6.8))
@@ -63,6 +71,8 @@ def collective_panels(title: str):
         ax.xaxis.label.set_size(12)
         ax.yaxis.label.set_size(12)
         ax.yaxis.set_major_locator(plt.MaxNLocator(nbins=4, min_n_ticks=3))
+    metric_direction(axes[0])
+    metric_direction(axes[1], higher=True)
     return fig, axes
 
 

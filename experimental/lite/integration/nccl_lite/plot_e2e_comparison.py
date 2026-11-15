@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
-from figure_style import clean_axis, configure, save
+from figure_style import clean_axis, configure, metric_direction, save
 
 
 def label_reductions(ax, data, cases, scale=1):
@@ -69,6 +69,7 @@ def main():
     ax.set_ylim(0, maximum * 1.38)
     ax.legend(loc="upper left", frameon=False, fontsize=12)
     label_reductions(ax, data, cases)
+    metric_direction(ax)
     save(fig, "sglang-large-prefill-e2e-8l4", args.preview)
 
     data = summary["training"]
@@ -98,6 +99,7 @@ def main():
     ax.set_xlim(-0.65, 1.65)
     ax.legend(loc="upper left", frameon=False, fontsize=12)
     label_reductions(ax, data, cases, scale=1000)
+    metric_direction(ax)
     save(fig, "training-large-message-e2e-8l4", args.preview)
 
 

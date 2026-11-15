@@ -9,7 +9,7 @@
     "integration/nccl_lite/bench_training_step.py": "b6498d0bb1cc3136d9c3666d2696caddb08dcc05909093f035ed7690e1da6470",
     "integration/nccl_lite/launch_glm45_air.sh": "338c4c4d38632becd95e5bbc6387b383bb59d7a65b0244ab668793566a6554cf",
     "integration/nccl_lite/nccl_compat.cc": "19d0d8f029d98bc77fd1b596c06bf994a8de3788558c386cca580ba6dad84a39",
-    "integration/nccl_lite/plot_e2e_comparison.py": "fde2ec52c92c643b0d346febe8c94db03bd873ecb17f2cd9ca02100e8b6af96b",
+    "integration/nccl_lite/plot_e2e_comparison.py": "75df8ff53a135e51fdb1bfe1c413a9af3d74c9d8f16bf3060b86571608254e89",
     "integration/nccl_lite/run_e2e_comparison.py": "c3686f8ead22650bda6f3d5ec57c2212c7ad0854afdb11ad911351888b527286",
     "integration/nccl_lite/run_packet_8l4.sh": "fa4628865b779e0c1256098b9075c07f27685d6272f2ec3e1b4cc009895d7854",
     "integration/nccl_lite/run_training_comparison.py": "ad8f8cf82f02dc4a9b6952c3d269184cb4685231c5ffc0c812e0fb64eff023eb",
@@ -28,7 +28,7 @@
   "collective_source_worktree_status": "",
   "artifact_sha256": {
     "integration/nccl_lite/e2e_large_messages_8l4_20261115.md": "ebf12e755e28af99c86b60a8344c45ef19f2ea5a7caec8d24813eac69e6e9af7",
-    "docs/assets/sglang-large-prefill-e2e-8l4.svg": "272dc4f7f57417491d0310d66ef5856342e8bc74878b250d12f4b950a9624d36",
-    "docs/assets/training-large-message-e2e-8l4.svg": "c6ae58b87359ba40af03877fc5068277a3da25db84d2dc694f00d70d2849f385"
+    "docs/assets/sglang-large-prefill-e2e-8l4.svg": "870655d5dbf843ee1ae682ad57d0c6f41546f756eba14a86c36dca0c936aae4a",
+    "docs/assets/training-large-message-e2e-8l4.svg": "2291461162ca36e93f5f5610b6b0d9482e4ec9f5a2acf5c2ffaf761f55b3eacc"
   }
 }

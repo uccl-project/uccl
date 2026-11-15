@@ -186,8 +186,24 @@ L 517.385739 119.443546
    <g id="text_15">
     <text style="font-weight: 700; font-size: 14px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #0068b5" x="475.716522" y="111.022732" transform="rotate(-0 475.716522 111.022732)">↓ 19.4%</text>
    </g>
-   <g id="legend_1">
+   <g id="text_16">
     <g id="patch_7">
+     <path d="M 517.905 75.55392
+L 635.04 75.55392
+Q 638.64 75.55392 638.64 71.95392
+L 638.64 59.952983
+Q 638.64 56.352983 635.04 56.352983
+L 517.905 56.352983
+Q 514.305 56.352983 514.305 59.952983
+L 514.305 71.95392
+Q 514.305 75.55392 517.905 75.55392
+z
+" style="fill: #eaf3fa"/>
+    </g>
+    <text style="font-weight: 700; font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #0068b5" x="635.04" y="69.071108" transform="rotate(-0 635.04 69.071108)">↓ Lower is better</text>
+   </g>
+   <g id="legend_1">
+    <g id="patch_8">
      <path d="M 82.08 102.862125
 L 106.08 102.862125
 L 106.08 94.462125
@@ -195,10 +211,10 @@ L 82.08 94.462125
 z
 " style="fill: #f6c99f"/>
     </g>
-    <g id="text_16">
+    <g id="text_17">
      <text style="font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #172a3a" x="115.68" y="102.862125" transform="rotate(-0 115.68 102.862125)">NCCL (default)</text>
     </g>
-    <g id="patch_8">
+    <g id="patch_9">
      <path d="M 82.08 120.863063
 L 106.08 120.863063
 L 106.08 112.463063
@@ -206,15 +222,15 @@ L 82.08 112.463063
 z
 " style="fill: #0068b5"/>
     </g>
-    <g id="text_17">
+    <g id="text_18">
      <text style="font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #172a3a" x="115.68" y="120.863063" transform="rotate(-0 115.68 120.863063)">UCCL Lite</text>
     </g>
    </g>
   </g>
-  <g id="text_18">
+  <g id="text_19">
    <text style="font-weight: 700; font-size: 16px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #172a3a" x="324" y="22.5255" transform="rotate(-0 324 22.5255)">638M-parameter transformer training · 8×NVIDIA L4</text>
   </g>
-  <g id="text_19">
+  <g id="text_20">
    <text style="font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #172a3a" x="324" y="44.928" transform="rotate(-0 324 44.928)">Full step: forward + backward + communication + SGD</text>
   </g>
  </g>
