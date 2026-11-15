@@ -1,0 +1,25 @@
+# UCCL Lite two-node hierarchical ReduceScatter, float32
+# timing=host enqueue+completion; slowest of eight ranks
+# rank 0 node mibura-sky-test-02 gpu 0 NVIDIA L4 rail 0 (mlx5_0)
+# rank 1 node mibura-sky-test-02 gpu 1 NVIDIA L4 rail 0 (mlx5_0)
+# rank 2 node mibura-sky-test-02 gpu 2 NVIDIA L4 rail 1 (mlx5_1)
+# rank 3 node mibura-sky-test-02 gpu 3 NVIDIA L4 rail 1 (mlx5_1)
+# rank 4 node mibura-sky-test-01 gpu 0 NVIDIA L4 rail 0 (mlx5_0)
+# rank 5 node mibura-sky-test-01 gpu 1 NVIDIA L4 rail 0 (mlx5_0)
+# rank 6 node mibura-sky-test-01 gpu 2 NVIDIA L4 rail 1 (mlx5_1)
+# rank 7 node mibura-sky-test-01 gpu 3 NVIDIA L4 rail 1 (mlx5_1)
+# local adaptive direct/packed/flat reduction, remote-rank IB exchange; rail map 0,0,1,1; RS pieces 1
+# RS target piece 8388608 B per destination shard
+#      size(B)        count   pieces   time(us)      algbw      busbw  maxrelerr
+# selected,reducescatter,16777728,flat
+# sample,reducescatter,16777728,1,1578.004,0.000e+00
+# sample,reducescatter,16777728,2,1570.510,0.000e+00
+# sample,reducescatter,16777728,3,1571.791,0.000e+00
+# sample,reducescatter,16777728,4,1573.091,0.000e+00
+# sample,reducescatter,16777728,5,1580.025,0.000e+00
+# sample,reducescatter,16777728,6,1580.990,0.000e+00
+# sample,reducescatter,16777728,7,1573.019,0.000e+00
+# sample,reducescatter,16777728,8,1582.173,0.000e+00
+# sample,reducescatter,16777728,9,1577.953,0.000e+00
+# sample,reducescatter,16777728,10,1586.433,0.000e+00
+      16777728      4194432        1    1577.40      10.64       9.31    0.0e+00

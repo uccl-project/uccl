@@ -51,6 +51,21 @@ and no splice with older sub-MiB data. The path remains an explicit eager
 experiment; automatic dispatch is unchanged. Regenerate this SVG with
 `python3 scripts/plot_multinode_host_router.py`.
 
+## Current ReduceScatter: direct medium-message ring
+
+![Current two-node FP32 ReduceScatter latency and bus throughput](assets/collectives-2x4l4-reducescatter-direct-medium.svg)
+
+The [full-range paired measurements](../benchmarks/data/rs_direct_medium_2x4l4_20261115/README.md)
+compare the candidate against the actual 96-CTA/512-thread/8-MiB-target tuned
+control. Standalone `--rs-auto 1` skips input packing at 8–16 MiB and uses one
+direct-ring piece. Other sizes and hybrid AllReduce's RS selection are preserved.
+Both controls use eight L4 GPUs, eight MPI ranks, FP32 input bytes per GPU,
+slowest-rank host timing, and three alternating rounds of ten warmups plus ten
+checked calls. The figure's NCCL curve reuses the historical November 11 data;
+no new NCCL benchmark is run. The rule is fixed, not a measured variant envelope.
+The [exploratory screen](../benchmarks/data/rs_full_screen_2x4l4_20261115/README.md)
+preserves the rejected launch, larger-piece and fused-forwarding results.
+
 ## Historical direct local schedules (November 11)
 
 The [November 11 two-node paired sweep](../benchmarks/data/multinode_serial_20261111/README.md)

@@ -1277,6 +1277,12 @@ static bool autoPackedRs(size_t bytes) {
   return bytes >= (1UL << 20) && bytes <= (16UL << 20);
 }
 
+// Skip input packing where a single direct-ring piece amortizes the local
+// handshakes. Kept separate from hybrid AR's measured RS selection.
+static bool mediumDirectRs(size_t bytes) {
+  return bytes >= (8UL << 20) && bytes <= (16UL << 20);
+}
+
 static bool autoDirectRs(size_t bytes) {
   return bytes == 1024 || bytes >= (32UL << 20);
 }
@@ -1854,7 +1860,8 @@ int main(int argc, char** argv) {
                                       kSerialRsMaxBytes);
     if (cfg.reduceScatter && !serialRs && cfg.rsRing &&
         (!cfg.rsDirectRing ||
-         (cfg.rsAuto && autoPackedRs(count * sizeof(float)))))
+         (cfg.rsAuto && autoPackedRs(count * sizeof(float)) &&
+          !mediumDirectRs(count * sizeof(float)))))
       inputOffset = layout.immutableInput;
     CUDACHECK(cudaMemcpyAsync(buffer + inputOffset,
                               hostIn.data(), inputCount * sizeof(float),
@@ -1926,8 +1933,8 @@ int main(int argc, char** argv) {
            (cfg.arAuto && bytes <= kSerialArMaxBytes);
   };
   auto useRsDirectRing = [&](size_t bytes) {
-    return cfg.rsAuto ? autoDirectRs(bytes)
-                      : cfg.rsDirectRing;
+    if (!cfg.rsAuto) return cfg.rsDirectRing;
+    return autoDirectRs(bytes) || (cfg.reduceScatter && mediumDirectRs(bytes));
   };
   auto useArFlatGather = [&](size_t bytes) {
     return cfg.arAuto ? bytes <= (1UL << 18) : cfg.flatAg;
@@ -2053,6 +2060,8 @@ int main(int argc, char** argv) {
                                             cfg.rsTargetPieceBytes - 1) /
                                                cfg.rsTargetPieceBytes))
                                   : cfg.rsPieces;
+        if (cfg.rsAuto && cfg.reduceScatter && mediumDirectRs(bytes))
+          requestedPieces = 1;
         int pieces = std::min(requestedPieces, availablePieces);
         hierarchicalReduceScatterDirectRing<<<cfg.blocks, cfg.threads, 0,
                                               stream>>>(
@@ -2196,6 +2205,7 @@ int main(int argc, char** argv) {
                   2, std::min<size_t>(32, (shardBytes + cfg.pieceBytes - 1) /
                                               cfg.pieceBytes))
             : 1;
+    if (cfg.reduceScatter && cfg.rsAuto && mediumDirectRs(bytes)) pieces = 1;
     if (hybridRs) {
       pieces =
           useRsSerial(bytes) || !useRsDirectRing(bytes)

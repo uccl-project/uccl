@@ -1,0 +1,161 @@
+# UCCL Lite two-node hierarchical ReduceScatter, float32
+# timing=host enqueue+completion; slowest of eight ranks
+# rank 0 node mibura-sky-test-02 gpu 0 NVIDIA L4 rail 0 (mlx5_0)
+# rank 1 node mibura-sky-test-02 gpu 1 NVIDIA L4 rail 0 (mlx5_0)
+# rank 2 node mibura-sky-test-02 gpu 2 NVIDIA L4 rail 1 (mlx5_1)
+# rank 3 node mibura-sky-test-02 gpu 3 NVIDIA L4 rail 1 (mlx5_1)
+# rank 4 node mibura-sky-test-01 gpu 0 NVIDIA L4 rail 0 (mlx5_0)
+# rank 5 node mibura-sky-test-01 gpu 1 NVIDIA L4 rail 0 (mlx5_0)
+# rank 6 node mibura-sky-test-01 gpu 2 NVIDIA L4 rail 1 (mlx5_1)
+# rank 7 node mibura-sky-test-01 gpu 3 NVIDIA L4 rail 1 (mlx5_1)
+# fused GPU ring; piece=4194304; blocks=96; threads=512; eager receive slots=2; writer_fence=1
+# local flat reduction, remote-rank IB exchange; rail map 0,0,1,1; RS pieces 1
+# local ring 0->1->3->2->0; AG ring; rail map 0,0,1,1; piece 2097152 B; pipeline >= 4194304 B
+#      size(B)        count   pieces   time(us)      algbw      busbw  maxrelerr
+# selected,reducescatter,1024,fused-gpu-ring
+# sample,reducescatter,1024,1,72.623,0.000e+00
+# sample,reducescatter,1024,2,74.645,0.000e+00
+# sample,reducescatter,1024,3,72.999,0.000e+00
+# sample,reducescatter,1024,4,72.152,0.000e+00
+# sample,reducescatter,1024,5,72.194,0.000e+00
+          1024          256        1      72.92       0.01       0.01    0.0e+00
+# selected,reducescatter,2048,fused-gpu-ring
+# sample,reducescatter,2048,1,73.290,0.000e+00
+# sample,reducescatter,2048,2,73.283,0.000e+00
+# sample,reducescatter,2048,3,72.815,0.000e+00
+# sample,reducescatter,2048,4,72.694,0.000e+00
+# sample,reducescatter,2048,5,72.749,0.000e+00
+          2048          512        1      72.97       0.03       0.02    0.0e+00
+# selected,reducescatter,4096,fused-gpu-ring
+# sample,reducescatter,4096,1,74.619,0.000e+00
+# sample,reducescatter,4096,2,73.690,0.000e+00
+# sample,reducescatter,4096,3,73.680,0.000e+00
+# sample,reducescatter,4096,4,73.725,0.000e+00
+# sample,reducescatter,4096,5,75.132,0.000e+00
+          4096         1024        1      74.17       0.06       0.05    0.0e+00
+# selected,reducescatter,8192,fused-gpu-ring
+# sample,reducescatter,8192,1,75.995,0.000e+00
+# sample,reducescatter,8192,2,76.758,0.000e+00
+# sample,reducescatter,8192,3,76.308,0.000e+00
+# sample,reducescatter,8192,4,75.963,0.000e+00
+# sample,reducescatter,8192,5,76.143,0.000e+00
+          8192         2048        1      76.23       0.11       0.09    0.0e+00
+# selected,reducescatter,16384,fused-gpu-ring
+# sample,reducescatter,16384,1,80.369,0.000e+00
+# sample,reducescatter,16384,2,79.009,0.000e+00
+# sample,reducescatter,16384,3,79.289,0.000e+00
+# sample,reducescatter,16384,4,78.409,0.000e+00
+# sample,reducescatter,16384,5,81.459,0.000e+00
+         16384         4096        1      79.71       0.21       0.18    0.0e+00
+# selected,reducescatter,32768,fused-gpu-ring
+# sample,reducescatter,32768,1,89.744,0.000e+00
+# sample,reducescatter,32768,2,86.688,0.000e+00
+# sample,reducescatter,32768,3,87.925,0.000e+00
+# sample,reducescatter,32768,4,88.407,0.000e+00
+# sample,reducescatter,32768,5,87.965,0.000e+00
+         32768         8192        1      88.15       0.37       0.33    0.0e+00
+# selected,reducescatter,65536,fused-gpu-ring
+# sample,reducescatter,65536,1,104.120,0.000e+00
+# sample,reducescatter,65536,2,104.351,0.000e+00
+# sample,reducescatter,65536,3,101.512,0.000e+00
+# sample,reducescatter,65536,4,103.148,0.000e+00
+# sample,reducescatter,65536,5,103.180,0.000e+00
+         65536        16384        1     103.26       0.63       0.56    0.0e+00
+# selected,reducescatter,131072,fused-gpu-ring
+# sample,reducescatter,131072,1,126.041,0.000e+00
+# sample,reducescatter,131072,2,122.128,0.000e+00
+# sample,reducescatter,131072,3,120.842,0.000e+00
+# sample,reducescatter,131072,4,118.711,0.000e+00
+# sample,reducescatter,131072,5,119.797,0.000e+00
+        131072        32768        1     121.50       1.08       0.94    0.0e+00
+# selected,reducescatter,262144,fused-gpu-ring
+# sample,reducescatter,262144,1,144.466,0.000e+00
+# sample,reducescatter,262144,2,139.986,0.000e+00
+# sample,reducescatter,262144,3,143.820,0.000e+00
+# sample,reducescatter,262144,4,141.556,0.000e+00
+# sample,reducescatter,262144,5,144.346,0.000e+00
+        262144        65536        1     142.83       1.84       1.61    0.0e+00
+# selected,reducescatter,524288,fused-gpu-ring
+# sample,reducescatter,524288,1,155.269,0.000e+00
+# sample,reducescatter,524288,2,156.221,0.000e+00
+# sample,reducescatter,524288,3,153.714,0.000e+00
+# sample,reducescatter,524288,4,155.458,0.000e+00
+# sample,reducescatter,524288,5,157.417,0.000e+00
+        524288       131072        1     155.62       3.37       2.95    0.0e+00
+# selected,reducescatter,1048576,fused-gpu-ring
+# sample,reducescatter,1048576,1,198.630,0.000e+00
+# sample,reducescatter,1048576,2,202.574,0.000e+00
+# sample,reducescatter,1048576,3,200.669,0.000e+00
+# sample,reducescatter,1048576,4,202.395,0.000e+00
+# sample,reducescatter,1048576,5,213.806,0.000e+00
+       1048576       262144        1     203.61       5.15       4.51    0.0e+00
+# selected,reducescatter,2097152,fused-gpu-ring
+# sample,reducescatter,2097152,1,310.275,0.000e+00
+# sample,reducescatter,2097152,2,309.749,0.000e+00
+# sample,reducescatter,2097152,3,315.397,0.000e+00
+# sample,reducescatter,2097152,4,306.347,0.000e+00
+# sample,reducescatter,2097152,5,313.444,0.000e+00
+       2097152       524288        1     311.04       6.74       5.90    0.0e+00
+# selected,reducescatter,4194304,fused-gpu-ring
+# sample,reducescatter,4194304,1,636.551,0.000e+00
+# sample,reducescatter,4194304,2,642.676,0.000e+00
+# sample,reducescatter,4194304,3,656.368,0.000e+00
+# sample,reducescatter,4194304,4,653.881,0.000e+00
+# sample,reducescatter,4194304,5,642.455,0.000e+00
+       4194304      1048576        1     646.39       6.49       5.68    0.0e+00
+# selected,reducescatter,8388608,fused-gpu-ring
+# sample,reducescatter,8388608,1,918.129,0.000e+00
+# sample,reducescatter,8388608,2,927.323,0.000e+00
+# sample,reducescatter,8388608,3,939.704,0.000e+00
+# sample,reducescatter,8388608,4,918.124,0.000e+00
+# sample,reducescatter,8388608,5,933.642,0.000e+00
+       8388608      2097152        1     927.38       9.05       7.91    0.0e+00
+# selected,reducescatter,16777216,fused-gpu-ring
+# sample,reducescatter,16777216,1,1352.693,0.000e+00
+# sample,reducescatter,16777216,2,1347.818,0.000e+00
+# sample,reducescatter,16777216,3,1344.993,0.000e+00
+# sample,reducescatter,16777216,4,1341.873,0.000e+00
+# sample,reducescatter,16777216,5,1337.618,0.000e+00
+      16777216      4194304        1    1345.00      12.47      10.91    0.0e+00
+# selected,reducescatter,33554432,fused-gpu-ring
+# sample,reducescatter,33554432,1,2506.718,0.000e+00
+# sample,reducescatter,33554432,2,2489.361,0.000e+00
+# sample,reducescatter,33554432,3,2447.391,0.000e+00
+# sample,reducescatter,33554432,4,2469.087,0.000e+00
+# sample,reducescatter,33554432,5,2482.994,0.000e+00
+      33554432      8388608        1    2479.11      13.53      11.84    0.0e+00
+# selected,reducescatter,67108864,fused-gpu-ring
+# sample,reducescatter,67108864,1,4751.876,0.000e+00
+# sample,reducescatter,67108864,2,4743.778,0.000e+00
+# sample,reducescatter,67108864,3,4860.665,0.000e+00
+# sample,reducescatter,67108864,4,4854.222,0.000e+00
+# sample,reducescatter,67108864,5,4767.807,0.000e+00
+      67108864     16777216        2    4795.67      13.99      12.24    0.0e+00
+# selected,reducescatter,134217728,fused-gpu-ring
+# sample,reducescatter,134217728,1,9504.686,0.000e+00
+# sample,reducescatter,134217728,2,9529.387,0.000e+00
+# sample,reducescatter,134217728,3,9483.007,0.000e+00
+# sample,reducescatter,134217728,4,9426.451,0.000e+00
+# sample,reducescatter,134217728,5,9564.294,0.000e+00
+     134217728     33554432        4    9501.57      14.13      12.36    0.0e+00
+# selected,reducescatter,268435456,fused-gpu-ring
+# sample,reducescatter,268435456,1,18904.280,0.000e+00
+# sample,reducescatter,268435456,2,18856.369,0.000e+00
+# sample,reducescatter,268435456,3,18893.134,0.000e+00
+# sample,reducescatter,268435456,4,18812.012,0.000e+00
+# sample,reducescatter,268435456,5,18949.844,0.000e+00
+     268435456     67108864        8   18883.13      14.22      12.44    0.0e+00
+# selected,reducescatter,536870912,fused-gpu-ring
+# sample,reducescatter,536870912,1,38070.563,0.000e+00
+# sample,reducescatter,536870912,2,37688.517,0.000e+00
+# sample,reducescatter,536870912,3,38311.237,0.000e+00
+# sample,reducescatter,536870912,4,38251.679,0.000e+00
+# sample,reducescatter,536870912,5,37996.397,0.000e+00
+     536870912    134217728       16   38063.68      14.10      12.34    0.0e+00
+# selected,reducescatter,1073741824,fused-gpu-ring
+# sample,reducescatter,1073741824,1,76517.649,0.000e+00
+# sample,reducescatter,1073741824,2,76627.711,0.000e+00
+# sample,reducescatter,1073741824,3,76285.235,0.000e+00
+# sample,reducescatter,1073741824,4,76677.973,0.000e+00
+# sample,reducescatter,1073741824,5,76928.013,0.000e+00
+    1073741824    268435456       32   76607.32      14.02      12.26    0.0e+00

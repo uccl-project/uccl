@@ -141,7 +141,7 @@ workload from Testbed 1's SGLang serving and DDP/FSDP training.
   <tr>
     <td width="33%"><img src="docs/assets/collectives-2x4l4-allreduce-small-fixed.svg" alt="Two-node FP32 AllReduce: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite versus NCCL" width="100%"></td>
     <td width="33%"><img src="docs/assets/collectives-2x4l4-allgather-host-router.svg" alt="Two-node FP32 AllGather: 1–8 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite CPU router versus paired NCCL Ring+Simple" width="100%"></td>
-    <td width="33%"><img src="docs/assets/collectives-2x4l4-reducescatter-optimized.svg" alt="Two-node ReduceScatter latency and bus throughput, UCCL Lite versus NCCL" width="100%"></td>
+    <td width="33%"><img src="docs/assets/collectives-2x4l4-reducescatter-direct-medium.svg" alt="Two-node ReduceScatter latency and bus throughput, UCCL Lite versus NCCL" width="100%"></td>
   </tr>
 </table>
 
@@ -162,8 +162,15 @@ calls. UCCL Lite and its NCCL 2.28.7 Ring+Simple control both use four MPI
 processes, two GPUs per NUMA group; NCCL is primed before comparison.
 The CPU-router curve uses one fixed 256 KiB chunk configuration throughout,
 reaching **12.1/16.0/18.6/20.1 GB/s at 1/2/4/8 MiB** and **21.9 GB/s at 1 GiB**.
-This path remains explicitly selected. ReduceScatter retains its
-[November 11 measurements](benchmarks/data/multinode_serial_20261111/README.md).
+This path remains explicitly selected.
+
+ReduceScatter uses [fresh full-range measurements](benchmarks/data/rs_direct_medium_2x4l4_20261115/README.md)
+of the tuned 96-CTA/512-thread GPU path, with a single direct-ring piece at
+8–16 MiB to avoid input packing. Other size regimes retain their existing
+policies. Eight MPI ranks, FP32 input bytes per GPU, slowest-rank host timing,
+and three alternating rounds of ten warmups plus ten checked calls. The NCCL
+curve reuses the recorded November 11 control; no new NCCL measurements are run.
+The selection is a fixed size rule, not a measured best-variant-per-size envelope.
 
 Implementation and in-place handoff details are in
 [hybrid AllReduce](docs/multinode-hybrid-allreduce.md).
