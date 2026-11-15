@@ -1,0 +1,157 @@
+{
+  "hardware": [
+    "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+    "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+  ],
+  "torch": "2.14.1+cu130",
+  "runtime_nccl_version": 23007,
+  "trainable_parameters": 708387840,
+  "complete_block_bytes": [
+    39354880,
+    39354880,
+    39354880,
+    39354880,
+    39354880,
+    39354880,
+    39354880,
+    39354880,
+    39354880,
+    39354880,
+    39354880,
+    39354880,
+    39354880,
+    39354880,
+    39354880,
+    39354880,
+    39354880,
+    39354880,
+    39354880,
+    39354880,
+    39354880,
+    39354880,
+    39354880,
+    39354880,
+    39354880,
+    39354880,
+    39354880,
+    39354880,
+    39354880,
+    39354880,
+    39354880,
+    39354880,
+    39354880,
+    39354880,
+    39354880,
+    39354880
+  ],
+  "compute": "eager",
+  "serving": {
+    "2:32:16": {
+      "samples_per_trial": 20,
+      "warmups_per_case": 5,
+      "nccl_trial_medians_s": [
+        0.46320396615192294,
+        0.46311279642395675
+      ],
+      "nccl_s": 0.46315838128793985,
+      "peer_trial_medians_s": [
+        0.3349737315438688,
+        0.32532824925146997
+      ],
+      "peer_s": 0.3301509903976694,
+      "latency_reduction_pct": 28.717474683370014,
+      "throughput_ratio": 1.4028683685911771,
+      "all_generated_tokens_identical": true
+    },
+    "4:128:16": {
+      "samples_per_trial": 20,
+      "warmups_per_case": 5,
+      "nccl_trial_medians_s": [
+        0.4745453745126724,
+        0.4745482683647424
+      ],
+      "nccl_s": 0.4745468214387074,
+      "peer_trial_medians_s": [
+        0.3360681284684688,
+        0.32557724602520466
+      ],
+      "peer_s": 0.3308226872468367,
+      "latency_reduction_pct": 30.286607706302824,
+      "throughput_ratio": 1.4344446125746926,
+      "all_generated_tokens_identical": true
+    },
+    "8:256:16": {
+      "samples_per_trial": 20,
+      "warmups_per_case": 5,
+      "nccl_trial_medians_s": [
+        0.48472526343539357,
+        0.4847404211759567
+      ],
+      "nccl_s": 0.48473284230567515,
+      "peer_trial_medians_s": [
+        0.3385424998123199,
+        0.32764382916502655
+      ],
+      "peer_s": 0.3330931644886732,
+      "latency_reduction_pct": 31.28314497852348,
+      "throughput_ratio": 1.455247041919284,
+      "all_generated_tokens_identical": true
+    }
+  },
+  "training": {
+    "2:32": {
+      "samples_per_trial": 20,
+      "warmups_per_case": 5,
+      "nccl_trial_medians_s": [
+        0.0725582898594439,
+        0.07246877043507993
+      ],
+      "nccl_s": 0.07251353014726192,
+      "peer_trial_medians_s": [
+        0.06292053195647895,
+        0.06264404114335775
+      ],
+      "peer_s": 0.06278228654991835,
+      "latency_reduction_pct": 13.41990050350763,
+      "throughput_ratio": 1.1549998276919435,
+      "all_trainable_parameters_bitwise_identical": true,
+      "all_losses_identical": true
+    },
+    "4:64": {
+      "samples_per_trial": 20,
+      "warmups_per_case": 5,
+      "nccl_trial_medians_s": [
+        0.075038047041744,
+        0.07513951952569187
+      ],
+      "nccl_s": 0.07508878328371793,
+      "peer_trial_medians_s": [
+        0.063426528358832,
+        0.06304316851310432
+      ],
+      "peer_s": 0.06323484843596816,
+      "latency_reduction_pct": 15.786558696736996,
+      "throughput_ratio": 1.1874588955448055,
+      "all_trainable_parameters_bitwise_identical": true,
+      "all_losses_identical": true
+    },
+    "8:128": {
+      "samples_per_trial": 20,
+      "warmups_per_case": 5,
+      "nccl_trial_medians_s": [
+        0.08875613496638834,
+        0.08665479649789631
+      ],
+      "nccl_s": 0.08770546573214233,
+      "peer_trial_medians_s": [
+        0.06898921588435769,
+        0.06908066151663661
+      ],
+      "peer_s": 0.06903493870049715,
+      "latency_reduction_pct": 21.287757696499867,
+      "throughput_ratio": 1.2704504035651547,
+      "all_trainable_parameters_bitwise_identical": true,
+      "all_losses_identical": true
+    }
+  }
+}

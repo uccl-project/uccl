@@ -1,0 +1,44 @@
+{
+  "baseline_git_head": "a8c79b94827651d2cd7e5495b8caa74d88c94dda",
+  "remote_directory": "/home/xinze/dev/uccl-lite-e2e-pro6000-20261115",
+  "hardware_alias": "aws-pro6000",
+  "build_command": "make -C integration/peer_e2e -j4 CUDA_HOME=/opt/pytorch/cuda CUDA_LIB=/opt/pytorch/cuda/lib NCCL_HOME=/home/xinze/dev/FreeToken-dev/.venv/lib/python3.12/site-packages/nvidia/nccl CUDA_ARCH=sm_120 CUTLASS_HOME=/home/xinze/dev/FreeToken-dev/.venv/lib/python3.12/site-packages/flashinfer/data/cutlass",
+  "source_sha256": {
+    "integration/peer_e2e/summarize.py": "c5a7a9a7270ceb99d89d6140e18a5a775772991aa5038349bd6de1f0ed64eef4",
+    "integration/peer_e2e/profile_communication.py": "a5a9df7cc23fe4f5c710b892fffe33fe87874f18368fe1d9aa01bf15a9fc3567",
+    "integration/peer_e2e/plot.py": "5a7d99b34eb110f155757804b80f5c16c61212ba24f3ab9dcf6d7ae617f10ffd",
+    "integration/peer_e2e/benchmark.py": "506510f05b8187cb18bd32e46e0c6b088c005d6f06f72a7b603256c9a34a1f42",
+    "integration/peer_e2e/run.py": "a882b53190e3dd9c8983197343d9f534abc3688b58d97bf850b17992e112ffe7",
+    "integration/peer_e2e/Makefile": "f8b394d5deb04c5722b056284665dccb586ba930d6df72ee0e59f2f79e444636",
+    "integration/peer_e2e/collectives.cc": "7c9c00646cf1f1c375bdaf0dbdff7051eeaa56050813ffc5dcb46f25ebc21311",
+    "src/collectives/peer_collectives.cu": "2b0c880d8c817ed4b077a1faf5607cad0177f879947ef0cfd2d4760e21a5423d",
+    "src/cpu_router/collective_dispatch.cc": "c44a9834b8df62a622d572eea4026272bcc2be7fee9b1bb8a94bab085b4623d4",
+    "include/uccl_lite/collectives/device_primitives.cuh": "bdad9a16a174d94c2ddf6836262c68a2dd786e32e2d98982f28df428b7801123",
+    "scripts/figure_style.py": "f9870ddb368920b8a061e32999ce70f1654d03bdee707ae4ff635e042706bab3"
+  },
+  "figure_sha256": {
+    "docs/assets/serving-large-message-e2e-pro6000.svg": "a17ebb9171b0d35b7202e35cc07e63591fcbc92513115d147fea82d631b9ec44",
+    "docs/assets/training-large-message-e2e-pro6000.svg": "4531044fb65e7f8b681b9ef4acc7744d03a5c257c31b4dabc536bd28ea4f5afd"
+  },
+  "execution_source_snapshot": "measured_source; manifest hashes match benchmark.py, run.py, bridge and Makefile; offline plot and summary subsequently improved",
+  "validation": {
+    "sm_120_make_build": "PASS",
+    "two_gpu_full_tensor_ag_rs_4_to_64_mib_and_exact_model_extent": "PASS in all 8 final processes",
+    "unsharded_transformers_forward": "bitwise identical logits in all 8 final processes",
+    "unsharded_transformers_kv_decode": "identical in all 8 final processes",
+    "serving_all_240_batches": "identical token hashes per case",
+    "training_all_240_steps": "identical losses and full trained parameter hashes per case",
+    "offline_summary_negative_checks": [
+      "rejects incomplete jobs",
+      "rejects changed full parameter hashes"
+    ],
+    "python_syntax": "PASS",
+    "clang_format": "14.0.6 dry-run PASS",
+    "graph": "unsupported; not tested",
+    "four_gpu": "not tested; no kernel/policy change"
+  },
+  "plotting": {
+    "python": "3.14.7",
+    "matplotlib": "3.11.2"
+  }
+}

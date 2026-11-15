@@ -1,0 +1,12 @@
+make: Entering directory '/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/integration/peer_e2e'
+make -C ../.. cpu-router CUDA_HOME=/opt/pytorch/cuda CUDA_ARCH=sm_120
+make[1]: Entering directory '/home/xinze/dev/uccl-lite-e2e-pro6000-20261115'
+/opt/pytorch/cuda/bin/nvcc -O3 -arch=sm_120 -MMD -MP  -std=c++17 -Xcompiler=-fPIC --expt-relaxed-constexpr -diag-suppress 20012,20014 -Iinclude -Iinclude/uccl_lite/cpu_router -I/opt/pytorch/cuda/include -I/home/xinze/dev/FreeToken-dev/.venv/lib/python3.12/site-packages/flashinfer/data/cutlass/include -c src/cpu_router/packet_pipeline.cu -o build/cpu_router/packet_pipeline.o
+ar rcs build/cpu_router/libuccl_lite_cpu_router.a build/cpu_router/cpu_executor.o build/cpu_router/cpu_router_c.o build/cpu_router/memory.o build/cpu_router/router_core.o build/cpu_router/signal.o build/cpu_router/backend_policy.o build/cpu_router/collective_dispatch.o build/cpu_router/channel.o build/cpu_router/packet_pipeline.o
+g++ -shared build/cpu_router/cpu_executor.o build/cpu_router/cpu_router_c.o build/cpu_router/memory.o build/cpu_router/router_core.o build/cpu_router/signal.o build/cpu_router/backend_policy.o build/cpu_router/collective_dispatch.o build/cpu_router/channel.o build/cpu_router/packet_pipeline.o -L/opt/pytorch/cuda/lib64 -lcudart -lpthread -ldl -Wl,-rpath,/opt/pytorch/cuda/lib64 -o build/cpu_router/libuccl_lite_cpu_router.so
+/usr/bin/ld: cannot find -lcudart: No such file or directory
+collect2: error: ld returned 1 exit status
+make[1]: *** [src/cpu_router/module.mk:44: build/cpu_router/libuccl_lite_cpu_router.so] Error 1
+make[1]: Leaving directory '/home/xinze/dev/uccl-lite-e2e-pro6000-20261115'
+make: *** [Makefile:19: ../../build/cpu_router/libuccl_lite_cpu_router.a] Error 2
+make: Leaving directory '/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/integration/peer_e2e'

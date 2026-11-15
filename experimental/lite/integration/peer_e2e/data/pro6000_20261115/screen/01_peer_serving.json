@@ -1,0 +1,418 @@
+{
+  "arguments": {
+    "checkpoint": "/home/xinze/.cache/huggingface/hub/models--openai-community--gpt2/snapshots/607a30d783dfa663caf39e06633721c8d4cfcd7e",
+    "backend": "peer",
+    "kind": "serving",
+    "out": "/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/build/screen/01_peer_serving.json",
+    "cases": [
+      [
+        2,
+        32,
+        16
+      ],
+      [
+        4,
+        128,
+        16
+      ],
+      [
+        8,
+        256,
+        16
+      ]
+    ],
+    "train_cases": [
+      [
+        2,
+        32
+      ],
+      [
+        4,
+        64
+      ],
+      [
+        8,
+        128
+      ]
+    ],
+    "warmup": 2,
+    "repeats": 3,
+    "seed": 12345
+  },
+  "torch": "2.14.1+cu130",
+  "runtime_nccl_version": 23007,
+  "gpu": [
+    "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+    "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+  ],
+  "checkpoint_config": {
+    "activation_function": "gelu_new",
+    "architectures": [
+      "GPT2LMHeadModel"
+    ],
+    "attn_pdrop": 0.1,
+    "bos_token_id": 50256,
+    "embd_pdrop": 0.1,
+    "eos_token_id": 50256,
+    "initializer_range": 0.02,
+    "layer_norm_epsilon": 1e-05,
+    "model_type": "gpt2",
+    "n_ctx": 1024,
+    "n_embd": 768,
+    "n_head": 12,
+    "n_layer": 12,
+    "n_positions": 1024,
+    "resid_pdrop": 0.1,
+    "summary_activation": null,
+    "summary_first_dropout": 0.1,
+    "summary_proj_to_labels": true,
+    "summary_type": "cls_index",
+    "summary_use_proj": true,
+    "task_specific_params": {
+      "text-generation": {
+        "do_sample": true,
+        "max_length": 50
+      }
+    },
+    "vocab_size": 50257
+  },
+  "trainable_parameters": 97637376,
+  "complete_block_bytes": [
+    16272896,
+    16272896,
+    16272896,
+    16272896,
+    16272896,
+    16272896,
+    16272896,
+    16272896,
+    16272896,
+    16272896,
+    16272896,
+    16272896
+  ],
+  "histogram_including_warmups": {
+    "AG:16272896": 2880
+  },
+  "collective_oracle": "PASS",
+  "rows": [
+    {
+      "kind": "serving",
+      "case": "2:32:16",
+      "samples_s": [
+        0.09463609289377928,
+        0.09452716493979096,
+        0.0948774041607976
+      ],
+      "median_s": 0.09463609289377928,
+      "prompt_sha256": "3dfe934ac99e81b45f994a04c12f49b1ace661cb010c02db1e5dee4d3a7f46ae",
+      "response_sha256": [
+        "474e4911b26d2fc6f056ddef1612b5edc5950f5cea2a49e31c9105476034e952",
+        "474e4911b26d2fc6f056ddef1612b5edc5950f5cea2a49e31c9105476034e952",
+        "474e4911b26d2fc6f056ddef1612b5edc5950f5cea2a49e31c9105476034e952"
+      ],
+      "generated_tokens": [
+        [
+          [
+            12473,
+            12,
+            33,
+            42827,
+            12,
+            33,
+            42827,
+            12,
+            33,
+            42827,
+            12,
+            33,
+            42827,
+            12,
+            33,
+            42827
+          ]
+        ],
+        [
+          [
+            82,
+            17,
+            67,
+            17,
+            67,
+            17,
+            67,
+            17,
+            67,
+            17,
+            67,
+            17,
+            67,
+            17,
+            67,
+            17
+          ]
+        ]
+      ]
+    },
+    {
+      "kind": "serving",
+      "case": "4:128:16",
+      "samples_s": [
+        0.09759831475093961,
+        0.09752398496493697,
+        0.09777811402454972
+      ],
+      "median_s": 0.09759831475093961,
+      "prompt_sha256": "c0b2af43ebd845eb7bbefad3700d187b7bf830e1d9801858c0bee74061968068",
+      "response_sha256": [
+        "efd932d89a8566fc35760927e44cc77af41bfb017f83d3201e3f439150170923",
+        "efd932d89a8566fc35760927e44cc77af41bfb017f83d3201e3f439150170923",
+        "efd932d89a8566fc35760927e44cc77af41bfb017f83d3201e3f439150170923"
+      ],
+      "generated_tokens": [
+        [
+          [
+            34,
+            17,
+            34,
+            17,
+            34,
+            17,
+            34,
+            17,
+            34,
+            17,
+            34,
+            17,
+            34,
+            17,
+            34,
+            17
+          ],
+          [
+            62,
+            67,
+            756,
+            62,
+            1350,
+            62,
+            259,
+            62,
+            1169,
+            62,
+            36460,
+            62,
+            1014,
+            62,
+            4480,
+            62
+          ]
+        ],
+        [
+          [
+            12,
+            34,
+            13,
+            34,
+            13,
+            47,
+            13,
+            47,
+            13,
+            47,
+            13,
+            47,
+            13,
+            47,
+            13,
+            47
+          ],
+          [
+            1042,
+            13,
+            785,
+            13,
+            559,
+            13,
+            559,
+            13,
+            559,
+            13,
+            559,
+            13,
+            559,
+            13,
+            559,
+            13
+          ]
+        ]
+      ]
+    },
+    {
+      "kind": "serving",
+      "case": "8:256:16",
+      "samples_s": [
+        0.09895844617858529,
+        0.09835662599653006,
+        0.0982143902219832
+      ],
+      "median_s": 0.09835662599653006,
+      "prompt_sha256": "eeabc828abec2111f6151a62b69cc89bbde874a64198d61a0c9d7fe40e202e94",
+      "response_sha256": [
+        "b62c5cdcaef5143ed1184453d1d7f38250d21e5f817baa7aaa6729f1b03a104f",
+        "b62c5cdcaef5143ed1184453d1d7f38250d21e5f817baa7aaa6729f1b03a104f",
+        "b62c5cdcaef5143ed1184453d1d7f38250d21e5f817baa7aaa6729f1b03a104f"
+      ],
+      "generated_tokens": [
+        [
+          [
+            12,
+            67,
+            40821,
+            12,
+            67,
+            40821,
+            12,
+            67,
+            40821,
+            12,
+            67,
+            40821,
+            12,
+            67,
+            40821,
+            12
+          ],
+          [
+            1143,
+            13,
+            82,
+            3733,
+            13,
+            82,
+            3733,
+            13,
+            82,
+            3733,
+            13,
+            82,
+            3733,
+            13,
+            82,
+            3733
+          ],
+          [
+            286,
+            262,
+            614,
+            383,
+            717,
+            640,
+            314,
+            2497,
+            257,
+            649,
+            1048,
+            314,
+            373,
+            257,
+            1310,
+            517
+          ],
+          [
+            270,
+            73,
+            8317,
+            276,
+            262,
+            78,
+            12,
+            82,
+            2852,
+            12,
+            82,
+            2852,
+            12,
+            82,
+            2852,
+            12
+          ]
+        ],
+        [
+          [
+            82,
+            374,
+            67,
+            12,
+            16,
+            374,
+            67,
+            12,
+            17,
+            374,
+            67,
+            12,
+            18,
+            374,
+            67,
+            12
+          ],
+          [
+            37,
+            8656,
+            13,
+            785,
+            14,
+            67,
+            14,
+            68,
+            14,
+            69,
+            14,
+            69,
+            14,
+            69,
+            14,
+            69
+          ],
+          [
+            13,
+            15,
+            13,
+            15,
+            13,
+            15,
+            14,
+            1433,
+            14,
+            15,
+            14,
+            15,
+            14,
+            15,
+            14,
+            15
+          ],
+          [
+            73,
+            280,
+            72,
+            338,
+            649,
+            1204,
+            262,
+            649,
+            1204,
+            262,
+            649,
+            1204,
+            262,
+            649,
+            1204,
+            262
+          ]
+        ]
+      ]
+    }
+  ]
+}

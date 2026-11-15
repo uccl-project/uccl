@@ -1,0 +1,214 @@
+{
+  "argv": [
+    "integration/peer_e2e/run.py",
+    "--out",
+    "build/final_abba",
+    "--checkpoint",
+    "/home/xinze/.cache/huggingface/hub/models--openai-community--gpt2-large/snapshots/32b71b12589c2f8d625668d2335a01cac3249519",
+    "--",
+    "--warmup",
+    "5",
+    "--repeats",
+    "20"
+  ],
+  "utc_start": "2026-11-15T13:56:02Z",
+  "sha256": {
+    "/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/integration/peer_e2e/plot.py": "de55f9447bad0e63446b1e0fd7b02682e703f8ccf0390f2d2f94cb26f694334a",
+    "/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/integration/peer_e2e/summarize.py": "ff9006931650376b419ce1e75fc0dfb4854fe486810332b8bc7b42f6acea9bed",
+    "/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/integration/peer_e2e/profile_communication.py": "a5a9df7cc23fe4f5c710b892fffe33fe87874f18368fe1d9aa01bf15a9fc3567",
+    "/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/integration/peer_e2e/run.py": "a882b53190e3dd9c8983197343d9f534abc3688b58d97bf850b17992e112ffe7",
+    "/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/integration/peer_e2e/benchmark.py": "506510f05b8187cb18bd32e46e0c6b088c005d6f06f72a7b603256c9a34a1f42",
+    "/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/integration/peer_e2e/collectives.cc": "7c9c00646cf1f1c375bdaf0dbdff7051eeaa56050813ffc5dcb46f25ebc21311",
+    "/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/integration/peer_e2e/Makefile": "f8b394d5deb04c5722b056284665dccb586ba930d6df72ee0e59f2f79e444636",
+    "/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/src/collectives/peer_collectives.cu": "2b0c880d8c817ed4b077a1faf5607cad0177f879947ef0cfd2d4760e21a5423d",
+    "/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/src/cpu_router/collective_dispatch.cc": "c44a9834b8df62a622d572eea4026272bcc2be7fee9b1bb8a94bab085b4623d4",
+    "/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/include/uccl_lite/collectives/device_primitives.cuh": "bdad9a16a174d94c2ddf6836262c68a2dd786e32e2d98982f28df428b7801123",
+    "/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/build/peer_e2e/libuccl_lite_peer_e2e.so": "9a9bd366c05782ae2404adfafb119c0a651b0dbc00146f9b43576590f3defbae",
+    "/home/xinze/dev/FreeToken-dev/.venv/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2": "618968ee277041751512e619190132a9bdf351c3ce7129c73484f6ef441ad692",
+    "/home/xinze/.cache/huggingface/hub/models--openai-community--gpt2-large/snapshots/32b71b12589c2f8d625668d2335a01cac3249519/model.safetensors": "5f47f3e12f91cd33b662ce7e433b6150ad5512b5884a2cee961b50e9c3bbebce",
+    "/home/xinze/.cache/huggingface/hub/models--openai-community--gpt2-large/snapshots/32b71b12589c2f8d625668d2335a01cac3249519/config.json": "7fccdcfd6622055342a734c663ee0b61ff4fd697f42467595df0bf4448c8c170"
+  },
+  "trials": [
+    {
+      "label": "00_nccl_serving",
+      "command": [
+        "/home/xinze/dev/FreeToken-dev/.venv/bin/python",
+        "/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/integration/peer_e2e/benchmark.py",
+        "--checkpoint",
+        "/home/xinze/.cache/huggingface/hub/models--openai-community--gpt2-large/snapshots/32b71b12589c2f8d625668d2335a01cac3249519",
+        "--backend",
+        "nccl",
+        "--kind",
+        "serving",
+        "--out",
+        "/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/build/final_abba/00_nccl_serving.json",
+        "--warmup",
+        "5",
+        "--repeats",
+        "20"
+      ],
+      "complete": true,
+      "utc_start": "2026-11-15T13:56:06Z",
+      "returncode": 0
+    },
+    {
+      "label": "00_nccl_training",
+      "command": [
+        "/home/xinze/dev/FreeToken-dev/.venv/bin/python",
+        "/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/integration/peer_e2e/benchmark.py",
+        "--checkpoint",
+        "/home/xinze/.cache/huggingface/hub/models--openai-community--gpt2-large/snapshots/32b71b12589c2f8d625668d2335a01cac3249519",
+        "--backend",
+        "nccl",
+        "--kind",
+        "training",
+        "--out",
+        "/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/build/final_abba/00_nccl_training.json",
+        "--warmup",
+        "5",
+        "--repeats",
+        "20"
+      ],
+      "complete": true,
+      "utc_start": "2026-11-15T13:56:51Z",
+      "returncode": 0
+    },
+    {
+      "label": "01_peer_training",
+      "command": [
+        "/home/xinze/dev/FreeToken-dev/.venv/bin/python",
+        "/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/integration/peer_e2e/benchmark.py",
+        "--checkpoint",
+        "/home/xinze/.cache/huggingface/hub/models--openai-community--gpt2-large/snapshots/32b71b12589c2f8d625668d2335a01cac3249519",
+        "--backend",
+        "peer",
+        "--kind",
+        "training",
+        "--out",
+        "/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/build/final_abba/01_peer_training.json",
+        "--warmup",
+        "5",
+        "--repeats",
+        "20"
+      ],
+      "complete": true,
+      "utc_start": "2026-11-15T13:57:15Z",
+      "returncode": 0
+    },
+    {
+      "label": "01_peer_serving",
+      "command": [
+        "/home/xinze/dev/FreeToken-dev/.venv/bin/python",
+        "/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/integration/peer_e2e/benchmark.py",
+        "--checkpoint",
+        "/home/xinze/.cache/huggingface/hub/models--openai-community--gpt2-large/snapshots/32b71b12589c2f8d625668d2335a01cac3249519",
+        "--backend",
+        "peer",
+        "--kind",
+        "serving",
+        "--out",
+        "/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/build/final_abba/01_peer_serving.json",
+        "--warmup",
+        "5",
+        "--repeats",
+        "20"
+      ],
+      "complete": true,
+      "utc_start": "2026-11-15T13:57:38Z",
+      "returncode": 0
+    },
+    {
+      "label": "02_peer_serving",
+      "command": [
+        "/home/xinze/dev/FreeToken-dev/.venv/bin/python",
+        "/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/integration/peer_e2e/benchmark.py",
+        "--checkpoint",
+        "/home/xinze/.cache/huggingface/hub/models--openai-community--gpt2-large/snapshots/32b71b12589c2f8d625668d2335a01cac3249519",
+        "--backend",
+        "peer",
+        "--kind",
+        "serving",
+        "--out",
+        "/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/build/final_abba/02_peer_serving.json",
+        "--warmup",
+        "5",
+        "--repeats",
+        "20"
+      ],
+      "complete": true,
+      "utc_start": "2026-11-15T13:58:11Z",
+      "returncode": 0
+    },
+    {
+      "label": "02_peer_training",
+      "command": [
+        "/home/xinze/dev/FreeToken-dev/.venv/bin/python",
+        "/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/integration/peer_e2e/benchmark.py",
+        "--checkpoint",
+        "/home/xinze/.cache/huggingface/hub/models--openai-community--gpt2-large/snapshots/32b71b12589c2f8d625668d2335a01cac3249519",
+        "--backend",
+        "peer",
+        "--kind",
+        "training",
+        "--out",
+        "/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/build/final_abba/02_peer_training.json",
+        "--warmup",
+        "5",
+        "--repeats",
+        "20"
+      ],
+      "complete": true,
+      "utc_start": "2026-11-15T13:58:43Z",
+      "returncode": 0
+    },
+    {
+      "label": "03_nccl_training",
+      "command": [
+        "/home/xinze/dev/FreeToken-dev/.venv/bin/python",
+        "/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/integration/peer_e2e/benchmark.py",
+        "--checkpoint",
+        "/home/xinze/.cache/huggingface/hub/models--openai-community--gpt2-large/snapshots/32b71b12589c2f8d625668d2335a01cac3249519",
+        "--backend",
+        "nccl",
+        "--kind",
+        "training",
+        "--out",
+        "/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/build/final_abba/03_nccl_training.json",
+        "--warmup",
+        "5",
+        "--repeats",
+        "20"
+      ],
+      "complete": true,
+      "utc_start": "2026-11-15T13:59:06Z",
+      "returncode": 0
+    },
+    {
+      "label": "03_nccl_serving",
+      "command": [
+        "/home/xinze/dev/FreeToken-dev/.venv/bin/python",
+        "/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/integration/peer_e2e/benchmark.py",
+        "--checkpoint",
+        "/home/xinze/.cache/huggingface/hub/models--openai-community--gpt2-large/snapshots/32b71b12589c2f8d625668d2335a01cac3249519",
+        "--backend",
+        "nccl",
+        "--kind",
+        "serving",
+        "--out",
+        "/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/build/final_abba/03_nccl_serving.json",
+        "--warmup",
+        "5",
+        "--repeats",
+        "20"
+      ],
+      "complete": true,
+      "utc_start": "2026-11-15T13:59:30Z",
+      "returncode": 0
+    }
+  ],
+  "environment": {
+    "OMP_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "LD_PRELOAD": "/home/xinze/dev/FreeToken-dev/.venv/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2"
+  }
+}

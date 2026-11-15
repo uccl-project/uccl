@@ -1,0 +1,3 @@
+# Preserve tool-emitted spacing in raw console captures.
+*.log -whitespace
+gpu.txt -whitespace

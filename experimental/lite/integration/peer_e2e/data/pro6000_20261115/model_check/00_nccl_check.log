@@ -1,0 +1,14 @@
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 1180.26it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 1179.12it/s]
+Traceback (most recent call last):
+  File "/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/integration/peer_e2e/benchmark.py", line 410, in <module>
+    main()
+  File "/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/integration/peer_e2e/benchmark.py", line 387, in main
+    reference = reference_check(args, model)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/xinze/dev/FreeToken-dev/.venv/lib/python3.12/site-packages/torch/utils/_contextlib.py", line 124, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/integration/peer_e2e/benchmark.py", line 347, in reference_check
+    assert torch.equal(actual.argmax(-1), expected.argmax(-1)), "reference greedy tokens differ"
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: reference greedy tokens differ

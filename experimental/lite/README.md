@@ -60,6 +60,21 @@ validation and calibrated backend selection. See the
   </tr>
 </table>
 
+#### Testbed 4
+
+<table>
+  <tr><th>Serving</th><th>Training</th></tr>
+  <tr>
+    <td width="50%" valign="top"><img src="docs/assets/serving-large-message-e2e-pro6000.svg" alt="Pretrained GPT-2-large experimental weight-sharded HTTP serving on two RTX PRO 6000 GPUs, UCCL Lite versus NCCL" width="100%"></td>
+    <td width="50%" valign="top"><img src="docs/assets/training-large-message-e2e-pro6000.svg" alt="GPT-2-large experimental block fine-tuning full training steps on two RTX PRO 6000 GPUs, UCCL Lite versus NCCL" width="100%"></td>
+  </tr>
+</table>
+
+The [PRO 6000 experiment](integration/peer_e2e/README.md) records communication
+fractions, numerical checks, raw repetitions and the parameter-sharded adapter's
+scope. Its per-layer BF16 AG/RS messages are 37.53 MiB; this is a separate
+workload from Testbed 1's SGLang serving and DDP/FSDP training.
+
 ### Single-node collectives
 
 #### Testbed 1
