@@ -51,7 +51,7 @@ def main():
                          linewidth=3.6 if mode == "hybrid" else 2.2,
                          markersize=6.5 if mode == "hybrid" else 5,
                          markeredgecolor="white", markeredgewidth=0.7, label=label)
-            if metric == "median_us":
+            if metric == "median_us" and mode == "hybrid":
                 low = [float(selected[size]["min_us"]) for size in sizes]
                 high = [float(selected[size]["max_us"]) for size in sizes]
                 error = [[value - bound for value, bound in zip(values, low)],

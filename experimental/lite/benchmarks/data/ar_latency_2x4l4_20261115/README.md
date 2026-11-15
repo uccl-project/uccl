@@ -25,7 +25,8 @@ are outside timing. UCCL Lite has three rounds; NCCL reuses the two rounds compl
 request to stop NCCL measurement. Each size has twenty warmups followed by
 ten timed calls. Every invocation is checked. The first paired round ran
 UCCL Lite then NCCL; the second ran NCCL then UCCL Lite. Points are medians
-of the available round means; latency error bars show their min/max.
+of the available round means; UCCL Lite latency error bars show its round-mean min/max.
+NCCL error bars are omitted; its ranges remain in `summary.csv`.
 No third NCCL round was launched. The retained NCCL command used the same
 eight-rank `ob1`/`self,vader,tcp` harness as the historical hybrid comparison,
 with `NCCL_ALGO=Ring` and `NCCL_PROTO=Simple`.
@@ -39,7 +40,7 @@ on the two four-GPU hosts. The 420 retained NCCL timed calls also passed.
 UCCL Lite medians are 71.345 µs at 1 KiB, 177.284 µs at 1 MiB, and
 96.411 ms / 19.49 GB/s at 1 GiB. See the [complete table](results_table.md).
 The NCCL 1-MiB round means span 204.509–436.013 µs; this variability is
-preserved in the chart rather than used to claim a stable gain.
+preserved in the CSV rather than used to claim a stable gain.
 
 ## Reproduction and provenance
 
