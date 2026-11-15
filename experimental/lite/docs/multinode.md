@@ -16,6 +16,21 @@ The [NUMA host-router experiment](multinode-host-router.md) evaluates explicit
 D2H aggregation, shared host packets, ready-driven progress, and host RDMA over
 1 MiB–1 GiB complete output per GPU.
 
+## Current AllReduce: full-range hybrid sweep
+
+![Current two-node FP32 AllReduce: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput](assets/collectives-2x4l4-allreduce-current.svg)
+
+Both panels use the [fresh current-source sweep](../benchmarks/data/ar_latency_2x4l4_20261115/README.md)
+of explicit GPU ReduceScatter + host-packet AllGather against NCCL 2.28.7
+Ring+Simple. Eight L4 GPUs across two nodes, FP32, eight MPI ranks,
+slowest-rank host enqueue-to-completion timing; three UCCL Lite rounds and two
+retained NCCL rounds, each with twenty warmups and ten checked calls per size.
+Host pieces are fixed at 256 KiB, with the
+existing GPU ReduceScatter size policy. No best-variant-per-size selection or
+historical small-message splice is used. The record preserves raw samples,
+round ranges, source/binary hashes, and the reproduction commands. This eager
+path remains explicitly selected.
+
 ## Current AllGather: NUMA host router
 
 ![Two-node FP32 AllGather: CPU-router latency and bus throughput versus paired NCCL](assets/collectives-2x4l4-allgather-host-router.svg)

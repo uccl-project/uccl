@@ -1,0 +1,90 @@
+$ date -u +%FT%TZ
+2026-11-15T17:28:29Z
+$ git rev-parse HEAD
+5a2436af8e28aabfb08c8354efe3f3a99a341ee8
+$ nvidia-smi
+Sun Nov 15 17:28:29 2026
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 595.58.03              Driver Version: 595.58.03      CUDA Version: 13.2     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA L4                      On  |   00000000:4A:00.0 Off |                    0 |
+| N/A   21C    P0             28W /   72W |    2775MiB /  23034MiB |      5%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+|   1  NVIDIA L4                      On  |   00000000:61:00.0 Off |                    0 |
+| N/A   21C    P0             28W /   72W |    2775MiB /  23034MiB |      0%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+|   2  NVIDIA L4                      On  |   00000000:CA:00.0 Off |                    0 |
+| N/A   22C    P0             29W /   72W |    2775MiB /  23034MiB |      0%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+|   3  NVIDIA L4                      On  |   00000000:E1:00.0 Off |                    0 |
+| N/A   22C    P0             28W /   72W |    2775MiB /  23034MiB |      0%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|    0   N/A  N/A         2373760      C   ...uccl_lite_multinode_allreduce       2752MiB |
+|    1   N/A  N/A         2373761      C   ...uccl_lite_multinode_allreduce       2752MiB |
+|    2   N/A  N/A         2373762      C   ...uccl_lite_multinode_allreduce       2752MiB |
+|    3   N/A  N/A         2373763      C   ...uccl_lite_multinode_allreduce       2752MiB |
++-----------------------------------------------------------------------------------------+
+$ /usr/local/cuda/bin/nvcc --version
+nvcc: NVIDIA (R) Cuda compiler driver
+Copyright (c) 2005-2025 NVIDIA Corporation
+Built on Tue_May_27_02:21:03_PDT_2025
+Cuda compilation tools, release 12.9, V12.9.86
+Build cuda_12.9.r12.9/compiler.36037853_0
+$ /usr/mpi/gcc/openmpi-4.1.7rc1/bin/mpirun --version
+mpirun (Open MPI) 4.1.7rc1
+
+Report bugs to http://www.open-mpi.org/community/help/
+$ ldd build/ar_latency_2x4l4_20261115/uccl_lite_multinode_allreduce
+	linux-vdso.so.1 (0x00007ffefa787000)
+	libmscclpp.so.0 => /home/zhongjie/third_party/mscclpp/build-ib-pcieccl/lib/libmscclpp.so.0 (0x000072b377800000)
+	libmpi.so.40 => /usr/mpi/gcc/openmpi-4.1.7rc1/lib/libmpi.so.40 (0x000072b3776e5000)
+	libcudart.so.12 => /usr/local/cuda/targets/x86_64-linux/lib/libcudart.so.12 (0x000072b377400000)
+	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x000072b377000000)
+	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x000072b377317000)
+	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x000072b377e2a000)
+	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x000072b376c00000)
+	libcuda.so.1 => /lib/x86_64-linux-gnu/libcuda.so.1 (0x000072b371400000)
+	libnvidia-ml.so.1 => /lib/x86_64-linux-gnu/libnvidia-ml.so.1 (0x000072b370200000)
+	libnuma.so.1 => /lib/x86_64-linux-gnu/libnuma.so.1 (0x000072b3776d7000)
+	libgdrapi.so.2 => /home/zhongjie/third_party/gdrcopy/install/lib/libgdrapi.so.2 (0x000072b3776cb000)
+	/lib64/ld-linux-x86-64.so.2 (0x000072b377f6a000)
+	libopen-rte.so.40 => /usr/mpi/gcc/openmpi-4.1.7rc1/lib/libopen-rte.so.40 (0x000072b376f45000)
+	libopen-pal.so.40 => /usr/mpi/gcc/openmpi-4.1.7rc1/lib/libopen-pal.so.40 (0x000072b376e37000)
+	libdl.so.2 => /lib/x86_64-linux-gnu/libdl.so.2 (0x000072b377e23000)
+	libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x000072b3776c6000)
+	librt.so.1 => /lib/x86_64-linux-gnu/librt.so.1 (0x000072b3776bf000)
+	libz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x000072b3772fb000)
+	libudev.so.1 => /lib/x86_64-linux-gnu/libudev.so.1 (0x000072b3772c8000)
+	libcap.so.2 => /lib/x86_64-linux-gnu/libcap.so.2 (0x000072b3772bb000)
+$ ldd build/ar_latency_2x4l4_20261115/uccl_lite_nccl_2x4l4_baseline
+	linux-vdso.so.1 (0x00007fff7ab7f000)
+	libnccl.so.2 => /home/zhongjie/third_party/nccl/build/lib/libnccl.so.2 (0x000078b583e00000)
+	libmpi.so.40 => /usr/mpi/gcc/openmpi-4.1.7rc1/lib/libmpi.so.40 (0x000078b586094000)
+	libcudart.so.12 => /usr/local/cuda/targets/x86_64-linux/lib/libcudart.so.12 (0x000078b583a00000)
+	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x000078b583600000)
+	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x000078b583dd2000)
+	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x000078b583200000)
+	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x000078b583ce9000)
+	/lib64/ld-linux-x86-64.so.2 (0x000078b5861be000)
+	libopen-rte.so.40 => /usr/mpi/gcc/openmpi-4.1.7rc1/lib/libopen-rte.so.40 (0x000078b583945000)
+	libopen-pal.so.40 => /usr/mpi/gcc/openmpi-4.1.7rc1/lib/libopen-pal.so.40 (0x000078b5834f2000)
+	libdl.so.2 => /lib/x86_64-linux-gnu/libdl.so.2 (0x000078b583ce4000)
+	libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x000078b583cdf000)
+	librt.so.1 => /lib/x86_64-linux-gnu/librt.so.1 (0x000078b583cda000)
+	libz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x000078b583cbe000)
+	libudev.so.1 => /lib/x86_64-linux-gnu/libudev.so.1 (0x000078b583912000)
+	libcap.so.2 => /lib/x86_64-linux-gnu/libcap.so.2 (0x000078b583905000)
