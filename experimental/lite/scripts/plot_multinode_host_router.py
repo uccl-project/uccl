@@ -9,7 +9,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from figure_style import ROOT, clean_axis, configure, save
+from figure_style import ROOT, clean_axis, collective_panels, configure, save
 
 DATA = ROOT / "benchmarks/data/ag_host_router_2x4l4_20261115/validated/summary.csv"
 NAME = "collectives-2x4l4-allgather-host-router"
@@ -43,10 +43,9 @@ def load():
 
 
 def draw(preview=False):
-    configure()
+    configure(black_axes=True)
     data = load()
-    fig, axes = plt.subplots(1, 2, figsize=(10.8, 4.1))
-    fig.subplots_adjust(left=0.085, right=0.985, top=0.76, bottom=0.20, wspace=0.28)
+    fig, axes = collective_panels()
     for ax, powers, metric, ylabel, title in (
         (axes[0], range(20, 24), 0, "Latency (µs)", "1–8 MiB latency"),
         (axes[1], range(20, 31), 1, "Bus throughput (GB/s)", "1 MiB–1 GiB throughput"),
@@ -59,20 +58,19 @@ def draw(preview=False):
         ax.set_xticks(ticks, [str(size >> 20) for size in ticks])
         ax.set_xlabel("Complete output per GPU (MiB)")
         ax.set_ylabel(ylabel)
-        ax.set_title(title, fontsize=11)
         upper = 0
         for mode, label, color, marker, linestyle in MODES:
             values = [data[size, mode][metric] for size in sizes]
             upper = max(upper, *values)
             ax.plot(sizes, values, color=color, marker=marker, linestyle=linestyle,
-                    linewidth=2.8, markersize=6, markeredgecolor="white",
+                    linewidth=3.6 if mode == "shared_ready" else 2.2,
+                    markersize=6.5 if mode == "shared_ready" else 5, markeredgecolor="white",
                     markeredgewidth=0.7, label=label)
         ax.set_ylim(0, upper * 1.13)
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 0.99),
-               ncol=2, frameon=False, fontsize=12.5, handlelength=2.8, columnspacing=2)
-    fig.text(0.5, 0.85, "2 × 4 L4 · FP32 · fixed 256 KiB chunks · host timing",
-             ha="center", fontsize=10)
+               ncol=1, frameon=False, fontsize=11.5, handlelength=1.6,
+               handletextpad=0.5, labelspacing=0.3)
     save(fig, NAME, preview)
 
 
