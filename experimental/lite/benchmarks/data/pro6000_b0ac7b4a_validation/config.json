@@ -1,0 +1,15 @@
+{
+  "revision": "b0ac7b4a442fb49c61a3b0d051e7f7af7480d88b",
+  "verified_remote_head": "b0ac7b4a442fb49c61a3b0d051e7f7af7480d88b",
+  "repository": "https://github.com/zhongjiechen/uccl-zhongjie-dev.git",
+  "branch": "codex/uccl-lite-retained-optimizations",
+  "local": "/home/wxzheng/Documents/Codex/2026-11-12/explain-the-desing-of-uccl-lite/work/pro6000-integrated-b0ac7b4a-20261115-022114-retry1",
+  "remote": "/home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1",
+  "source_archive_sha256": "55a9a1f8f1b747b367a46e0044da8752182e7b12ece24795dd31107d476f91eb",
+  "cuda": "/opt/pytorch/cuda",
+  "cutlass": "/home/xinze/dev/FreeToken-dev/.venv/lib/python3.12/site-packages/flashinfer/data/cutlass",
+  "nccl": "/home/xinze/dev/uccl-lite-spin-pro6000-20261113/build/experiment/deps/nccl",
+  "lock": "/home/xinze/dev/uccl-eat-pro6000/eval.lock",
+  "excluded_attempt": "/home/wxzheng/Documents/Codex/2026-11-12/explain-the-desing-of-uccl-lite/work/pro6000-integrated-b0ac7b4a-20261115-022114",
+  "excluded_reason": "Minimal export omitted required benchmarks/data/primitives_8l4.csv; no performance timing reached."
+}

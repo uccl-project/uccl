@@ -1,0 +1,256 @@
+{
+  "valid": true,
+  "measured_revision": "b0ac7b4a442fb49c61a3b0d051e7f7af7480d88b",
+  "baseline": "NCCL default, verified P2P on every logged data edge",
+  "scope": "2 PRO6000 GPUs; BF16 out-of-place; 63 equal-weight cases, 1 KiB\u20131 GiB; prepared eager, slowest-rank CUDA events including submission gaps; no E2E/graphs",
+  "protocol": {
+    "warmup": 100,
+    "repeats": 5,
+    "iterations": 20,
+    "primary_invocations": 37800,
+    "calibration": "Separate process/seed; 3 warmups, 3 x5 per backend/case",
+    "execution_order": [
+      "nccl-forward",
+      "peer-forward",
+      "joint-forward",
+      "joint-reverse",
+      "peer-reverse",
+      "nccl-reverse"
+    ],
+    "source": "Exact export of verified remote commit; initial incomplete export excluded before performance"
+  },
+  "scores": {
+    "peer": {
+      "full": {
+        "all": {
+          "cases": 63,
+          "forward": 1.570487801784517,
+          "reverse": 1.575830152235196,
+          "central": 1.5731567092218162,
+          "wins_both": 63
+        },
+        "allreduce": {
+          "cases": 21,
+          "forward": 1.5273276863837355,
+          "reverse": 1.5281513944702805,
+          "central": 1.5277394849123893,
+          "wins_both": 21
+        },
+        "allgather": {
+          "cases": 21,
+          "forward": 1.6087426846767034,
+          "reverse": 1.6139986845281433,
+          "central": 1.6113685415858388,
+          "wins_both": 21
+        },
+        "reducescatter": {
+          "cases": 21,
+          "forward": 1.5764670322945995,
+          "reverse": 1.586567887428173,
+          "central": 1.5815093958076265,
+          "wins_both": 21
+        }
+      },
+      "serving": {
+        "all": {
+          "cases": 36,
+          "forward": 1.4922646475607475,
+          "reverse": 1.5036799290137202,
+          "central": 1.4979614144943216,
+          "wins_both": 36
+        },
+        "allreduce": {
+          "cases": 12,
+          "forward": 1.4436499474357078,
+          "reverse": 1.4559465861550616,
+          "central": 1.4497852298088683,
+          "wins_both": 12
+        },
+        "allgather": {
+          "cases": 12,
+          "forward": 1.5225746178799042,
+          "reverse": 1.5452755747488087,
+          "central": 1.5338831010681084,
+          "wins_both": 12
+        },
+        "reducescatter": {
+          "cases": 12,
+          "forward": 1.5118094873809476,
+          "reverse": 1.511175228945815,
+          "central": 1.511492324894625,
+          "wins_both": 12
+        }
+      }
+    },
+    "joint": {
+      "full": {
+        "all": {
+          "cases": 63,
+          "forward": 1.5633146790841512,
+          "reverse": 1.5585960704257544,
+          "central": 1.560953591769934,
+          "wins_both": 63
+        },
+        "allreduce": {
+          "cases": 21,
+          "forward": 1.5092732160795526,
+          "reverse": 1.5260269459056643,
+          "central": 1.5176269622246106,
+          "wins_both": 21
+        },
+        "allgather": {
+          "cases": 21,
+          "forward": 1.618982103613101,
+          "reverse": 1.5926276307340117,
+          "central": 1.6057508000552574,
+          "wins_both": 21
+        },
+        "reducescatter": {
+          "cases": 21,
+          "forward": 1.563613114579952,
+          "reverse": 1.557845135405208,
+          "central": 1.5607264604036688,
+          "wins_both": 21
+        }
+      },
+      "serving": {
+        "all": {
+          "cases": 36,
+          "forward": 1.4943699043212242,
+          "reverse": 1.4876660411132154,
+          "central": 1.491014205002853,
+          "wins_both": 36
+        },
+        "allreduce": {
+          "cases": 12,
+          "forward": 1.441811489972812,
+          "reverse": 1.4597989329234125,
+          "central": 1.4507773345827493,
+          "wins_both": 12
+        },
+        "allgather": {
+          "cases": 12,
+          "forward": 1.5571349235493315,
+          "reverse": 1.518436463260326,
+          "central": 1.5376639574801072,
+          "wins_both": 12
+        },
+        "reducescatter": {
+          "cases": 12,
+          "forward": 1.4864133948076177,
+          "reverse": 1.4853427557086454,
+          "central": 1.485877978827935,
+          "wins_both": 12
+        }
+      }
+    }
+  },
+  "route_counts": {
+    "nccl-forward": {
+      "nccl_default": 63
+    },
+    "peer-forward": {
+      "peer": 63
+    },
+    "joint-forward": {
+      "peer": 63
+    },
+    "joint-reverse": {
+      "peer": 63
+    },
+    "peer-reverse": {
+      "peer": 63
+    },
+    "nccl-reverse": {
+      "nccl_default": 63
+    }
+  },
+  "historical_joint_score": 1.5742135529636239,
+  "files": {
+    "results/peer-reverse.status.json": "085daef012f8511166a4c05fa32f7675b7f9687b7036e5e8bc030ad33329a1f6",
+    "results/COMPLETE.json": "eeb6bee3d4e6a289fbf665f8074e37ed0c54f9862464d3b139c09eae8b1fab79",
+    "results/nccl-forward.nccl.2387884.log": "ae044034063e0aab97c79fd8eb70e1640823ce6d678e7043c3e5ab68ebaa64ff",
+    "results/cpu_bf16_check.log": "731ac984653bae0911867db9d33f7c7aa1cae766fce4d63f23ce60d680cc0ffc",
+    "results/router-graph.status.json": "e58e2783c9db23d21f9c1382b86e32435e73d84c603ae2e6540cba48aefb0c07",
+    "results/extract.status.json": "8dff04cb0105b7433d290c3965bf5c036a96955a9a2ac0bafd665b144bde5e4c",
+    "results/router-eager.status.json": "25bf94eac5f270854eaa757d45d91549e9a024c288103b02a2766ca05cbb7b2b",
+    "results/dispatcher_check.status.json": "67977cf100ff511e797450b7dd2e163ea9c80b2f65e763702c983322fb176daa",
+    "results/calibration.log": "0d038fee75b59d46bb077f95107d332eea247ba65a8c4bf712371d9fb7bb4cef",
+    "results/gpu-identity.log": "c8cbf81277234972183bfd996d1060acee6fd88e627473dc481a3f1186adb92f",
+    "results/joint-selftest.status.json": "10e5c9151cc1ea37bef7dba6443d4f755aa235bd6a03eae006eac159146ca0d6",
+    "results/gpu-identity.command.json": "e416f0fa48dff3a7048eadf4c6708154f6d26cf3c22311f915e8ca7021704822",
+    "results/router-graph.log": "cbb535193ef425c1e076ad86cd68d2f1d76c0872473daffc0c4863d573cdbc51",
+    "results/nccl_identity_check.command.json": "189e1a587e4d7f3a87faf4a7b7bfc0b6404132a2d98cff9a396cac48e1875be5",
+    "results/extract.command.json": "4eec71a6282e38afc266b8e9847435f77fa06e6a78ec97150215eb69d9fa8c81",
+    "results/nccl-transport.status.json": "801ab365d747c7ed2e1121775e035aa29530bb779405e83f0bba86b351f25b8f",
+    "results/nccl-forward.log": "c2580d04f2353fc7668120e3318972bb8cd994722aef1a50ee6426cdae04cea0",
+    "results/router_core_check.log": "5e600eb615cfcce3749aac3133c40f0d223b09140fb1d67fe1f3b0158fd498d2",
+    "results/router_policy_check.command.json": "b80158254f7a5fba36dd86045593421deb929da39fda617782d27ceada337eef",
+    "results/nccl-forward.status.json": "68524e0d4d153fc4b2001ff1f2cb8eeb41937526760b9146096bdd1390e1898a",
+    "results/router_core_check.command.json": "a745bf297cc9df152c45d62fbc559a61354e8df9ba6596d998dbd88aea699571",
+    "results/calibration.samples.csv": "4e6152273782a2da6543d192db94653a13ae51012a9f837d4ceb0b3f27675a4a",
+    "results/dispatcher_check.log": "e10335b026476d9bc0da1986f5118a2082184b27cce2c9ad3b0b959972747b1c",
+    "results/router-graph.command.json": "979bb2e9c43d59dcf6517de9dd244e52b1e790c47eda9db4af9ba3300995e8f0",
+    "results/nccl-forward.transport.json": "6a8ed364b26bafa201661c156644bb8593eeadc9a95105e42f4468466e822f97",
+    "results/nccl-forward.samples.csv": "7b3a21bbf3c6033d291c7c89ebb639a2d0b266e6542d42d83e161057881e2eb6",
+    "results/nccl-transport.command.json": "df6e5e33f33f0a24ef4ef4435419b07b1b3637e176d2f9e4f5a71fded711e53c",
+    "results/peer-reverse.samples.csv": "f5106554460c34cd72e387d027efdfa7f03e358a2b82ef60542c39f4180b6bd3",
+    "results/dispatcher_check.command.json": "2fd4009db391ff7953de40cf76215ec8738abd86b9c363b8e02381ef171d43b5",
+    "results/peer-access.status.json": "5a9555d7b1a532cef5b375d9ef67b661b477e360fd6a6e9914ace08ad05688a8",
+    "results/nccl-reverse.status.json": "0b9eca2d322eab363ec30c920b058fe2c9546303013b0eea80668b3ea1f792a0",
+    "results/peer-forward.command.json": "c622edf307ff6e8dac441fc2a2292779be833d32791c6716f5c6f8e21580f1c2",
+    "results/nccl-reverse.nccl.2389442.log": "e9beaf2a7fc431c4e4f4227bd66557da7932dd358a38ad462d527d2be6efdc80",
+    "results/nccl-forward.command.json": "36eb583f6783b921780eba52a0c536b1d0007afc32f368c07bb7c33b521753f6",
+    "results/build.command.json": "5d2c5a764e8fe035c258e4ebbee129fc276656d985599aef3c9409aa7f815fb6",
+    "results/nccl_identity_check.status.json": "8d8d6657eb6a995e4b480e5feaa6fcbf6e7e19b7b3d22adc4c09b889e21f5919",
+    "results/joint-reverse.log": "be02c5ccf11786ff541f2b95a7ba4b57fbb4df56b2ad1caaa0fd52098c3ee0ef",
+    "results/nccl-reverse.log": "f060fa9162c3aa82f356f1fe8188e10abac210e1017f3ffb34d3b82867f3abcf",
+    "results/router_core_check.status.json": "9d288d49e680aaaf83db8a6726b7702096365febaa43325a6385e33352560133",
+    "results/nccl-reverse.command.json": "0a4c49a5c4845f55b0b123fff6155eddc51bfd6e744e8c1fb24f08c7ab0ade73",
+    "results/compiler.log": "fc7ce0c80d28ed925fd490dc4e3915ce620fcf115f965189688c6f049243aad5",
+    "results/joint-reverse.command.json": "56ed4c916c0f8bf51e69d015ba878040264d941055026e8b1780993f640511b0",
+    "results/joint-reverse.status.json": "26cf98a952f73f19995d5390c3f69fb556c111676fe8dae7a607c67ba5fe76f4",
+    "results/peer-forward.samples.csv": "98fb36ae926a48c952a74107f55bdb9bc8c046294e75103eeafd36f1c224962c",
+    "results/peer-forward.log": "a0f840a94436d04906c88f7c8b48d85a1c04233c41f298a090c6da2e28cbb93c",
+    "results/nccl-transport.nccl.2386267.log": "842b44e6bff84264ebe7de5278788efe615c5f0ed545df90cdd205c28f368d1d",
+    "results/peer-reverse.log": "8d7e9eb07bbeedf00b86a1e076c6cd71d61175505d6288aa0f8a00552038ea46",
+    "results/joint-forward.command.json": "c18329574fb11a360bff7e4fb43bbcebd79aa08feb9708ccf4fb6f6ff7e52f60",
+    "results/peer-access.log": "76c44c712bd0a9b1c211d287872a8fcd00aca1033cb3059848a289b7b3241deb",
+    "results/peer-reverse.command.json": "9a068bd8d046fe1f00f732727b9267b59171555d6c439f24e8d04752f1c11fda",
+    "results/build.log": "e3b6a1ab3878fbcd16f17f9680d4e7a376bd4d93f6be11bf056241942051d78f",
+    "results/compiler.status.json": "7cf2507cdd19d776fd592b1d448939fc36e5af5f117d665ca6aea244b0976b91",
+    "results/calibration.profile": "f5cf32ebf5db8eca5784e1da57cc1b6fc26a0841e0dce9b583bdb0a313c3cde8",
+    "results/router_policy_check.status.json": "daba8e705ce483e2a85bc04852f382457442a51f8235ef82e89b22a3767b370f",
+    "results/nccl_identity_check.log": "21afd06bbe987e76f775ec7dd40bebc8c538300d0aa812d4b52d189e378e62d7",
+    "results/router-eager.command.json": "f30cf3286040616b5e005a1f3b047dc00f71448d65f401397b0fb7e89e7d7c90",
+    "results/topology.command.json": "856986d0a9d286a1fd0973ede432acbc4460902f4de951a92f754989ff0be071",
+    "results/peer-forward.status.json": "41e24398f171d2fff2076436e6b062fb7e1d0f6ce21f6e61c1d70538336d05bb",
+    "results/topology.log": "ab2dc00c1bfd9796fd195e1977aa8bf618158bacf7901b4d904c68e62a7faea8",
+    "results/provenance.json": "7572e5bf6607c0ac815efc2b8f62961eb95c4e76cab6b0181b65ddfb68ee18cb",
+    "results/nccl-reverse.transport.json": "09c00b1a927c9bd02363ad627ba84fc47880a3f4a47a0172f16d56c766e22e85",
+    "results/gpu-identity.status.json": "dfd42084f417568bbe1e319b07d262860405fa40b5f0f43c179a6ecf97d3055a",
+    "results/extract.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "results/nccl-transport.log": "de62ed5aaaa613c9199a8d866fc400578487c92d1af7969556f0dd186fbcf043",
+    "results/router-eager.log": "bbea74f07fb794e0a2cd49d3fc4bf23a44d239e68d63cccc6178e4f77feb426e",
+    "results/joint-selftest.command.json": "bb67a36fccac1da75accfdfd09a2abebccdd2235896043cd203d58e4d3dbf2cc",
+    "results/cpu-identity.command.json": "3b942c70e46d7cbc22a90712d360c70ad5092d702707da1bd149241f2391b6b7",
+    "results/joint-reverse.samples.csv": "266fa72d7df5ab3f5bcfaa92fd52675f6b242a1e61030f4693383b714a5a8394",
+    "results/joint-forward.log": "4992909190f5ed1a9055b4f39770ed2f99655f228d81b9e349c67c9346f6b50a",
+    "results/joint-selftest.log": "54c836626140499f6719d7364e545556be8e5b32fbb5c8c333d7f2bc1beab620",
+    "results/compiler.command.json": "a1493c6f680d8ba40641a9bde9c831cad772464f66217a9dcb646399c3ff967a",
+    "results/cpu-identity.log": "f3aa4015dd968025fd386fe1a3c031d3ced2cfdec5c0d52321a14de93c6c3d56",
+    "results/peer-access.command.json": "126acbb37ef79c25462fd0850ec0ee7d2d2f79bfc0a823ddfc262b977f6441a2",
+    "results/joint-forward.status.json": "a3556d27936ea447db27aa88cd22a3c79ec0aba278aab10276e3ccb85b96a442",
+    "results/build.status.json": "f89043230df7675d55c52ef646b1093bd4903579c32bce9cca5dafb4c1a8019b",
+    "results/router_policy_check.log": "0613c306651594b3c6862d89c1be98bdf01f861b04a2a6e3120fcec71376f4e3",
+    "results/cpu_bf16_check.status.json": "ed1731948a80791aa2526ce98351fdfbf312c8acd4d866bd8f1bc47ab6e942ab",
+    "results/cpu-identity.status.json": "8b31a4dd43a37da9bf9deef7867c3dbdaf2f0bc7cdfc3baefe7e1786bd089666",
+    "results/calibration.status.json": "785fe836a285c0db33528a09f7bc57d8df27849d4392495776595f54e7d4ad23",
+    "results/cpu_bf16_check.command.json": "88dc2d718066b9d998adc830cb757d99137732a79317ae1d16dc71f34d054ffa",
+    "results/calibration.command.json": "c9a4532afbbeba5d7d090927f8c4edbb6487625bb283ca436e02d58a46c16a1c",
+    "results/topology.status.json": "67f58b1186560cdb15072efaa7c5b345660fdb8410fce1badec0c6d6a24cb99a",
+    "results/joint-forward.samples.csv": "70fd9de29f1cb5ea615915b04bad6843be80576857d2c096af98a538d30c4c0e",
+    "results/nccl-transport.transport.json": "f20ced74a3cf3004c3862b23bbeb46b85192a17dff83951866e40718fd71ff33",
+    "results/nccl-reverse.samples.csv": "8c94a3424b7830abb542f42563e55f3188c1b3e57f64339ec3be4a18138ac5fb"
+  }
+}

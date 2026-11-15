@@ -6,8 +6,8 @@ revision's host-ring ReduceScatter implementation. It imports the retained
 router and BF16 direct-peer work from the isolated EAT experiments originally
 based on `5b9a7f86:experimental/lite`.
 
-**The performance tables below describe the named experimental snapshots,
-not a fresh performance certification of this integrated branch.** Integration
+**Historical tables describe their named experimental snapshots. The integrated
+PRO6000 reproduction below separately validates commit `b0ac7b4a`.** Integration
 correctness/build results are recorded separately in
 [`integration-validation.json`](../benchmarks/data/retained_eat_20261115/integration-validation.json).
 The original developer working tree and uncommitted experiments are excluded.
@@ -18,8 +18,8 @@ four/eight-rank router eager/graph execution, host-ring correctness, dispatcher
 capture boundaries, peer selftests and large-AG correctness smokes. Four-port
 router/host-ring tests use the 2+2 subset; joint four-rank tests use the four
 P2P-capable GPUs within one NUMA group. l41's lock was occupied, so this
-integration was not revalidated on its cross-NUMA P2P topology. PRO6000 and
-full performance sweeps were not rerun. The dispatcher CUDA test now supports
+integration was not revalidated on its cross-NUMA P2P topology. Subsequent
+PRO6000 full performance validation is recorded below. The dispatcher CUDA test supports
 both a physical four-GPU node and the existing four-port subset of an eight-GPU
 node.
 
@@ -91,6 +91,27 @@ scores are equal-weight geometric means of 63 BF16 out-of-place cases: three
 collectives, powers of two from 1 KiB through 1 GiB. Size means complete AR
 input, complete AG output or complete RS input. These are eager collective
 microbenchmarks, not inference or concurrent-GEMM results.
+
+### Integrated branch reproduced on PRO6000
+
+Pushed commit **`b0ac7b4a442fb49c61a3b0d051e7f7af7480d88b`** was rebuilt and
+validated on `aws-pro6000` with two RTX PRO 6000 Blackwell Server Edition GPUs,
+CUDA 13.0.88 and NCCL 2.29.7. Default NCCL P2P was verified in transport logs.
+Two full runs per configuration reproduce the gain:
+
+| Mode | Full 63-case speedup, forward / reverse | 8 KiB–16 MiB subset |
+|---|---:|---:|
+| Forced UCCL P2P | **1.5705x / 1.5758x** | 1.4923x / 1.5037x |
+| Freshly calibrated joint | **1.5633x / 1.5586x** | 1.4944x / 1.4877x |
+
+Both modes beat NCCL in every case in both runs. Joint selects peer for all
+63 cases; its aggregate is within 1% of the earlier 1.5742x isolated result.
+All correctness checks passed, with 37,800 primary timed invocations. No
+implementation tuning was needed. An initial export missing a policy-test
+fixture failed before timing and is excluded. This does not establish a
+router gain, performance on other nodes, or an inference/graph-mode gain.
+
+[Exact commands, raw measurements, checks and independent analysis](../benchmarks/data/pro6000_b0ac7b4a_validation/README.md).
 
 ### Retained router, snapshot `2ba27356550628122fcff0e539c18a71e9ffd097`
 
@@ -261,9 +282,10 @@ The portable [data directory](../benchmarks/data/retained_eat_20261115/)
 contains per-case router, PRO joint and l41 peer measurements, plot and hashes.
 Run `python3 benchmarks/data/retained_eat_20261115/summarize.py` to verify the
 packaged data hashes and recompute the reported aggregates without a GPU.
-Snapshot IDs identify the isolated experimental repositories; they are not
-ancestors of this branch. Re-running this integration reproduces the protocol,
-not guaranteed historical timings or an identical historical source tree.
+The older snapshot IDs identify isolated experimental repositories; they are
+not ancestors of this branch. The PRO6000 reproduction's `b0ac7b4a` is a commit
+in this branch. Re-running a benchmark reproduces its protocol, not guaranteed
+historical timings. Use the pinned-source recipe when reproducing that commit.
 
 When updating this document, keep the measured source, transport, dtype,
 placement, node, timing scope and repetitions next to each result. Distinguish
