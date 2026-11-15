@@ -216,6 +216,10 @@ To find failure logs on a GitHub run page:
    `<suite-id>.log` holds test output; `environment.log` / `build-*.log` hold setup
    output; `node-*.ssh.log` holds worker/SSH output. `performance.json` explains gates.
 
+The **CI report** job puts every target in one table on the run **Summary** page.
+It marks each failed suite as new or also failing on main, using the latest
+executed result of that suite in the five most recent `main` push runs.
+
 ## Performance policy and current validation
 
 `ep.bench.low_latency` measures EP dispatch/combine latency on GH200/GB10.

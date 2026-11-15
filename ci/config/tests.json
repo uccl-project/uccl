@@ -6,7 +6,8 @@
       "enabled": true,
       "tier": "cpu",
       "sources": [
-        "ci/tests/test_ci.py"
+        "ci/tests/test_ci.py",
+        "ci/tests/test_run_report.py"
       ],
       "paths": [
         "ci/**",
