@@ -1,0 +1,7 @@
+{
+  "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/uccl_lite_nccl_4l4_mpi_baseline": "24dbc54c840418d2db0cc42a11c4f8e0c822a2b03de4f20a5b409cd63b2eb311",
+  "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/nccl_tuned_4l4_20261115/peer_nccl": "ae318354b9391e501768cbcb355eac36c5058337631ba6c792b6d8cbf18dfe94",
+  "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/benchmarks/collectives/nccl_4l4_mpi_baseline.cu": "0788eeb120608200d31e782b41480d350235352baed81a1b4411a1f7937e05d5",
+  "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/nccl_tuned_4l4_20261115/peer_nccl.cu": "ca44629248b5e8c56d4a62845313a11a7228616c25b8c6e5a546f1b519cd9512",
+  "/home/zhongjie/third_party/nccl/build/lib/libnccl.so.2": "ad951367f06580b8b4597ef97772a1eda6bf7c0162967bcfef7efdc127ac5449"
+}

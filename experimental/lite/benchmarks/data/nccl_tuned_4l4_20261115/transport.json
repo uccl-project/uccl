@@ -1,0 +1,1424 @@
+[
+  {
+    "run": "calibrate_ce_buffer16m_allgather_0",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "calibrate_ce_buffer16m_allgather_1",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "calibrate_ce_buffer16m_allreduce_0",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "calibrate_ce_buffer16m_allreduce_1",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "calibrate_ce_buffer16m_reducescatter_0",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "calibrate_ce_buffer16m_reducescatter_1",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "calibrate_ce_buffer1m_allgather_0",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "calibrate_ce_buffer1m_allgather_1",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "calibrate_ce_buffer1m_allreduce_0",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "calibrate_ce_buffer1m_allreduce_1",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "calibrate_ce_buffer1m_reducescatter_0",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "calibrate_ce_buffer1m_reducescatter_1",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "calibrate_ce_buffer8m_allgather_0",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "calibrate_ce_buffer8m_allgather_1",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "calibrate_ce_buffer8m_allreduce_0",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "calibrate_ce_buffer8m_allreduce_1",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "calibrate_ce_buffer8m_channels8_allgather_0",
+    "paths": {
+      "P2P/CUMEM/CE": 32
+    }
+  },
+  {
+    "run": "calibrate_ce_buffer8m_channels8_allgather_1",
+    "paths": {
+      "P2P/CUMEM/CE": 32
+    }
+  },
+  {
+    "run": "calibrate_ce_buffer8m_channels8_allreduce_0",
+    "paths": {
+      "P2P/CUMEM/CE": 32
+    }
+  },
+  {
+    "run": "calibrate_ce_buffer8m_channels8_allreduce_1",
+    "paths": {
+      "P2P/CUMEM/CE": 32
+    }
+  },
+  {
+    "run": "calibrate_ce_buffer8m_channels8_reducescatter_0",
+    "paths": {
+      "P2P/CUMEM/CE": 32
+    }
+  },
+  {
+    "run": "calibrate_ce_buffer8m_channels8_reducescatter_1",
+    "paths": {
+      "P2P/CUMEM/CE": 32
+    }
+  },
+  {
+    "run": "calibrate_ce_buffer8m_reducescatter_0",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "calibrate_ce_buffer8m_reducescatter_1",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "calibrate_ce_channels2_allgather_0",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "calibrate_ce_channels2_allgather_1",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "calibrate_ce_channels2_allreduce_0",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "calibrate_ce_channels2_allreduce_1",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "calibrate_ce_channels2_reducescatter_0",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "calibrate_ce_channels2_reducescatter_1",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "calibrate_ce_channels4_allgather_0",
+    "paths": {
+      "P2P/CUMEM/CE": 16
+    }
+  },
+  {
+    "run": "calibrate_ce_channels4_allgather_1",
+    "paths": {
+      "P2P/CUMEM/CE": 16
+    }
+  },
+  {
+    "run": "calibrate_ce_channels4_allreduce_0",
+    "paths": {
+      "P2P/CUMEM/CE": 16
+    }
+  },
+  {
+    "run": "calibrate_ce_channels4_allreduce_1",
+    "paths": {
+      "P2P/CUMEM/CE": 16
+    }
+  },
+  {
+    "run": "calibrate_ce_channels4_reducescatter_0",
+    "paths": {
+      "P2P/CUMEM/CE": 16
+    }
+  },
+  {
+    "run": "calibrate_ce_channels4_reducescatter_1",
+    "paths": {
+      "P2P/CUMEM/CE": 16
+    }
+  },
+  {
+    "run": "calibrate_ce_channels8_allgather_0",
+    "paths": {
+      "P2P/CUMEM/CE": 32
+    }
+  },
+  {
+    "run": "calibrate_ce_channels8_allgather_1",
+    "paths": {
+      "P2P/CUMEM/CE": 32
+    }
+  },
+  {
+    "run": "calibrate_ce_channels8_allreduce_0",
+    "paths": {
+      "P2P/CUMEM/CE": 32
+    }
+  },
+  {
+    "run": "calibrate_ce_channels8_allreduce_1",
+    "paths": {
+      "P2P/CUMEM/CE": 32
+    }
+  },
+  {
+    "run": "calibrate_ce_channels8_reducescatter_0",
+    "paths": {
+      "P2P/CUMEM/CE": 32
+    }
+  },
+  {
+    "run": "calibrate_ce_channels8_reducescatter_1",
+    "paths": {
+      "P2P/CUMEM/CE": 32
+    }
+  },
+  {
+    "run": "calibrate_ce_simple_allgather_0",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "calibrate_ce_simple_allgather_1",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "calibrate_ce_simple_allreduce_0",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "calibrate_ce_simple_allreduce_1",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "calibrate_ce_simple_reducescatter_0",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "calibrate_ce_simple_reducescatter_1",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_buffer1m_allgather_0",
+    "paths": {
+      "P2P/direct pointer": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_buffer1m_allgather_1",
+    "paths": {
+      "P2P/direct pointer": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_buffer1m_allreduce_0",
+    "paths": {
+      "P2P/CUMEM": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_buffer1m_allreduce_1",
+    "paths": {
+      "P2P/CUMEM": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_buffer1m_reducescatter_0",
+    "paths": {
+      "P2P/direct pointer": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_buffer1m_reducescatter_1",
+    "paths": {
+      "P2P/direct pointer": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_buffer8m_allgather_0",
+    "paths": {
+      "P2P/direct pointer": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_buffer8m_allgather_1",
+    "paths": {
+      "P2P/direct pointer": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_buffer8m_allreduce_0",
+    "paths": {
+      "P2P/CUMEM": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_buffer8m_allreduce_1",
+    "paths": {
+      "P2P/CUMEM": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_buffer8m_reducescatter_0",
+    "paths": {
+      "P2P/direct pointer": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_buffer8m_reducescatter_1",
+    "paths": {
+      "P2P/direct pointer": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_channels4_allgather_0",
+    "paths": {
+      "P2P/direct pointer": 16
+    }
+  },
+  {
+    "run": "calibrate_sm_channels4_allgather_1",
+    "paths": {
+      "P2P/direct pointer": 16
+    }
+  },
+  {
+    "run": "calibrate_sm_channels4_allreduce_0",
+    "paths": {
+      "P2P/CUMEM": 16
+    }
+  },
+  {
+    "run": "calibrate_sm_channels4_allreduce_1",
+    "paths": {
+      "P2P/CUMEM": 16
+    }
+  },
+  {
+    "run": "calibrate_sm_channels4_reducescatter_0",
+    "paths": {
+      "P2P/direct pointer": 16
+    }
+  },
+  {
+    "run": "calibrate_sm_channels4_reducescatter_1",
+    "paths": {
+      "P2P/direct pointer": 16
+    }
+  },
+  {
+    "run": "calibrate_sm_channels8_allgather_0",
+    "paths": {
+      "P2P/direct pointer": 32
+    }
+  },
+  {
+    "run": "calibrate_sm_channels8_allgather_1",
+    "paths": {
+      "P2P/direct pointer": 32
+    }
+  },
+  {
+    "run": "calibrate_sm_channels8_allreduce_0",
+    "paths": {
+      "P2P/CUMEM": 32
+    }
+  },
+  {
+    "run": "calibrate_sm_channels8_allreduce_1",
+    "paths": {
+      "P2P/CUMEM": 32
+    }
+  },
+  {
+    "run": "calibrate_sm_channels8_reducescatter_0",
+    "paths": {
+      "P2P/direct pointer": 32
+    }
+  },
+  {
+    "run": "calibrate_sm_channels8_reducescatter_1",
+    "paths": {
+      "P2P/direct pointer": 32
+    }
+  },
+  {
+    "run": "calibrate_sm_default_allgather_0",
+    "paths": {
+      "SHM/direct/direct": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_default_allgather_1",
+    "paths": {
+      "SHM/direct/direct": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_default_allreduce_0",
+    "paths": {
+      "SHM/direct/direct": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_default_allreduce_1",
+    "paths": {
+      "SHM/direct/direct": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_default_reducescatter_0",
+    "paths": {
+      "SHM/direct/direct": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_default_reducescatter_1",
+    "paths": {
+      "SHM/direct/direct": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_native_buffer1m_allgather_0",
+    "paths": {
+      "SHM/direct/direct": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_native_buffer1m_allgather_1",
+    "paths": {
+      "SHM/direct/direct": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_native_buffer1m_allreduce_0",
+    "paths": {
+      "SHM/direct/direct": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_native_buffer1m_allreduce_1",
+    "paths": {
+      "SHM/direct/direct": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_native_buffer1m_reducescatter_0",
+    "paths": {
+      "SHM/direct/direct": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_native_buffer1m_reducescatter_1",
+    "paths": {
+      "SHM/direct/direct": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_native_buffer8m_allgather_0",
+    "paths": {
+      "SHM/direct/direct": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_native_buffer8m_allgather_1",
+    "paths": {
+      "SHM/direct/direct": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_native_buffer8m_allreduce_0",
+    "paths": {
+      "SHM/direct/direct": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_native_buffer8m_allreduce_1",
+    "paths": {
+      "SHM/direct/direct": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_native_buffer8m_reducescatter_0",
+    "paths": {
+      "SHM/direct/direct": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_native_buffer8m_reducescatter_1",
+    "paths": {
+      "SHM/direct/direct": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_native_channels4_allgather_0",
+    "paths": {
+      "SHM/direct/direct": 16
+    }
+  },
+  {
+    "run": "calibrate_sm_native_channels4_allgather_1",
+    "paths": {
+      "SHM/direct/direct": 16
+    }
+  },
+  {
+    "run": "calibrate_sm_native_channels4_allreduce_0",
+    "paths": {
+      "SHM/direct/direct": 16
+    }
+  },
+  {
+    "run": "calibrate_sm_native_channels4_allreduce_1",
+    "paths": {
+      "SHM/direct/direct": 16
+    }
+  },
+  {
+    "run": "calibrate_sm_native_channels4_reducescatter_0",
+    "paths": {
+      "SHM/direct/direct": 16
+    }
+  },
+  {
+    "run": "calibrate_sm_native_channels4_reducescatter_1",
+    "paths": {
+      "SHM/direct/direct": 16
+    }
+  },
+  {
+    "run": "calibrate_sm_native_channels8_allgather_0",
+    "paths": {
+      "SHM/direct/direct": 32
+    }
+  },
+  {
+    "run": "calibrate_sm_native_channels8_allgather_1",
+    "paths": {
+      "SHM/direct/direct": 32
+    }
+  },
+  {
+    "run": "calibrate_sm_native_channels8_allreduce_0",
+    "paths": {
+      "SHM/direct/direct": 32
+    }
+  },
+  {
+    "run": "calibrate_sm_native_channels8_allreduce_1",
+    "paths": {
+      "SHM/direct/direct": 32
+    }
+  },
+  {
+    "run": "calibrate_sm_native_channels8_reducescatter_0",
+    "paths": {
+      "SHM/direct/direct": 32
+    }
+  },
+  {
+    "run": "calibrate_sm_native_channels8_reducescatter_1",
+    "paths": {
+      "SHM/direct/direct": 32
+    }
+  },
+  {
+    "run": "calibrate_sm_p2p_allgather_0",
+    "paths": {
+      "P2P/direct pointer": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_p2p_allgather_1",
+    "paths": {
+      "P2P/direct pointer": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_p2p_allreduce_0",
+    "paths": {
+      "P2P/CUMEM": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_p2p_allreduce_1",
+    "paths": {
+      "P2P/CUMEM": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_p2p_reducescatter_0",
+    "paths": {
+      "P2P/direct pointer": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_p2p_reducescatter_1",
+    "paths": {
+      "P2P/direct pointer": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_peer_read_allgather_0",
+    "paths": {
+      "P2P/direct pointer/read": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_peer_read_allgather_1",
+    "paths": {
+      "P2P/direct pointer/read": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_peer_read_allreduce_0",
+    "paths": {
+      "P2P/CUMEM/read": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_peer_read_allreduce_1",
+    "paths": {
+      "P2P/CUMEM/read": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_peer_read_reducescatter_0",
+    "paths": {
+      "P2P/direct pointer/read": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_peer_read_reducescatter_1",
+    "paths": {
+      "P2P/direct pointer/read": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_ring_simple_allgather_0",
+    "paths": {
+      "P2P/direct pointer": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_ring_simple_allgather_1",
+    "paths": {
+      "P2P/direct pointer": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_ring_simple_allreduce_0",
+    "paths": {
+      "P2P/CUMEM": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_ring_simple_allreduce_1",
+    "paths": {
+      "P2P/CUMEM": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_ring_simple_reducescatter_0",
+    "paths": {
+      "P2P/direct pointer": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_ring_simple_reducescatter_1",
+    "paths": {
+      "P2P/direct pointer": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_threads128_allgather_0",
+    "paths": {
+      "P2P/direct pointer": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_threads128_allgather_1",
+    "paths": {
+      "P2P/direct pointer": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_threads128_allreduce_0",
+    "paths": {
+      "P2P/CUMEM": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_threads128_allreduce_1",
+    "paths": {
+      "P2P/CUMEM": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_threads128_reducescatter_0",
+    "paths": {
+      "P2P/direct pointer": 8
+    }
+  },
+  {
+    "run": "calibrate_sm_threads128_reducescatter_1",
+    "paths": {
+      "P2P/direct pointer": 8
+    }
+  },
+  {
+    "run": "confirm_sm_default_allgather_0",
+    "paths": {
+      "SHM/direct/direct": 8
+    }
+  },
+  {
+    "run": "confirm_sm_default_allgather_1",
+    "paths": {
+      "SHM/direct/direct": 8
+    }
+  },
+  {
+    "run": "confirm_sm_default_allgather_2",
+    "paths": {
+      "SHM/direct/direct": 8
+    }
+  },
+  {
+    "run": "confirm_sm_default_allreduce_0",
+    "paths": {
+      "SHM/direct/direct": 8
+    }
+  },
+  {
+    "run": "confirm_sm_default_allreduce_1",
+    "paths": {
+      "SHM/direct/direct": 8
+    }
+  },
+  {
+    "run": "confirm_sm_default_allreduce_2",
+    "paths": {
+      "SHM/direct/direct": 8
+    }
+  },
+  {
+    "run": "confirm_sm_default_reducescatter_0",
+    "paths": {
+      "SHM/direct/direct": 8
+    }
+  },
+  {
+    "run": "confirm_sm_default_reducescatter_1",
+    "paths": {
+      "SHM/direct/direct": 8
+    }
+  },
+  {
+    "run": "confirm_sm_default_reducescatter_2",
+    "paths": {
+      "SHM/direct/direct": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_buffer16m_allgather_0",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_buffer16m_allgather_1",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_buffer16m_allgather_2",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_buffer16m_allreduce_0",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_buffer16m_allreduce_1",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_buffer16m_allreduce_2",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_buffer16m_reducescatter_0",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_buffer16m_reducescatter_1",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_buffer16m_reducescatter_2",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_buffer1m_allgather_0",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_buffer1m_allgather_1",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_buffer1m_allgather_2",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_buffer1m_allreduce_0",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_buffer1m_allreduce_1",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_buffer1m_allreduce_2",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_buffer8m_allreduce_0",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_buffer8m_allreduce_1",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_buffer8m_allreduce_2",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_buffer8m_reducescatter_0",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_buffer8m_reducescatter_1",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_buffer8m_reducescatter_2",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_channels2_allgather_0",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_channels2_allgather_1",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_channels2_allgather_2",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_channels2_allreduce_0",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_channels2_allreduce_1",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_channels2_allreduce_2",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_channels2_reducescatter_0",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_channels2_reducescatter_1",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_channels2_reducescatter_2",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_channels4_allgather_0",
+    "paths": {
+      "P2P/CUMEM/CE": 16
+    }
+  },
+  {
+    "run": "evaluate_ce_channels4_allgather_1",
+    "paths": {
+      "P2P/CUMEM/CE": 16
+    }
+  },
+  {
+    "run": "evaluate_ce_channels4_allgather_2",
+    "paths": {
+      "P2P/CUMEM/CE": 16
+    }
+  },
+  {
+    "run": "evaluate_ce_channels8_allreduce_0",
+    "paths": {
+      "P2P/CUMEM/CE": 32
+    }
+  },
+  {
+    "run": "evaluate_ce_channels8_allreduce_1",
+    "paths": {
+      "P2P/CUMEM/CE": 32
+    }
+  },
+  {
+    "run": "evaluate_ce_channels8_allreduce_2",
+    "paths": {
+      "P2P/CUMEM/CE": 32
+    }
+  },
+  {
+    "run": "evaluate_ce_simple_allgather_0",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_simple_allgather_1",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_simple_allgather_2",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_simple_allreduce_0",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_simple_allreduce_1",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_simple_allreduce_2",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_simple_reducescatter_0",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_simple_reducescatter_1",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_ce_simple_reducescatter_2",
+    "paths": {
+      "P2P/CUMEM/CE": 8
+    }
+  },
+  {
+    "run": "evaluate_sm_buffer1m_allreduce_0",
+    "paths": {
+      "P2P/CUMEM": 8
+    }
+  },
+  {
+    "run": "evaluate_sm_buffer1m_allreduce_1",
+    "paths": {
+      "P2P/CUMEM": 8
+    }
+  },
+  {
+    "run": "evaluate_sm_buffer1m_allreduce_2",
+    "paths": {
+      "P2P/CUMEM": 8
+    }
+  },
+  {
+    "run": "evaluate_sm_buffer1m_reducescatter_0",
+    "paths": {
+      "P2P/direct pointer": 8
+    }
+  },
+  {
+    "run": "evaluate_sm_buffer1m_reducescatter_1",
+    "paths": {
+      "P2P/direct pointer": 8
+    }
+  },
+  {
+    "run": "evaluate_sm_buffer1m_reducescatter_2",
+    "paths": {
+      "P2P/direct pointer": 8
+    }
+  },
+  {
+    "run": "evaluate_sm_buffer8m_allgather_0",
+    "paths": {
+      "P2P/direct pointer": 8
+    }
+  },
+  {
+    "run": "evaluate_sm_buffer8m_allgather_1",
+    "paths": {
+      "P2P/direct pointer": 8
+    }
+  },
+  {
+    "run": "evaluate_sm_buffer8m_allgather_2",
+    "paths": {
+      "P2P/direct pointer": 8
+    }
+  },
+  {
+    "run": "evaluate_sm_buffer8m_allreduce_0",
+    "paths": {
+      "P2P/CUMEM": 8
+    }
+  },
+  {
+    "run": "evaluate_sm_buffer8m_allreduce_1",
+    "paths": {
+      "P2P/CUMEM": 8
+    }
+  },
+  {
+    "run": "evaluate_sm_buffer8m_allreduce_2",
+    "paths": {
+      "P2P/CUMEM": 8
+    }
+  },
+  {
+    "run": "evaluate_sm_channels4_allgather_0",
+    "paths": {
+      "P2P/direct pointer": 16
+    }
+  },
+  {
+    "run": "evaluate_sm_channels4_allgather_1",
+    "paths": {
+      "P2P/direct pointer": 16
+    }
+  },
+  {
+    "run": "evaluate_sm_channels4_allgather_2",
+    "paths": {
+      "P2P/direct pointer": 16
+    }
+  },
+  {
+    "run": "evaluate_sm_channels4_allreduce_0",
+    "paths": {
+      "P2P/CUMEM": 16
+    }
+  },
+  {
+    "run": "evaluate_sm_channels4_allreduce_1",
+    "paths": {
+      "P2P/CUMEM": 16
+    }
+  },
+  {
+    "run": "evaluate_sm_channels4_allreduce_2",
+    "paths": {
+      "P2P/CUMEM": 16
+    }
+  },
+  {
+    "run": "evaluate_sm_channels4_reducescatter_0",
+    "paths": {
+      "P2P/direct pointer": 16
+    }
+  },
+  {
+    "run": "evaluate_sm_channels4_reducescatter_1",
+    "paths": {
+      "P2P/direct pointer": 16
+    }
+  },
+  {
+    "run": "evaluate_sm_channels4_reducescatter_2",
+    "paths": {
+      "P2P/direct pointer": 16
+    }
+  },
+  {
+    "run": "evaluate_sm_channels8_allgather_0",
+    "paths": {
+      "P2P/direct pointer": 32
+    }
+  },
+  {
+    "run": "evaluate_sm_channels8_allgather_1",
+    "paths": {
+      "P2P/direct pointer": 32
+    }
+  },
+  {
+    "run": "evaluate_sm_channels8_allgather_2",
+    "paths": {
+      "P2P/direct pointer": 32
+    }
+  },
+  {
+    "run": "evaluate_sm_channels8_allreduce_0",
+    "paths": {
+      "P2P/CUMEM": 32
+    }
+  },
+  {
+    "run": "evaluate_sm_channels8_allreduce_1",
+    "paths": {
+      "P2P/CUMEM": 32
+    }
+  },
+  {
+    "run": "evaluate_sm_channels8_allreduce_2",
+    "paths": {
+      "P2P/CUMEM": 32
+    }
+  },
+  {
+    "run": "evaluate_sm_default_allgather_0",
+    "paths": {
+      "SHM/direct/direct": 8
+    }
+  },
+  {
+    "run": "evaluate_sm_default_allgather_1",
+    "paths": {
+      "SHM/direct/direct": 8
+    }
+  },
+  {
+    "run": "evaluate_sm_default_allgather_2",
+    "paths": {
+      "SHM/direct/direct": 8
+    }
+  },
+  {
+    "run": "evaluate_sm_default_allreduce_0",
+    "paths": {
+      "SHM/direct/direct": 8
+    }
+  },
+  {
+    "run": "evaluate_sm_default_allreduce_1",
+    "paths": {
+      "SHM/direct/direct": 8
+    }
+  },
+  {
+    "run": "evaluate_sm_default_allreduce_2",
+    "paths": {
+      "SHM/direct/direct": 8
+    }
+  },
+  {
+    "run": "evaluate_sm_default_reducescatter_0",
+    "paths": {
+      "SHM/direct/direct": 8
+    }
+  },
+  {
+    "run": "evaluate_sm_default_reducescatter_1",
+    "paths": {
+      "SHM/direct/direct": 8
+    }
+  },
+  {
+    "run": "evaluate_sm_default_reducescatter_2",
+    "paths": {
+      "SHM/direct/direct": 8
+    }
+  },
+  {
+    "run": "evaluate_sm_native_channels4_allreduce_0",
+    "paths": {
+      "SHM/direct/direct": 16
+    }
+  },
+  {
+    "run": "evaluate_sm_native_channels4_allreduce_1",
+    "paths": {
+      "SHM/direct/direct": 16
+    }
+  },
+  {
+    "run": "evaluate_sm_native_channels4_allreduce_2",
+    "paths": {
+      "SHM/direct/direct": 16
+    }
+  },
+  {
+    "run": "evaluate_sm_native_channels8_allreduce_0",
+    "paths": {
+      "SHM/direct/direct": 32
+    }
+  },
+  {
+    "run": "evaluate_sm_native_channels8_allreduce_1",
+    "paths": {
+      "SHM/direct/direct": 32
+    }
+  },
+  {
+    "run": "evaluate_sm_native_channels8_allreduce_2",
+    "paths": {
+      "SHM/direct/direct": 32
+    }
+  },
+  {
+    "run": "evaluate_sm_p2p_allreduce_0",
+    "paths": {
+      "P2P/CUMEM": 8
+    }
+  },
+  {
+    "run": "evaluate_sm_p2p_allreduce_1",
+    "paths": {
+      "P2P/CUMEM": 8
+    }
+  },
+  {
+    "run": "evaluate_sm_p2p_allreduce_2",
+    "paths": {
+      "P2P/CUMEM": 8
+    }
+  },
+  {
+    "run": "evaluate_sm_p2p_reducescatter_0",
+    "paths": {
+      "P2P/direct pointer": 8
+    }
+  },
+  {
+    "run": "evaluate_sm_p2p_reducescatter_1",
+    "paths": {
+      "P2P/direct pointer": 8
+    }
+  },
+  {
+    "run": "evaluate_sm_p2p_reducescatter_2",
+    "paths": {
+      "P2P/direct pointer": 8
+    }
+  },
+  {
+    "run": "evaluate_sm_threads128_allgather_0",
+    "paths": {
+      "P2P/direct pointer": 8
+    }
+  },
+  {
+    "run": "evaluate_sm_threads128_allgather_1",
+    "paths": {
+      "P2P/direct pointer": 8
+    }
+  },
+  {
+    "run": "evaluate_sm_threads128_allgather_2",
+    "paths": {
+      "P2P/direct pointer": 8
+    }
+  },
+  {
+    "run": "evaluate_sm_threads128_allreduce_0",
+    "paths": {
+      "P2P/CUMEM": 8
+    }
+  },
+  {
+    "run": "evaluate_sm_threads128_allreduce_1",
+    "paths": {
+      "P2P/CUMEM": 8
+    }
+  },
+  {
+    "run": "evaluate_sm_threads128_allreduce_2",
+    "paths": {
+      "P2P/CUMEM": 8
+    }
+  },
+  {
+    "run": "evaluate_sm_threads128_reducescatter_0",
+    "paths": {
+      "P2P/direct pointer": 8
+    }
+  },
+  {
+    "run": "evaluate_sm_threads128_reducescatter_1",
+    "paths": {
+      "P2P/direct pointer": 8
+    }
+  },
+  {
+    "run": "evaluate_sm_threads128_reducescatter_2",
+    "paths": {
+      "P2P/direct pointer": 8
+    }
+  }
+]

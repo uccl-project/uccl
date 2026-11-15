@@ -8,9 +8,9 @@ from statistics import mean, median
 
 import matplotlib
 matplotlib.use('Agg')
-import matplotlib.pyplot as plt
 
-from figure_style import clean_axis, configure, save as save_figure
+from figure_style import configure
+from plot_4l4_collectives import plot, size_name
 
 root = Path(__file__).resolve().parents[1]
 data = root / 'benchmarks/data/small_medium_4l4_20261113'
@@ -73,50 +73,8 @@ for row in ar:
         row[key] = float(row[key])
 assert [r['bytes'] for r in ar] == [1024<<i for i in range(21)]
 
-def plot(rows, name, timer, factor):
-    by_size = {row['bytes']: row for row in rows}
-    assert len(by_size) == len(rows), f'duplicate sizes: {name}'
-    latency_sizes = [1 << power for power in range(10, 21)]
-    throughput_sizes = [1 << power for power in range(20, 31)]
-    assert all(size in by_size for size in latency_sizes + throughput_sizes)
-    fig, axes = plt.subplots(1, 2, figsize=(10.8, 4.4))
-    fig.subplots_adjust(left=.085, right=.985, top=.77, bottom=.20, wspace=.28)
-    for ax, sizes, measure, ylabel, ticks in (
-        (axes[0], latency_sizes, lambda size, us: us, 'Latency (µs)',
-         [1 << power for power in (10, 12, 14, 16, 18, 20)]),
-        (axes[1], throughput_sizes, lambda size, us: factor * size / us / 1000,
-         'Bus throughput (GB/s)',
-         [1 << power for power in (20, 22, 24, 26, 28, 30)]),
-    ):
-        clean_axis(ax)
-        ax.set_xscale('log', base=2)
-        ax.set_xlim(sizes[0] / 1.35, sizes[-1] * 1.35)
-        ax.set_xticks(ticks, [size_name(size).replace(' KiB', 'K').replace(' MiB', 'M').replace(' GiB', 'G')
-                             for size in ticks])
-        ax.set_xlabel('Complete tensor bytes per rank')
-        ax.set_ylabel(ylabel)
-        upper = 0.0
-        for key, label, color, marker, style in (
-            ('nccl_median_us', 'NCCL 2.28.7', '#D65A00', 's', (0, (5, 2.5))),
-            ('uccl_median_us', 'UCCL Lite', '#0068B5', 'o', '-'),
-        ):
-            values = [measure(size, by_size[size][key]) for size in sizes]
-            assert len(values) == 11 and all(math.isfinite(v) and v > 0 for v in values)
-            upper = max(upper, *values)
-            ax.plot(sizes, values, color=color, linewidth=2.8, marker=marker,
-                    linestyle=style, markersize=6, markeredgecolor='white',
-                    markeredgewidth=.7, label=label)
-        ax.set_ylim(0, upper * 1.13)
-    handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(handles[::-1], labels[::-1], loc='upper center',
-               bbox_to_anchor=(.5, .995), ncol=2, frameon=False,
-               fontsize=12.5, handlelength=2.8, columnspacing=3, markerscale=1.2)
-    fig.text(.5, .865, f'4×L4 FP32 {name} · {timer}', ha='center', fontsize=10.5)
-    save_figure(fig, f'collectives-4l4-{name.lower()}-all-sizes', preview=True)
 
 
-def size_name(n):
-    return f'{n//2**30} GiB' if n>=2**30 else f'{n//2**20} MiB' if n>=2**20 else f'{n//1024} KiB' if n>=1024 else f'{n} B'
 def cell(row):
     a,b=row['uccl_median_us'],row['nccl_median_us']
     return f'{a:,.2f} / {b:,.2f}'+(' †' if a>b else '')

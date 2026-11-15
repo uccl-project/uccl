@@ -1,0 +1,127 @@
+operation,bytes,family,config,calibration_us,calibrated_configuration,selection_reason,measurement_stage,run1_us,run2_us,run3_us
+allreduce,1024,sm,sm_default,18.047800000000002,sm_buffer1m,default fallback: validation gain not repeatable,confirm,20.0181,21.2535,20.2449
+allreduce,1024,ce,ce_channels8,104.92685,ce_channels8,calibrated configuration,evaluate,104.8461,105.9354,105.3277
+allreduce,2048,sm,sm_channels4,17.79615,sm_channels4,calibrated configuration,evaluate,16.8684,16.511,16.7011
+allreduce,2048,ce,ce_channels8,102.99855,ce_channels8,calibrated configuration,evaluate,104.2524,115.0572,105.1198
+allreduce,4096,sm,sm_buffer1m,18.18775,sm_buffer1m,calibrated configuration,evaluate,18.987,17.862099999999998,20.009
+allreduce,4096,ce,ce_buffer16m,104.213,ce_buffer16m,calibrated configuration,evaluate,101.0509,110.9695,101.313
+allreduce,8192,sm,sm_channels8,18.52255,sm_channels8,calibrated configuration,evaluate,17.808,17.6439,17.512
+allreduce,8192,ce,ce_simple,109.03200000000001,ce_simple,calibrated configuration,evaluate,104.353,106.3286,105.29599999999999
+allreduce,16384,sm,sm_buffer1m,19.3671,sm_buffer1m,calibrated configuration,evaluate,18.9152,18.8022,21.6604
+allreduce,16384,ce,ce_buffer16m,112.91945,ce_buffer16m,calibrated configuration,evaluate,102.5583,119.5527,107.6335
+allreduce,32768,sm,sm_buffer8m,21.92375,sm_buffer8m,calibrated configuration,evaluate,21.1784,21.2028,21.0168
+allreduce,32768,ce,ce_buffer1m,116.82695,ce_buffer1m,calibrated configuration,evaluate,112.00919999999999,121.7229,113.4814
+allreduce,65536,sm,sm_p2p,26.0208,sm_p2p,calibrated configuration,evaluate,25.6968,24.7139,25.2428
+allreduce,65536,ce,ce_buffer1m,169.61939999999998,ce_buffer1m,calibrated configuration,evaluate,152.6183,187.6637,173.2261
+allreduce,131072,sm,sm_p2p,36.7094,sm_p2p,calibrated configuration,evaluate,36.418,35.3825,35.7456
+allreduce,131072,ce,ce_simple,174.21805,ce_simple,calibrated configuration,evaluate,154.26,178.63139999999999,182.1539
+allreduce,262144,sm,sm_native_channels8,58.598150000000004,sm_native_channels8,calibrated configuration,evaluate,54.4979,53.1467,54.6794
+allreduce,262144,ce,ce_simple,175.0908,ce_simple,calibrated configuration,evaluate,158.2762,182.3084,186.57569999999998
+allreduce,524288,sm,sm_threads128,78.2503,sm_threads128,calibrated configuration,evaluate,77.8779,76.9198,78.4335
+allreduce,524288,ce,ce_buffer16m,186.11325,ce_buffer16m,calibrated configuration,evaluate,169.2343,192.7904,184.1946
+allreduce,1048576,sm,sm_default,121.1191,sm_threads128,default fallback: validation gain not repeatable,confirm,140.9743,137.1954,143.8019
+allreduce,1048576,ce,ce_buffer16m,223.7123,ce_buffer16m,calibrated configuration,evaluate,211.76409999999998,227.6671,230.811
+allreduce,2097152,sm,sm_threads128,207.8947,sm_threads128,calibrated configuration,evaluate,209.1212,210.8705,210.7263
+allreduce,2097152,ce,ce_simple,287.87215000000003,ce_simple,calibrated configuration,evaluate,287.9165,287.7817,288.0012
+allreduce,4194304,sm,sm_threads128,376.6635,sm_threads128,calibrated configuration,evaluate,375.4864,376.0455,374.4606
+allreduce,4194304,ce,ce_buffer16m,439.7876,ce_buffer16m,calibrated configuration,evaluate,437.2732,439.2865,441.1616
+allreduce,8388608,sm,sm_native_channels4,710.91885,sm_native_channels4,calibrated configuration,evaluate,719.2278,712.4756,714.818
+allreduce,8388608,ce,ce_buffer16m,757.3139,ce_buffer16m,calibrated configuration,evaluate,756.7888,973.2617,769.556
+allreduce,16777216,sm,sm_buffer1m,1442.4963,sm_buffer1m,calibrated configuration,evaluate,1432.0225,1434.9271,1443.7112
+allreduce,16777216,ce,ce_channels2,1391.9297000000001,ce_channels2,calibrated configuration,evaluate,1388.0964,1390.5302,1387.7329
+allreduce,33554432,sm,sm_default,2845.5206,sm_buffer1m,default fallback: validation gain not repeatable,confirm,3057.6284,3046.8582,3020.7742
+allreduce,33554432,ce,ce_buffer16m,2662.9148,ce_buffer16m,calibrated configuration,evaluate,2878.5852,2654.9142,2787.8849
+allreduce,67108864,sm,sm_default,5774.8240000000005,sm_default,calibrated configuration,confirm,5805.6908,5802.7373,5808.6517
+allreduce,67108864,ce,ce_buffer16m,5208.98695,ce_buffer16m,calibrated configuration,evaluate,5204.0686000000005,5205.6579,5205.2303
+allreduce,134217728,sm,sm_default,11350.759600000001,sm_threads128,default fallback: validation gain not repeatable,confirm,11875.5891,11490.6204,11770.1631
+allreduce,134217728,ce,ce_buffer8m,10363.6792,ce_buffer8m,calibrated configuration,evaluate,10349.7423,10596.5741,10317.7912
+allreduce,268435456,sm,sm_default,22819.02015,sm_default,calibrated configuration,confirm,22815.7556,22758.5552,22656.8291
+allreduce,268435456,ce,ce_buffer16m,20278.02425,ce_buffer16m,calibrated configuration,evaluate,20231.824099999998,20267.5835,20337.7573
+allreduce,536870912,sm,sm_default,45497.224449999994,sm_default,calibrated configuration,confirm,45591.0879,45441.1589,45133.3686
+allreduce,536870912,ce,ce_buffer16m,40320.14565,ce_buffer16m,calibrated configuration,evaluate,40342.003000000004,40340.2816,40270.2947
+allreduce,1073741824,sm,sm_default,90529.7898,sm_default,calibrated configuration,confirm,90919.3323,90741.5245,90144.8815
+allreduce,1073741824,ce,ce_buffer16m,80463.17765,ce_buffer16m,calibrated configuration,evaluate,80266.5169,80503.4892,80183.854
+allgather,1024,sm,sm_channels8,27.995199999999997,sm_channels8,calibrated configuration,evaluate,27.1328,26.6528,25.8784
+allgather,1024,ce,ce_buffer1m,94.49119999999999,ce_buffer1m,calibrated configuration,evaluate,86.528,115.056,110.8544
+allgather,2048,sm,sm_default,27.9328,sm_threads128,default fallback: validation gain not repeatable,confirm,27.7152,27.9584,27.6288
+allgather,2048,ce,ce_simple,100.0096,ce_simple,calibrated configuration,evaluate,87.9488,84.32000000000001,108.0192
+allgather,4096,sm,sm_default,27.592,sm_threads128,default fallback: validation gain not repeatable,confirm,27.276799999999998,27.2928,27.8496
+allgather,4096,ce,ce_buffer1m,101.50880000000001,ce_buffer1m,calibrated configuration,evaluate,86.9984,109.2064,104.99199999999999
+allgather,8192,sm,sm_channels4,28.216,sm_channels4,calibrated configuration,evaluate,27.3184,39.3216,26.6976
+allgather,8192,ce,ce_buffer1m,105.26239999999999,ce_buffer1m,calibrated configuration,evaluate,90.368,113.9264,109.2224
+allgather,16384,sm,sm_default,29.3072,sm_threads128,default fallback: validation gain not repeatable,confirm,29.6416,29.4624,29.689600000000002
+allgather,16384,ce,ce_buffer1m,107.104,ce_buffer1m,calibrated configuration,evaluate,90.4384,111.28960000000001,111.2768
+allgather,32768,sm,sm_channels4,30.1792,sm_channels4,calibrated configuration,evaluate,28.784,39.1776,29.488
+allgather,32768,ce,ce_buffer1m,113.08,ce_buffer1m,calibrated configuration,evaluate,94.9184,114.1312,114.5856
+allgather,65536,sm,sm_default,33.4576,sm_buffer8m,default fallback: validation gain not repeatable,confirm,33.5008,33.6192,33.8816
+allgather,65536,ce,ce_channels4,151.9024,ce_channels4,calibrated configuration,evaluate,164.1536,164.752,142.9056
+allgather,131072,sm,sm_default,38.6064,sm_buffer8m,default fallback: validation gain not repeatable,confirm,40.4256,39.8496,40.0864
+allgather,131072,ce,ce_channels2,160.5552,ce_channels2,calibrated configuration,evaluate,130.6208,137.1584,153.9264
+allgather,262144,sm,sm_buffer8m,48.5632,sm_buffer8m,calibrated configuration,evaluate,47.2576,47.6096,49.068799999999996
+allgather,262144,ce,ce_channels2,160.3472,ce_channels2,calibrated configuration,evaluate,133.9168,136.0608,155.312
+allgather,524288,sm,sm_threads128,65.44,sm_threads128,calibrated configuration,evaluate,63.5264,64.2656,64.0608
+allgather,524288,ce,ce_buffer16m,171.9328,ce_buffer16m,calibrated configuration,evaluate,152.9792,155.1968,167.4784
+allgather,1048576,sm,sm_threads128,85.9168,sm_threads128,calibrated configuration,evaluate,83.99040000000001,84.5216,84.1408
+allgather,1048576,ce,ce_buffer16m,178.5872,ce_buffer16m,calibrated configuration,evaluate,167.9008,169.8112,170.3904
+allgather,2097152,sm,sm_threads128,130.5152,sm_threads128,calibrated configuration,evaluate,129.5808,129.6064,129.4464
+allgather,2097152,ce,ce_channels2,225.01600000000002,ce_channels2,calibrated configuration,evaluate,205.7664,212.2496,221.9648
+allgather,4194304,sm,sm_threads128,215.3472,sm_threads128,calibrated configuration,evaluate,214.5504,215.3088,214.00639999999999
+allgather,4194304,ce,ce_buffer1m,281.9104,ce_buffer1m,calibrated configuration,evaluate,277.952,286.9024,284.2816
+allgather,8388608,sm,sm_threads128,396.5312,sm_threads128,calibrated configuration,evaluate,394.6816,393.472,393.584
+allgather,8388608,ce,ce_channels2,456.51840000000004,ce_channels2,calibrated configuration,evaluate,444.6944,454.59839999999997,464.6496
+allgather,16777216,sm,sm_default,778.3968,sm_default,calibrated configuration,confirm,784.88,777.5776,776.0096
+allgather,16777216,ce,ce_channels2,797.9328,ce_channels2,calibrated configuration,evaluate,775.9424,800.96,798.7904
+allgather,33554432,sm,sm_default,1523.8144,sm_default,calibrated configuration,confirm,1520.0608,1527.9904,1516.7968
+allgather,33554432,ce,ce_channels4,1495.1808,ce_channels4,calibrated configuration,evaluate,1515.8976,1531.3312,1545.3088
+allgather,67108864,sm,sm_default,3006.1936,sm_default,calibrated configuration,confirm,3022.5984,3012.6208,3011.0432
+allgather,67108864,ce,ce_channels4,2808.2272000000003,ce_channels4,calibrated configuration,evaluate,2926.4575999999997,2934.7136,2922.6400000000003
+allgather,134217728,sm,sm_default,5947.7392,sm_default,calibrated configuration,confirm,5967.2704,5959.7504,5956.352
+allgather,134217728,ce,ce_buffer16m,5390.7168,ce_buffer16m,calibrated configuration,evaluate,5405.3568,5390.3936,5413.7568
+allgather,268435456,sm,sm_default,11823.5872,sm_default,calibrated configuration,confirm,11889.1392,11862.2848,11864.1504
+allgather,268435456,ce,ce_buffer16m,10475.4256,ce_buffer16m,calibrated configuration,evaluate,10426.0032,10474.3136,10395.8176
+allgather,536870912,sm,sm_default,23583.7741,sm_default,calibrated configuration,confirm,23703.2,23634.124799999998,23639.9902
+allgather,536870912,ce,ce_buffer16m,20609.5169,ce_buffer16m,calibrated configuration,evaluate,20500.3196,20587.795299999998,20371.2159
+allgather,1073741824,sm,sm_default,47217.145000000004,sm_default,calibrated configuration,confirm,48689.9001,47214.2402,47204.489799999996
+allgather,1073741824,ce,ce_buffer16m,40712.504,ce_buffer16m,calibrated configuration,evaluate,40636.515400000004,40640.6655,40687.0914
+reducescatter,1024,sm,sm_default,27.590400000000002,sm_p2p,default fallback: validation gain not repeatable,confirm,65.7152,28.512,59.6864
+reducescatter,1024,ce,ce_channels2,101.2208,ce_channels2,calibrated configuration,evaluate,111.4112,112.05760000000001,84.784
+reducescatter,2048,sm,sm_default,27.4912,sm_p2p,default fallback: validation gain not repeatable,confirm,55.6064,28.0608,54.32
+reducescatter,2048,ce,ce_buffer16m,105.9632,ce_buffer16m,calibrated configuration,evaluate,106.5728,91.6512,120.6976
+reducescatter,4096,sm,sm_default,27.4128,sm_p2p,default fallback: validation gain not repeatable,confirm,47.344,28.4288,46.7072
+reducescatter,4096,ce,ce_buffer8m,107.3712,ce_buffer8m,calibrated configuration,evaluate,89.392,86.992,102.97279999999999
+reducescatter,8192,sm,sm_default,28.598399999999998,sm_p2p,default fallback: validation gain not repeatable,confirm,42.6848,28.2848,40.336
+reducescatter,8192,ce,ce_buffer16m,110.4896,ce_buffer16m,calibrated configuration,evaluate,116.9216,96.7456,117.8368
+reducescatter,16384,sm,sm_default,29.4128,sm_p2p,default fallback: validation gain not repeatable,confirm,40.4672,29.0464,38.5952
+reducescatter,16384,ce,ce_buffer16m,111.06880000000001,ce_buffer16m,calibrated configuration,evaluate,119.952,97.84960000000001,116.05760000000001
+reducescatter,32768,sm,sm_default,29.9088,sm_p2p,default fallback: validation gain not repeatable,confirm,37.6512,30.5312,39.184
+reducescatter,32768,ce,ce_buffer16m,113.9152,ce_buffer16m,calibrated configuration,evaluate,117.184,102.6176,118.3008
+reducescatter,65536,sm,sm_default,32.616,sm_p2p,default fallback: validation gain not repeatable,confirm,38.9952,34.1312,41.6352
+reducescatter,65536,ce,ce_buffer16m,166.736,ce_buffer16m,calibrated configuration,evaluate,168.2464,148.5376,168.848
+reducescatter,131072,sm,sm_buffer1m,39.3008,sm_buffer1m,calibrated configuration,evaluate,37.3024,36.7904,36.6368
+reducescatter,131072,ce,ce_channels2,169.2352,ce_channels2,calibrated configuration,evaluate,148.6816,180.0384,138.6336
+reducescatter,262144,sm,sm_buffer1m,48.8176,sm_buffer1m,calibrated configuration,evaluate,47.775999999999996,47.0944,47.2384
+reducescatter,262144,ce,ce_channels2,169.00639999999999,ce_channels2,calibrated configuration,evaluate,145.6,163.7152,142.8384
+reducescatter,524288,sm,sm_threads128,62.7104,sm_threads128,calibrated configuration,evaluate,61.2224,61.0432,61.1232
+reducescatter,524288,ce,ce_buffer8m,170.64479999999998,ce_buffer8m,calibrated configuration,evaluate,134.5344,136.0064,162.0864
+reducescatter,1048576,sm,sm_threads128,86.2816,sm_threads128,calibrated configuration,evaluate,84.82560000000001,86.0096,85.3056
+reducescatter,1048576,ce,ce_buffer16m,179.08640000000003,ce_buffer16m,calibrated configuration,evaluate,169.98080000000002,167.5808,169.07840000000002
+reducescatter,2097152,sm,sm_threads128,134.3264,sm_threads128,calibrated configuration,evaluate,130.9952,133.088,131.8336
+reducescatter,2097152,ce,ce_simple,228.17600000000002,ce_simple,calibrated configuration,evaluate,190.3584,193.7824,205.5616
+reducescatter,4194304,sm,sm_channels4,222.216,sm_channels4,calibrated configuration,evaluate,222.4832,220.9568,220.6624
+reducescatter,4194304,ce,ce_simple,279.2688,ce_simple,calibrated configuration,evaluate,273.1936,274.4384,276.05760000000004
+reducescatter,8388608,sm,sm_channels4,403.20320000000004,sm_channels4,calibrated configuration,evaluate,404.0224,401.904,402.5984
+reducescatter,8388608,ce,ce_simple,446.77279999999996,ce_simple,calibrated configuration,evaluate,436.4576,439.7984,442.8032
+reducescatter,16777216,sm,sm_channels4,778.0591999999999,sm_channels4,calibrated configuration,evaluate,776.7616,775.8335999999999,776.144
+reducescatter,16777216,ce,ce_simple,783.2064,ce_simple,calibrated configuration,evaluate,773.392,779.3376000000001,774.448
+reducescatter,33554432,sm,sm_default,1523.9872,sm_default,calibrated configuration,confirm,1526.544,1526.4608,1524.192
+reducescatter,33554432,ce,ce_buffer16m,1484.1743999999999,ce_buffer16m,calibrated configuration,evaluate,1481.0464,1481.2928,1479.0784
+reducescatter,67108864,sm,sm_default,3023.3008,sm_default,calibrated configuration,confirm,3012.576,2990.3296,3065.1328
+reducescatter,67108864,ce,ce_buffer8m,2788.768,ce_buffer8m,calibrated configuration,evaluate,2766.2528,2741.5552,2770.112
+reducescatter,134217728,sm,sm_default,5950.3056,sm_default,calibrated configuration,confirm,5937.4112,5917.1328,6016.1792
+reducescatter,134217728,ce,ce_buffer16m,5368.0208,ce_buffer16m,calibrated configuration,evaluate,5335.6416,5343.3728,5338.4768
+reducescatter,268435456,sm,sm_default,11758.5952,sm_default,calibrated configuration,confirm,11768.9824,11748.0064,11880.1408
+reducescatter,268435456,ce,ce_buffer16m,10434.5072,ce_buffer16m,calibrated configuration,evaluate,10377.552,10390.7488,10456.2048
+reducescatter,536870912,sm,sm_default,23496.033649999998,sm_default,calibrated configuration,confirm,23347.5522,23150.1566,23516.2206
+reducescatter,536870912,ce,ce_buffer16m,20552.27835,ce_buffer16m,calibrated configuration,evaluate,20488.3042,20586.5729,20462.7646
+reducescatter,1073741824,sm,sm_default,46489.686,sm_default,calibrated configuration,confirm,46147.99,45988.0192,46496.460699999996
+reducescatter,1073741824,ce,ce_buffer16m,40806.23515,ce_buffer16m,calibrated configuration,evaluate,40675.6225,40716.1506,40685.2676

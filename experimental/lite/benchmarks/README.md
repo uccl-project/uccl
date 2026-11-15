@@ -31,6 +31,7 @@ in Git history. Restore those logs before rerunning historical summarizers.
 
 | File | Scope and method |
 | --- | --- |
+| [nccl_tuned_4l4_20261115](data/nccl_tuned_4l4_20261115/README.md) | Testbed 3 FP32 AR/AG/RS: separately calibrated NCCL CE and SM references, three independent validation runs, complete output checks and verified transport paths. |
 | [nccl_ascending_pro6000_20261115](data/nccl_ascending_pro6000_20261115/README.md) | Two-PRO6000 BF16 AR/AG/RS memcpy tuning with complete 1 KiB→1 GiB ascending sweeps; independent calibration and validation, with a separate purple reference curve. |
 | [nccl_tuned_pro6000_20261115](data/nccl_tuned_pro6000_20261115/README.md) | Two-PRO6000 BF16 AR/AG/RS: independent per-size NCCL calibration, forward/reverse validation, transport evidence and retained stalled candidates; tuned reference added to the README figures. |
 | [overview_8l4_20261114](data/overview_8l4_20261114/README.md) | Six GPU/SHM README figures using fresh measurements at all 126 keys from 1 KiB–1 GiB, with no historical tails. |
@@ -131,6 +132,7 @@ sweeps and the 512-KiB NCCL anomaly remain in the CSVs.
 ## Regenerate figures
 
 ```bash
+python3 scripts/plot_4l4_collectives.py
 python3 scripts/plot_results.py
 python3 scripts/plot_multinode_peer.py
 python3 scripts/summarize_ar_compact_8l4.py

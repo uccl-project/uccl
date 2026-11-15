@@ -1,0 +1,11 @@
+{
+  "docs/assets/collectives-4l4-allreduce-all-sizes.svg": "0cfded1bd2c66a846c23b6d8dfa2198b6c46a956417bbff6530b50393a6330e7",
+  "docs/assets/collectives-4l4-allgather-all-sizes.svg": "9cc8f6b594d30579fd49853988f5894ea0cc316bc1d64192df744e2c91352b90",
+  "docs/assets/collectives-4l4-reducescatter-all-sizes.svg": "002f29b02caecbdee241e250527ce7568ef6b35845b505a14485d13e9c88dd91",
+  "benchmarks/data/small_medium_4l4_20261113/ar_selected.csv": "1259b22040e138b24d9d25366c5d56a9afa63d5124cb6ee5307ef5abff7f9a5a",
+  "benchmarks/data/small_medium_4l4_20261113/ag_selected.csv": "16c8610234cf162dd7b5eaac3d5dd85b5b84b24f67bb1fda7e48f4d9d920b1f8",
+  "benchmarks/data/small_medium_4l4_20261113/rs_selected.csv": "b87a91cdf09ee135f45db2769a47284cd274db4b3f68ae87ca85420a2f98ad76",
+  "benchmarks/data/nccl_tuned_4l4_20261115/cases.csv": "2c0754e6dfb18e8466c2dfd53084b65f2edcad96f50909cca850abcc74aa6435",
+  "benchmarks/data/nccl_tuned_4l4_20261115/final_schedule.json": "864e83a5f23cbddeae2bb1cbe0f4c103888a37b35942e2e2c082acbc39fe8464",
+  "scripts/plot_4l4_collectives.py": "7eff6c6f137e283ee06e2c404fa018baab6d455cc367243ae4ee9d6115b23f6e"
+}
