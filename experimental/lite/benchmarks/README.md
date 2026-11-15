@@ -24,6 +24,11 @@ records give their own topology and measurement protocol.
 
 ## Included data
 
+TXT logs not needed by the main README figures have been pruned. Retained
+CSVs, figures and study notes preserve historical measurements and negative
+results; references to pruned raw logs describe the original archive, available
+in Git history. Restore those logs before rerunning historical summarizers.
+
 | File | Scope and method |
 | --- | --- |
 | [nccl_ascending_pro6000_20261115](data/nccl_ascending_pro6000_20261115/README.md) | Two-PRO6000 BF16 AR/AG/RS memcpy tuning with complete 1 KiB→1 GiB ascending sweeps; independent calibration and validation, with a separate purple reference curve. |
@@ -75,13 +80,10 @@ records give their own topology and measurement protocol.
 | [cpu_router_8l4_20261110/README.md](data/cpu_router_8l4_20261110/README.md) | Earlier same-day eight-L4 BF16 router versus NCCL 2.28.9 control, both placements. Hardware probe, paired timings and old NCCL-backed profiles remain for external comparison; they cannot select against the new UCCL Lite fallback. |
 | [primitives_8l4.csv](data/primitives_8l4.csv) | October 12 matched CPU-router primitive rerun after the ReduceScatter fix. Single node, eight L4s, BF16, no GPU P2P; both placements, two retained backends, 24 sizes, three runs. Used for standalone AG/RS charts, not automatic backend selection. [Provenance and port status](../docs/primitive-collectives.md). |
 | [collectives.csv](data/collectives.csv) | Earlier compact single-node tables. The AllReduce rows are an older sweep; the current README uses the eight-L4 summary instead. |
-| [alltoall.txt](data/alltoall.txt), [nccl_alltoall.txt](data/nccl_alltoall.txt) | All-to-All algorithm ladder and the default NCCL transport baseline. |
 | [dense_fusion.txt](data/dense_fusion.txt) | September dense shape sweeps, including NCCL, no-overlap, fusion, and Flux controls. Later blocks supersede earlier exploratory blocks. |
-| [moe_dispatch.txt](data/moe_dispatch.txt) | Dispatch + GEMM; grouped cuBLAS baseline, settled/interleaved variants. Routing-plan construction excluded. |
 | [moe_layer.txt](data/moe_layer.txt) | Dispatch through combine. Twelve rounds × four iterations, min per variant after settling; not the three-run-median protocol used for the collective plots. |
 | [tp_moe_prefill.csv](data/tp_moe_prefill.csv) | Complete TP=4 / EP=1 BF16 MoE layer, Qwen and DeepSeek shapes. Medians of three seed-run medians (1801/1901/2001); five rotating rounds × ten graph replays, slowest rank. Baseline searches 15 vLLM configurations. `previous_fused_ms` is whole-stripe readiness; `fused_ms` is shard readiness. |
 | [tp_moe_decode.csv](data/tp_moe_decode.csv) | Complete TP-MoE layer at 1/2/4/8/16/32 tokens. Seeds 3201/3301; ten warmups, five rotating rounds × twenty graph replays; baseline tuned in graph mode. `fused-c512` is grouped fusion; `fused-decode` is direct decode. Ranges are paired seed ranges, not confidence intervals. |
-| [cutlass_gemm_probe.txt](data/cutlass_gemm_probe.txt), [mma_gemm_occupancy.txt](data/mma_gemm_occupancy.txt) | Diagnostic compute experiments referenced by source comments. |
 
 Historical CSVs often preserve aggregate medians and ranges; the current
 eight-L4 records also include every timed sample.
