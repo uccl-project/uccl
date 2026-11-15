@@ -20,13 +20,13 @@ def label_reductions(ax, data, cases, scale=1):
     maximum = max(data[c][b + "_s"] * scale for c in cases for b in ("nccl", "packet"))
     for x, case in enumerate(cases):
         top = max(data[case][b + "_s"] * scale for b in ("nccl", "packet"))
-        y = top + maximum * 0.14
-        ax.plot([x - 0.19, x - 0.19, x + 0.19, x + 0.19],
+        y = top + maximum * 0.18
+        ax.plot([x - 0.17, x - 0.17, x + 0.17, x + 0.17],
                 [y - maximum * 0.02, y, y, y - maximum * 0.02],
                 color="#0068B5", linewidth=1.2)
         ax.text(x, y + maximum * 0.02,
                 f"↓ {data[case]['latency_reduction_pct']:.1f}%",
-                ha="center", va="bottom", color="#0068B5", fontsize=10,
+                ha="center", va="bottom", color="#0068B5", fontsize=14,
                 fontweight="bold")
 
 
@@ -45,28 +45,29 @@ def main():
         requests, inputs, outputs = map(int, case.split(":"))
         labels.append(f"{requests} × {inputs:,}\n{outputs} output")
     configure()
-    fig, ax = plt.subplots(figsize=(12.4, 4.5))
-    fig.subplots_adjust(left=0.07, right=0.98, top=0.75, bottom=0.20)
+    plt.rcParams.update({"axes.labelsize": 13, "xtick.labelsize": 12, "ytick.labelsize": 12})
+    fig, ax = plt.subplots(figsize=(9, 4.8))
+    fig.subplots_adjust(left=0.11, right=0.98, top=0.76, bottom=0.23)
     fig.suptitle("GLM-4.5-Air-FP8 serving · 8×NVIDIA L4", y=0.97,
                  fontsize=16, fontweight="bold")
-    fig.text(0.5, 0.88, "Long prompts expose a larger end-to-end benefit; the short-prompt control retains a modest gain",
-             ha="center", fontsize=10)
+    fig.text(0.5, 0.88, "Whole client batch · includes queueing",
+             ha="center", fontsize=12)
     positions = list(range(len(cases)))
     clean_axis(ax)
-    ax.set_xticks(positions, labels, fontsize=10)
+    ax.set_xticks(positions, labels, fontsize=12)
     ax.set_xlabel("Requests × input tokens; output tokens below")
     maximum = max(data[c][b + "_s"] for c in cases for b in ("nccl", "packet"))
     for backend, label, color, shift in (
-        ("nccl", "NCCL (default)", "#F6C99F", -0.19),
-        ("packet", "UCCL Lite", "#0068B5", 0.19),
+        ("nccl", "NCCL (default)", "#F6C99F", -0.17),
+        ("packet", "UCCL Lite", "#0068B5", 0.17),
     ):
         values = [data[c][backend + "_s"] for c in cases]
-        bars = ax.bar([x + shift for x in positions], values, width=0.36,
+        bars = ax.bar([x + shift for x in positions], values, width=0.22,
                            color=color, label=label)
-        ax.bar_label(bars, fmt="%.2f", padding=3, fontsize=8)
+        ax.bar_label(bars, fmt="%.2f", padding=4, fontsize=12)
     ax.set_ylabel("Whole client batch latency (s)")
-    ax.set_ylim(0, maximum * 1.27)
-    ax.legend(loc="upper left", frameon=False, fontsize=9)
+    ax.set_ylim(0, maximum * 1.38)
+    ax.legend(loc="upper left", frameon=False, fontsize=12)
     label_reductions(ax, data, cases)
     save(fig, "sglang-large-prefill-e2e-8l4", args.preview)
 
@@ -74,27 +75,28 @@ def main():
     cases = ["ddp", "fsdp"]
     if set(data) != set(cases):
         raise ValueError("expected both DDP and adapted-FSDP training results")
-    labels = ["DDP", "FSDP · experimental adapter"]
-    fig, ax = plt.subplots(figsize=(12.4, 4.1))
-    fig.subplots_adjust(left=0.07, right=0.98, top=0.73, bottom=0.13)
+    labels = ["DDP", "FSDP\nexperimental adapter"]
+    fig, ax = plt.subplots(figsize=(9, 4.8))
+    fig.subplots_adjust(left=0.11, right=0.98, top=0.76, bottom=0.23)
     fig.suptitle("638M-parameter transformer training · 8×NVIDIA L4", y=0.97,
                  fontsize=16, fontweight="bold")
     fig.text(0.5, 0.87, "Full step: forward + backward + communication + SGD",
-             ha="center", fontsize=10)
+             ha="center", fontsize=12)
     positions = list(range(len(cases)))
     clean_axis(ax)
-    ax.set_xticks(positions, labels, fontsize=10)
+    ax.set_xticks(positions, labels, fontsize=12)
     for backend, label, color, shift in (
-        ("nccl", "NCCL (default)", "#F6C99F", -0.19),
-        ("packet", "UCCL Lite", "#0068B5", 0.19),
+        ("nccl", "NCCL (default)", "#F6C99F", -0.17),
+        ("packet", "UCCL Lite", "#0068B5", 0.17),
     ):
         values = [data[c][backend + "_s"] * 1000 for c in cases]
-        bars = ax.bar([x + shift for x in positions], values, width=0.36,
+        bars = ax.bar([x + shift for x in positions], values, width=0.22,
                            color=color, label=label)
-        ax.bar_label(bars, fmt="%.0f", padding=4, fontsize=10)
+        ax.bar_label(bars, fmt="%.0f", padding=4, fontsize=12)
     ax.set_ylabel("Training step latency (ms)")
-    ax.set_ylim(0, 1000)
-    ax.legend(loc="upper left", frameon=False, fontsize=9)
+    ax.set_ylim(0, 1050)
+    ax.set_xlim(-0.65, 1.65)
+    ax.legend(loc="upper left", frameon=False, fontsize=12)
     label_reductions(ax, data, cases, scale=1000)
     save(fig, "training-large-message-e2e-8l4", args.preview)
 
