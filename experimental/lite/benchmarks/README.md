@@ -26,6 +26,7 @@ records give their own topology and measurement protocol.
 
 | File | Scope and method |
 | --- | --- |
+| [nccl_ascending_pro6000_20261115](data/nccl_ascending_pro6000_20261115/README.md) | Two-PRO6000 BF16 AR/AG/RS memcpy tuning with complete 1 KiB→1 GiB ascending sweeps; independent calibration and validation, with a separate purple reference curve. |
 | [nccl_tuned_pro6000_20261115](data/nccl_tuned_pro6000_20261115/README.md) | Two-PRO6000 BF16 AR/AG/RS: independent per-size NCCL calibration, forward/reverse validation, transport evidence and retained stalled candidates; tuned reference added to the README figures. |
 | [overview_8l4_20261114](data/overview_8l4_20261114/README.md) | Six GPU/SHM README figures using fresh measurements at all 126 keys from 1 KiB–1 GiB, with no historical tails. |
 | [full_refresh_8l4_20261114](data/full_refresh_8l4_20261114/README.md) | Complete paired BF16 AR/AG/RS rerun on GPU-default and explicit SHM testbeds: two reversed sweeps, 22,680 checked timed calls, full-output guards, base-router ablation and actual NCCL transport evidence. |

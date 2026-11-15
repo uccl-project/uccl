@@ -1,0 +1,230 @@
+[
+  {
+    "name": "evaluate_allreduce_default_0",
+    "op": "allreduce",
+    "config": "default",
+    "repeat": 0,
+    "command": "/home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_tuned_20261115/nccl_reference --backend nccl --gpus 2 --op allreduce --begin 1024 --end 1073741824 --warmup 100 --repeats 5 --iters 20 --seed 202611200 --samples /home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_ascending_20261115/evaluate_allreduce_default_0_samples.csv",
+    "size_order": "ascending",
+    "environment": {
+      "LD_LIBRARY_PATH": "/opt/pytorch/cuda/lib",
+      "CUDA_VISIBLE_DEVICES": "0,1",
+      "NCCL_DEBUG": "WARN"
+    },
+    "started_utc": "2026-11-15T05:12:20.234166+00:00",
+    "finished_utc": "2026-11-15T05:12:41.773169+00:00",
+    "returncode": 0,
+    "correctness_pass": true
+  },
+  {
+    "name": "evaluate_allreduce_memcpy_buffer16m_channels8_0",
+    "op": "allreduce",
+    "config": "memcpy_buffer16m_channels8",
+    "repeat": 0,
+    "command": "/home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_tuned_20261115/nccl_reference --backend nccl --gpus 2 --op allreduce --begin 1024 --end 1073741824 --warmup 100 --repeats 5 --iters 20 --seed 202611200 --samples /home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_ascending_20261115/evaluate_allreduce_memcpy_buffer16m_channels8_0_samples.csv",
+    "size_order": "ascending",
+    "environment": {
+      "LD_LIBRARY_PATH": "/opt/pytorch/cuda/lib",
+      "CUDA_VISIBLE_DEVICES": "0,1",
+      "NCCL_DEBUG": "WARN",
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_BUFFSIZE": "16777216",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8"
+    },
+    "started_utc": "2026-11-15T05:12:41.797597+00:00",
+    "finished_utc": "2026-11-15T05:12:58.681349+00:00",
+    "returncode": 0,
+    "correctness_pass": true
+  },
+  {
+    "name": "evaluate_allgather_default_0",
+    "op": "allgather",
+    "config": "default",
+    "repeat": 0,
+    "command": "/home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_tuned_20261115/nccl_reference --backend nccl --gpus 2 --op allgather --begin 1024 --end 1073741824 --warmup 100 --repeats 5 --iters 20 --seed 202611200 --samples /home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_ascending_20261115/evaluate_allgather_default_0_samples.csv",
+    "size_order": "ascending",
+    "environment": {
+      "LD_LIBRARY_PATH": "/opt/pytorch/cuda/lib",
+      "CUDA_VISIBLE_DEVICES": "0,1",
+      "NCCL_DEBUG": "WARN"
+    },
+    "started_utc": "2026-11-15T05:12:58.706514+00:00",
+    "finished_utc": "2026-11-15T05:13:12.536559+00:00",
+    "returncode": 0,
+    "correctness_pass": true
+  },
+  {
+    "name": "evaluate_allgather_memcpy_buffer8m_channels8_0",
+    "op": "allgather",
+    "config": "memcpy_buffer8m_channels8",
+    "repeat": 0,
+    "command": "/home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_tuned_20261115/nccl_reference --backend nccl --gpus 2 --op allgather --begin 1024 --end 1073741824 --warmup 100 --repeats 5 --iters 20 --seed 202611200 --samples /home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_ascending_20261115/evaluate_allgather_memcpy_buffer8m_channels8_0_samples.csv",
+    "size_order": "ascending",
+    "environment": {
+      "LD_LIBRARY_PATH": "/opt/pytorch/cuda/lib",
+      "CUDA_VISIBLE_DEVICES": "0,1",
+      "NCCL_DEBUG": "WARN",
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_BUFFSIZE": "8388608",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8"
+    },
+    "started_utc": "2026-11-15T05:13:12.560707+00:00",
+    "finished_utc": "2026-11-15T05:13:23.437242+00:00",
+    "returncode": 0,
+    "correctness_pass": true
+  },
+  {
+    "name": "evaluate_reducescatter_default_0",
+    "op": "reducescatter",
+    "config": "default",
+    "repeat": 0,
+    "command": "/home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_tuned_20261115/nccl_reference --backend nccl --gpus 2 --op reducescatter --begin 1024 --end 1073741824 --warmup 100 --repeats 5 --iters 20 --seed 202611200 --samples /home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_ascending_20261115/evaluate_reducescatter_default_0_samples.csv",
+    "size_order": "ascending",
+    "environment": {
+      "LD_LIBRARY_PATH": "/opt/pytorch/cuda/lib",
+      "CUDA_VISIBLE_DEVICES": "0,1",
+      "NCCL_DEBUG": "WARN"
+    },
+    "started_utc": "2026-11-15T05:13:23.461801+00:00",
+    "finished_utc": "2026-11-15T05:13:36.791212+00:00",
+    "returncode": 0,
+    "correctness_pass": true
+  },
+  {
+    "name": "evaluate_reducescatter_memcpy_buffer8m_channels8_0",
+    "op": "reducescatter",
+    "config": "memcpy_buffer8m_channels8",
+    "repeat": 0,
+    "command": "/home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_tuned_20261115/nccl_reference --backend nccl --gpus 2 --op reducescatter --begin 1024 --end 1073741824 --warmup 100 --repeats 5 --iters 20 --seed 202611200 --samples /home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_ascending_20261115/evaluate_reducescatter_memcpy_buffer8m_channels8_0_samples.csv",
+    "size_order": "ascending",
+    "environment": {
+      "LD_LIBRARY_PATH": "/opt/pytorch/cuda/lib",
+      "CUDA_VISIBLE_DEVICES": "0,1",
+      "NCCL_DEBUG": "WARN",
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_BUFFSIZE": "8388608",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8"
+    },
+    "started_utc": "2026-11-15T05:13:36.816323+00:00",
+    "finished_utc": "2026-11-15T05:13:47.692814+00:00",
+    "returncode": 0,
+    "correctness_pass": true
+  },
+  {
+    "name": "evaluate_reducescatter_memcpy_buffer8m_channels8_1",
+    "op": "reducescatter",
+    "config": "memcpy_buffer8m_channels8",
+    "repeat": 1,
+    "command": "/home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_tuned_20261115/nccl_reference --backend nccl --gpus 2 --op reducescatter --begin 1024 --end 1073741824 --warmup 100 --repeats 5 --iters 20 --seed 202611201 --samples /home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_ascending_20261115/evaluate_reducescatter_memcpy_buffer8m_channels8_1_samples.csv",
+    "size_order": "ascending",
+    "environment": {
+      "LD_LIBRARY_PATH": "/opt/pytorch/cuda/lib",
+      "CUDA_VISIBLE_DEVICES": "0,1",
+      "NCCL_DEBUG": "WARN",
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_BUFFSIZE": "8388608",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8"
+    },
+    "started_utc": "2026-11-15T05:13:47.717276+00:00",
+    "finished_utc": "2026-11-15T05:13:58.593939+00:00",
+    "returncode": 0,
+    "correctness_pass": true
+  },
+  {
+    "name": "evaluate_reducescatter_default_1",
+    "op": "reducescatter",
+    "config": "default",
+    "repeat": 1,
+    "command": "/home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_tuned_20261115/nccl_reference --backend nccl --gpus 2 --op reducescatter --begin 1024 --end 1073741824 --warmup 100 --repeats 5 --iters 20 --seed 202611201 --samples /home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_ascending_20261115/evaluate_reducescatter_default_1_samples.csv",
+    "size_order": "ascending",
+    "environment": {
+      "LD_LIBRARY_PATH": "/opt/pytorch/cuda/lib",
+      "CUDA_VISIBLE_DEVICES": "0,1",
+      "NCCL_DEBUG": "WARN"
+    },
+    "started_utc": "2026-11-15T05:13:58.618288+00:00",
+    "finished_utc": "2026-11-15T05:14:11.947696+00:00",
+    "returncode": 0,
+    "correctness_pass": true
+  },
+  {
+    "name": "evaluate_allgather_memcpy_buffer8m_channels8_1",
+    "op": "allgather",
+    "config": "memcpy_buffer8m_channels8",
+    "repeat": 1,
+    "command": "/home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_tuned_20261115/nccl_reference --backend nccl --gpus 2 --op allgather --begin 1024 --end 1073741824 --warmup 100 --repeats 5 --iters 20 --seed 202611201 --samples /home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_ascending_20261115/evaluate_allgather_memcpy_buffer8m_channels8_1_samples.csv",
+    "size_order": "ascending",
+    "environment": {
+      "LD_LIBRARY_PATH": "/opt/pytorch/cuda/lib",
+      "CUDA_VISIBLE_DEVICES": "0,1",
+      "NCCL_DEBUG": "WARN",
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_BUFFSIZE": "8388608",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8"
+    },
+    "started_utc": "2026-11-15T05:14:11.972699+00:00",
+    "finished_utc": "2026-11-15T05:14:22.849289+00:00",
+    "returncode": 0,
+    "correctness_pass": true
+  },
+  {
+    "name": "evaluate_allgather_default_1",
+    "op": "allgather",
+    "config": "default",
+    "repeat": 1,
+    "command": "/home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_tuned_20261115/nccl_reference --backend nccl --gpus 2 --op allgather --begin 1024 --end 1073741824 --warmup 100 --repeats 5 --iters 20 --seed 202611201 --samples /home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_ascending_20261115/evaluate_allgather_default_1_samples.csv",
+    "size_order": "ascending",
+    "environment": {
+      "LD_LIBRARY_PATH": "/opt/pytorch/cuda/lib",
+      "CUDA_VISIBLE_DEVICES": "0,1",
+      "NCCL_DEBUG": "WARN"
+    },
+    "started_utc": "2026-11-15T05:14:22.874806+00:00",
+    "finished_utc": "2026-11-15T05:14:36.654705+00:00",
+    "returncode": 0,
+    "correctness_pass": true
+  },
+  {
+    "name": "evaluate_allreduce_memcpy_buffer16m_channels8_1",
+    "op": "allreduce",
+    "config": "memcpy_buffer16m_channels8",
+    "repeat": 1,
+    "command": "/home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_tuned_20261115/nccl_reference --backend nccl --gpus 2 --op allreduce --begin 1024 --end 1073741824 --warmup 100 --repeats 5 --iters 20 --seed 202611201 --samples /home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_ascending_20261115/evaluate_allreduce_memcpy_buffer16m_channels8_1_samples.csv",
+    "size_order": "ascending",
+    "environment": {
+      "LD_LIBRARY_PATH": "/opt/pytorch/cuda/lib",
+      "CUDA_VISIBLE_DEVICES": "0,1",
+      "NCCL_DEBUG": "WARN",
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_BUFFSIZE": "16777216",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8"
+    },
+    "started_utc": "2026-11-15T05:14:36.679123+00:00",
+    "finished_utc": "2026-11-15T05:14:53.562788+00:00",
+    "returncode": 0,
+    "correctness_pass": true
+  },
+  {
+    "name": "evaluate_allreduce_default_1",
+    "op": "allreduce",
+    "config": "default",
+    "repeat": 1,
+    "command": "/home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_tuned_20261115/nccl_reference --backend nccl --gpus 2 --op allreduce --begin 1024 --end 1073741824 --warmup 100 --repeats 5 --iters 20 --seed 202611201 --samples /home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_ascending_20261115/evaluate_allreduce_default_1_samples.csv",
+    "size_order": "ascending",
+    "environment": {
+      "LD_LIBRARY_PATH": "/opt/pytorch/cuda/lib",
+      "CUDA_VISIBLE_DEVICES": "0,1",
+      "NCCL_DEBUG": "WARN"
+    },
+    "started_utc": "2026-11-15T05:14:53.587855+00:00",
+    "finished_utc": "2026-11-15T05:15:14.926642+00:00",
+    "returncode": 0,
+    "correctness_pass": true
+  }
+]

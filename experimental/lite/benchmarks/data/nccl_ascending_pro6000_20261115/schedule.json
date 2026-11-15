@@ -1,0 +1,737 @@
+[
+  {
+    "operation": "allreduce",
+    "bytes": 1024,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.9033233142210749,
+      0.9033233142210749
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 2048,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.77056278062591,
+      0.892976554920038
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 4096,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.892976554920038,
+      0.9464882777213067
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 8192,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.8476190018518536,
+      0.8984126680665797
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 16384,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.8476190018518536,
+      0.8492063152832905
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 32768,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.854984927902608,
+      0.854984927902608
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 65536,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.9118457001374091,
+      0.8223140591044983
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 131072,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.7751756319834266,
+      0.8316582545698029
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 262144,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.8812616570822366,
+      0.9397129075650745
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 524288,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.8999370375429567,
+      0.8999370375429567
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 1048576,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.3806002654980376,
+      0.37105833541813477
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 2097152,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.5358029238972345,
+      0.5296338310623471
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 4194304,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.7145726066253528,
+      0.7048670563661151
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 8388608,
+    "configuration": "default",
+    "calibration_speedups": [
+      1.0034401467619662,
+      1.003883424238856
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 16777216,
+    "configuration": "memcpy_buffer16m_channels8",
+    "calibration_speedups": [
+      1.2750244514459483,
+      1.2660473343736363
+    ],
+    "settings": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_BUFFSIZE": "16777216",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8"
+    }
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 33554432,
+    "configuration": "memcpy_buffer16m_channels8",
+    "calibration_speedups": [
+      1.454552786018027,
+      1.4531482376466576
+    ],
+    "settings": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_BUFFSIZE": "16777216",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8"
+    }
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 67108864,
+    "configuration": "memcpy_buffer16m_channels8",
+    "calibration_speedups": [
+      1.535956037584212,
+      1.5376186814696269
+    ],
+    "settings": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_BUFFSIZE": "16777216",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8"
+    }
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 134217728,
+    "configuration": "memcpy_buffer16m_channels8",
+    "calibration_speedups": [
+      1.57164539493845,
+      1.5701447094220928
+    ],
+    "settings": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_BUFFSIZE": "16777216",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8"
+    }
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 268435456,
+    "configuration": "memcpy_buffer16m_channels8",
+    "calibration_speedups": [
+      1.5545041846808365,
+      1.5425530844605302
+    ],
+    "settings": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_BUFFSIZE": "16777216",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8"
+    }
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 536870912,
+    "configuration": "memcpy_buffer16m_channels8",
+    "calibration_speedups": [
+      1.5883547213604836,
+      1.5403975466876778
+    ],
+    "settings": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_BUFFSIZE": "16777216",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8"
+    }
+  },
+  {
+    "operation": "allreduce",
+    "bytes": 1073741824,
+    "configuration": "memcpy_buffer16m_channels8",
+    "calibration_speedups": [
+      1.5849510838122107,
+      1.5501214419092384
+    ],
+    "settings": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_BUFFSIZE": "16777216",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8"
+    }
+  },
+  {
+    "operation": "allgather",
+    "bytes": 1024,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.8984126680665797,
+      0.8066465411120864
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "allgather",
+    "bytes": 2048,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.8869257569040381,
+      0.8394648321187693
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "allgather",
+    "bytes": 4096,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.943462878452019,
+      0.8869257569040381
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "allgather",
+    "bytes": 8192,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.892976554920038,
+      0.9464882777213067
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "allgather",
+    "bytes": 16384,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.892976554920038,
+      0.8944723392480621
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "allgather",
+    "bytes": 32768,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.854984927902608,
+      0.8984126680665797
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "allgather",
+    "bytes": 65536,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.9501511156113966,
+      1.0
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "allgather",
+    "bytes": 131072,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.9118457001374091,
+      0.9552669494665786
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "allgather",
+    "bytes": 262144,
+    "configuration": "default",
+    "calibration_speedups": [
+      1.0,
+      1.0
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "allgather",
+    "bytes": 524288,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.9990724573371579,
+      1.030640575938273
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "allgather",
+    "bytes": 1048576,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.4526015795727986,
+      0.4641711399182137
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "allgather",
+    "bytes": 2097152,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.5541364375484497,
+      0.5491661945030888
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "allgather",
+    "bytes": 4194304,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.7437454688495322,
+      0.719285881262792
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "allgather",
+    "bytes": 8388608,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.9885308128245727,
+      0.9939582537783561
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "allgather",
+    "bytes": 16777216,
+    "configuration": "memcpy_buffer8m_channels8",
+    "calibration_speedups": [
+      1.2253790689365929,
+      1.2297831759276474
+    ],
+    "settings": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_BUFFSIZE": "8388608",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8"
+    }
+  },
+  {
+    "operation": "allgather",
+    "bytes": 33554432,
+    "configuration": "memcpy_buffer8m_channels8",
+    "calibration_speedups": [
+      1.3921541300582407,
+      1.3885016465963709
+    ],
+    "settings": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_BUFFSIZE": "8388608",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8"
+    }
+  },
+  {
+    "operation": "allgather",
+    "bytes": 67108864,
+    "configuration": "memcpy_buffer8m_channels8",
+    "calibration_speedups": [
+      1.4813688309395538,
+      1.4862278332891605
+    ],
+    "settings": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_BUFFSIZE": "8388608",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8"
+    }
+  },
+  {
+    "operation": "allgather",
+    "bytes": 134217728,
+    "configuration": "memcpy_buffer8m_channels8",
+    "calibration_speedups": [
+      1.6338013702080767,
+      1.6305133982470568
+    ],
+    "settings": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_BUFFSIZE": "8388608",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8"
+    }
+  },
+  {
+    "operation": "allgather",
+    "bytes": 268435456,
+    "configuration": "memcpy_buffer8m_channels8",
+    "calibration_speedups": [
+      1.7204110187450088,
+      1.7224095292074895
+    ],
+    "settings": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_BUFFSIZE": "8388608",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8"
+    }
+  },
+  {
+    "operation": "allgather",
+    "bytes": 536870912,
+    "configuration": "memcpy_buffer8m_channels8",
+    "calibration_speedups": [
+      1.7311163252415984,
+      1.7512981032123687
+    ],
+    "settings": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_BUFFSIZE": "8388608",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8"
+    }
+  },
+  {
+    "operation": "allgather",
+    "bytes": 1073741824,
+    "configuration": "memcpy_buffer8m_channels8",
+    "calibration_speedups": [
+      1.762463273978785,
+      1.7383387200146967
+    ],
+    "settings": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_BUFFSIZE": "8388608",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8"
+    }
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 1024,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.8984126680665797,
+      0.854984927902608
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 2048,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.9451327373159606,
+      0.8394648321187693
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 4096,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.892976554920038,
+      0.8869257569040381
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 8192,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.9464882777213067,
+      0.7980921580391074
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 16384,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.892976554920038,
+      0.892976554920038
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 32768,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.8476190018518536,
+      0.8984126680665797
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 65536,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.9464882777213067,
+      0.8476190018518536
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 131072,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.8616715041727575,
+      0.8616715041727575
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 262144,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.9221411611261713,
+      0.9221411611261713
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 524288,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.9423424252439975,
+      0.8854824837418246
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 1048576,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.46790599917931563,
+      0.47004934816958027
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 2097152,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.5532763618700336,
+      0.5580793640413922
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 4194304,
+    "configuration": "default",
+    "calibration_speedups": [
+      0.7807124042596202,
+      0.7609638832682543
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 8388608,
+    "configuration": "default",
+    "calibration_speedups": [
+      1.0530386502326188,
+      1.0601937950098794
+    ],
+    "settings": {}
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 16777216,
+    "configuration": "memcpy_buffer8m_channels8",
+    "calibration_speedups": [
+      1.3480810567123087,
+      1.346097223419506
+    ],
+    "settings": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_BUFFSIZE": "8388608",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8"
+    }
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 33554432,
+    "configuration": "memcpy_buffer8m_channels8",
+    "calibration_speedups": [
+      1.5484494841858139,
+      1.561195705409464
+    ],
+    "settings": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_BUFFSIZE": "8388608",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8"
+    }
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 67108864,
+    "configuration": "memcpy_buffer8m_channels8",
+    "calibration_speedups": [
+      1.6122921449245817,
+      1.6250856066238093
+    ],
+    "settings": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_BUFFSIZE": "8388608",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8"
+    }
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 134217728,
+    "configuration": "memcpy_buffer8m_channels8",
+    "calibration_speedups": [
+      1.7013669152493,
+      1.705539716405962
+    ],
+    "settings": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_BUFFSIZE": "8388608",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8"
+    }
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 268435456,
+    "configuration": "memcpy_buffer8m_channels8",
+    "calibration_speedups": [
+      1.7527295216028673,
+      1.7438596276950555
+    ],
+    "settings": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_BUFFSIZE": "8388608",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8"
+    }
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 536870912,
+    "configuration": "memcpy_buffer8m_channels8",
+    "calibration_speedups": [
+      1.6912526163186035,
+      1.6156174170393545
+    ],
+    "settings": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_BUFFSIZE": "8388608",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8"
+    }
+  },
+  {
+    "operation": "reducescatter",
+    "bytes": 1073741824,
+    "configuration": "memcpy_buffer8m_channels8",
+    "calibration_speedups": [
+      1.531785759023164,
+      1.5967051007926414
+    ],
+    "settings": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_BUFFSIZE": "8388608",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8"
+    }
+  }
+]

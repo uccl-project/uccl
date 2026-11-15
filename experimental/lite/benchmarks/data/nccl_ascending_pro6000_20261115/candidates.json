@@ -1,0 +1,24 @@
+{
+  "default": {},
+  "memcpy": {
+    "NCCL_P2P_USE_CUDA_MEMCPY": "1"
+  },
+  "memcpy_buffer8m_channels8": {
+    "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+    "NCCL_BUFFSIZE": "8388608",
+    "NCCL_MIN_NCHANNELS": "8",
+    "NCCL_MAX_NCHANNELS": "8"
+  },
+  "memcpy_buffer16m_channels8": {
+    "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+    "NCCL_BUFFSIZE": "16777216",
+    "NCCL_MIN_NCHANNELS": "8",
+    "NCCL_MAX_NCHANNELS": "8"
+  },
+  "memcpy_buffer32m_channels8": {
+    "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+    "NCCL_BUFFSIZE": "33554432",
+    "NCCL_MIN_NCHANNELS": "8",
+    "NCCL_MAX_NCHANNELS": "8"
+  }
+}

@@ -1,4 +1,4 @@
-"""Plot PRO6000 joint/P2P, original default NCCL and independently tuned NCCL."""
+"""Plot PRO6000 joint/P2P and NCCL references with explicit size-order scopes."""
 import argparse
 import csv
 import math
@@ -47,6 +47,18 @@ def load():
             if not math.isfinite(value) or value <= 0:
                 raise ValueError("invalid tuned NCCL latency")
             result[key][f"tuned_{order}_us"] = value
+    ascending_path = DATA.parent / "nccl_ascending_pro6000_20261115" / "cases.csv"
+    with ascending_path.open() as stream:
+        ascending_rows = list(csv.DictReader(stream))
+    ascending = {(row["operation"], int(row["bytes"])): row for row in ascending_rows}
+    if len(ascending) != len(ascending_rows) or set(ascending) != expected:
+        raise ValueError("incomplete or duplicate ascending NCCL results")
+    for key, row in ascending.items():
+        for run in ("run1", "run2"):
+            value = float(row[f"{run}_us"])
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError("invalid ascending NCCL latency")
+            result[key][f"ascending_{run}_us"] = value
     return result
 
 
@@ -72,11 +84,13 @@ def make_figure(data, operation, title, factor):
         upper = 0.0
         for prefix, label, color, marker, linestyle in (
             ("nccl_", "NCCL 2.29.7 (default P2P)", "#D65A00", "s", (0, (5, 2.5))),
-            ("tuned_", "NCCL 2.29.7 (tuned)", "#168B67", "D", (0, (2, 1.5))),
+            ("tuned_", "NCCL tuned (both size orders)", "#168B67", "D", (0, (2, 1.5))),
+            ("ascending_", "NCCL memcpy tuned (ascending)", "#8C49AD", "^", (0, (6, 2, 1, 2))),
             ("", "UCCL Lite (joint/P2P)", "#0068B5", "o", "-"),
         ):
+            orders = ("run1", "run2") if prefix == "ascending_" else ("forward", "reverse")
             runs = [[float(data[operation, size][f"{prefix}{order}_us"])
-                     for order in ("forward", "reverse")] for size in sizes]
+                     for order in orders] for size in sizes]
             values = [factor * size / median(us) / 1000 if throughput else median(us)
                       for size, us in zip(sizes, runs)]
             bounds = [[factor * size / us / 1000 if throughput else us
@@ -90,7 +104,7 @@ def make_figure(data, operation, title, factor):
         ax.set_ylim(0, upper * 1.13)
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(handles[::-1], labels[::-1], loc="upper center",
-               bbox_to_anchor=(0.5, 0.91), ncol=3, frameon=False,
+               bbox_to_anchor=(0.5, 0.91), ncol=2, frameon=False,
                fontsize=10.5, handlelength=2.4, columnspacing=1.6)
     fig.text(0.5, 0.11,
              "BF16 · out of place · prepared eager · slowest-rank CUDA events including submission gaps",
@@ -99,7 +113,7 @@ def make_figure(data, operation, title, factor):
              "Median of two run medians; shading: run range · 100 warmups + 5 × 20 calls/run",
              ha="center", fontsize=8.5, color="#607486")
     fig.text(0.5, 0.02,
-             "UCCL/default: original b0ac7b4a results · tuned NCCL: independent per-size calibration, 2026-11-15",
+             "NCCL green: both size orders · purple: calibrated choice from full ascending sweeps; no largest-first claim",
              ha="center", fontsize=8.5, color="#607486")
     return fig
 

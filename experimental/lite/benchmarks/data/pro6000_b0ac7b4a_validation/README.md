@@ -86,6 +86,13 @@ controls and transport evidence. The original two curves' data is unchanged;
 regenerating the figures does not perform a new GPU measurement or select
 the best final result per size.
 
+The figures also load
+[`../nccl_ascending_pro6000_20261115/cases.csv`](../nccl_ascending_pro6000_20261115/cases.csv)
+as a fourth purple reference. Both repetitions of that study run sizes in
+ascending order on one communicator per process. The green reference retains
+its independent forward/reverse validation; these timing scopes are labeled
+separately.
+
 ## Reproduce on aws-pro6000
 
 The dependency paths in `config.json` refer to the existing installation on

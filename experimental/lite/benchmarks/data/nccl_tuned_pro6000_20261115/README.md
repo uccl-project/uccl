@@ -7,6 +7,12 @@ figure's NCCL-only harness, with optional NCCL-managed symmetric windows
 added outside timing. This is a separate measurement window, not a fresh
 paired UCCL benchmark.
 
+The subsequent [ascending-only study](../nccl_ascending_pro6000_20261115/README.md)
+adds a separate purple memcpy reference. This report describes the green
+two-order reference; its largest-first failures remain recorded. The
+`figures.json` hashes here describe the original three-curve figures committed
+at `056b9efc`, before the additional ascending curve.
+
 ## Validated results
 
 All 25,200 primary timed invocations passed full-output/input/guard checks:

@@ -1,0 +1,128 @@
+[
+  {
+    "name": "trace_allreduce_default_0",
+    "op": "allreduce",
+    "config": "default",
+    "repeat": 0,
+    "command": "/home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_tuned_20261115/nccl_reference --backend nccl --gpus 2 --op allreduce --begin 1024 --end 1073741824 --warmup 1 --repeats 1 --iters 1 --seed 202611200 --samples /home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_ascending_20261115/trace_allreduce_default_0_samples.csv",
+    "size_order": "ascending",
+    "environment": {
+      "LD_LIBRARY_PATH": "/opt/pytorch/cuda/lib",
+      "CUDA_VISIBLE_DEVICES": "0,1",
+      "NCCL_DEBUG": "INFO",
+      "NCCL_DEBUG_SUBSYS": "INIT,TUNING,ENV,P2P,SHM",
+      "NCCL_DEBUG_FILE": "/home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_ascending_20261115/trace_allreduce_default_0_debug.log"
+    },
+    "started_utc": "2026-11-15T05:15:35.571574+00:00",
+    "finished_utc": "2026-11-15T05:15:37.087165+00:00",
+    "returncode": 0,
+    "correctness_pass": true
+  },
+  {
+    "name": "trace_allreduce_memcpy_buffer16m_channels8_0",
+    "op": "allreduce",
+    "config": "memcpy_buffer16m_channels8",
+    "repeat": 0,
+    "command": "/home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_tuned_20261115/nccl_reference --backend nccl --gpus 2 --op allreduce --begin 1024 --end 1073741824 --warmup 1 --repeats 1 --iters 1 --seed 202611200 --samples /home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_ascending_20261115/trace_allreduce_memcpy_buffer16m_channels8_0_samples.csv",
+    "size_order": "ascending",
+    "environment": {
+      "LD_LIBRARY_PATH": "/opt/pytorch/cuda/lib",
+      "CUDA_VISIBLE_DEVICES": "0,1",
+      "NCCL_DEBUG": "INFO",
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_BUFFSIZE": "16777216",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8",
+      "NCCL_DEBUG_SUBSYS": "INIT,TUNING,ENV,P2P,SHM",
+      "NCCL_DEBUG_FILE": "/home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_ascending_20261115/trace_allreduce_memcpy_buffer16m_channels8_0_debug.log"
+    },
+    "started_utc": "2026-11-15T05:15:37.112043+00:00",
+    "finished_utc": "2026-11-15T05:15:38.477408+00:00",
+    "returncode": 0,
+    "correctness_pass": true
+  },
+  {
+    "name": "trace_allgather_default_0",
+    "op": "allgather",
+    "config": "default",
+    "repeat": 0,
+    "command": "/home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_tuned_20261115/nccl_reference --backend nccl --gpus 2 --op allgather --begin 1024 --end 1073741824 --warmup 1 --repeats 1 --iters 1 --seed 202611200 --samples /home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_ascending_20261115/trace_allgather_default_0_samples.csv",
+    "size_order": "ascending",
+    "environment": {
+      "LD_LIBRARY_PATH": "/opt/pytorch/cuda/lib",
+      "CUDA_VISIBLE_DEVICES": "0,1",
+      "NCCL_DEBUG": "INFO",
+      "NCCL_DEBUG_SUBSYS": "INIT,TUNING,ENV,P2P,SHM",
+      "NCCL_DEBUG_FILE": "/home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_ascending_20261115/trace_allgather_default_0_debug.log"
+    },
+    "started_utc": "2026-11-15T05:15:38.501948+00:00",
+    "finished_utc": "2026-11-15T05:15:39.767224+00:00",
+    "returncode": 0,
+    "correctness_pass": true
+  },
+  {
+    "name": "trace_allgather_memcpy_buffer8m_channels8_0",
+    "op": "allgather",
+    "config": "memcpy_buffer8m_channels8",
+    "repeat": 0,
+    "command": "/home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_tuned_20261115/nccl_reference --backend nccl --gpus 2 --op allgather --begin 1024 --end 1073741824 --warmup 1 --repeats 1 --iters 1 --seed 202611200 --samples /home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_ascending_20261115/trace_allgather_memcpy_buffer8m_channels8_0_samples.csv",
+    "size_order": "ascending",
+    "environment": {
+      "LD_LIBRARY_PATH": "/opt/pytorch/cuda/lib",
+      "CUDA_VISIBLE_DEVICES": "0,1",
+      "NCCL_DEBUG": "INFO",
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_BUFFSIZE": "8388608",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8",
+      "NCCL_DEBUG_SUBSYS": "INIT,TUNING,ENV,P2P,SHM",
+      "NCCL_DEBUG_FILE": "/home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_ascending_20261115/trace_allgather_memcpy_buffer8m_channels8_0_debug.log"
+    },
+    "started_utc": "2026-11-15T05:15:39.791637+00:00",
+    "finished_utc": "2026-11-15T05:15:41.157055+00:00",
+    "returncode": 0,
+    "correctness_pass": true
+  },
+  {
+    "name": "trace_reducescatter_default_0",
+    "op": "reducescatter",
+    "config": "default",
+    "repeat": 0,
+    "command": "/home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_tuned_20261115/nccl_reference --backend nccl --gpus 2 --op reducescatter --begin 1024 --end 1073741824 --warmup 1 --repeats 1 --iters 1 --seed 202611200 --samples /home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_ascending_20261115/trace_reducescatter_default_0_samples.csv",
+    "size_order": "ascending",
+    "environment": {
+      "LD_LIBRARY_PATH": "/opt/pytorch/cuda/lib",
+      "CUDA_VISIBLE_DEVICES": "0,1",
+      "NCCL_DEBUG": "INFO",
+      "NCCL_DEBUG_SUBSYS": "INIT,TUNING,ENV,P2P,SHM",
+      "NCCL_DEBUG_FILE": "/home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_ascending_20261115/trace_reducescatter_default_0_debug.log"
+    },
+    "started_utc": "2026-11-15T05:15:41.181442+00:00",
+    "finished_utc": "2026-11-15T05:15:42.446769+00:00",
+    "returncode": 0,
+    "correctness_pass": true
+  },
+  {
+    "name": "trace_reducescatter_memcpy_buffer8m_channels8_0",
+    "op": "reducescatter",
+    "config": "memcpy_buffer8m_channels8",
+    "repeat": 0,
+    "command": "/home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_tuned_20261115/nccl_reference --backend nccl --gpus 2 --op reducescatter --begin 1024 --end 1073741824 --warmup 1 --repeats 1 --iters 1 --seed 202611200 --samples /home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_ascending_20261115/trace_reducescatter_memcpy_buffer8m_channels8_0_samples.csv",
+    "size_order": "ascending",
+    "environment": {
+      "LD_LIBRARY_PATH": "/opt/pytorch/cuda/lib",
+      "CUDA_VISIBLE_DEVICES": "0,1",
+      "NCCL_DEBUG": "INFO",
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_BUFFSIZE": "8388608",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8",
+      "NCCL_DEBUG_SUBSYS": "INIT,TUNING,ENV,P2P,SHM",
+      "NCCL_DEBUG_FILE": "/home/xinze/dev/pro6000-integrated-b0ac7b4a-20261115-022114-retry1/source/experimental/lite/build/nccl_ascending_20261115/trace_reducescatter_memcpy_buffer8m_channels8_0_debug.log"
+    },
+    "started_utc": "2026-11-15T05:15:42.471455+00:00",
+    "finished_utc": "2026-11-15T05:15:43.786804+00:00",
+    "returncode": 0,
+    "correctness_pass": true
+  }
+]

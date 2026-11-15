@@ -224,7 +224,7 @@ AG output or complete RS input per rank. For two GPUs, bus throughput is
 [Raw data, checks and reproduction](benchmarks/data/pro6000_b0ac7b4a_validation/README.md)
 · [Implementation and limitations](docs/retained-optimizations.md).
 
-The figures also include a **tuned NCCL reference** from a separate
+The figures also include a **green tuned NCCL reference** from a separate
 2026-11-15 retest of all three collectives. Its settings are selected per
 collective and exact size from two independent calibration sweeps, then frozen
 before forward/reverse validation with the same 100-warmup, 5×20-call timing
@@ -233,21 +233,31 @@ curve or a portable NCCL policy. Registered-buffer preparation is excluded
 where selected. The original UCCL/default-NCCL curves and their measurements
 are preserved; the reported UCCL speedups above remain comparisons against
 default NCCL. [Tuned settings, fresh controls, transport logs and results](benchmarks/data/nccl_tuned_pro6000_20261115/README.md).
-At 1 GiB, validated tuned NCCL bus throughput is **36.75 / 36.66 / 36.77 GB/s**
+At 1 GiB, this two-order-validated NCCL reference reaches **36.75 / 36.66 / 36.77 GB/s**
 for AR/AG/RS. Fast memcpy-transport candidates that stalled in largest-first
-validation are excluded; small-message regressions are retained.
+validation are excluded from that green curve; small-message regressions are retained.
+
+A **purple ascending-only NCCL reference** separately evaluates the memcpy
+transport with every process running **1 KiB→1 GiB on the same communicator**.
+Two independent ascending calibrations freeze one bulk configuration per
+operation and the default fallback for smaller sizes; two fresh full ascending
+sweeps then validate the choices. This curve does not claim largest-first
+support. [Ascending results, complete fixed-configuration curves and logs](benchmarks/data/nccl_ascending_pro6000_20261115/README.md).
+At 1 GiB this ascending-only reference reaches **50.71 / 49.17 / 48.39 GB/s**
+for AR/AG/RS; all 25,200 final timed correctness checks pass. The earlier
+largest-first stalls remain a separate recorded limitation.
 
 ##### AllReduce on RTX PRO 6000 ×2
 
-![PRO6000 x2 AllReduce: UCCL Lite, default NCCL P2P and independently tuned NCCL latency and bus throughput](docs/assets/collectives-pro6000x2-allreduce-overview.svg)
+![PRO6000 x2 AllReduce: UCCL Lite, default NCCL, two-order tuned NCCL and ascending-only memcpy NCCL](docs/assets/collectives-pro6000x2-allreduce-overview.svg)
 
 ##### AllGather on RTX PRO 6000 ×2
 
-![PRO6000 x2 AllGather: UCCL Lite, default NCCL P2P and independently tuned NCCL latency and bus throughput](docs/assets/collectives-pro6000x2-allgather-overview.svg)
+![PRO6000 x2 AllGather: UCCL Lite, default NCCL, two-order tuned NCCL and ascending-only memcpy NCCL](docs/assets/collectives-pro6000x2-allgather-overview.svg)
 
 ##### ReduceScatter on RTX PRO 6000 ×2
 
-![PRO6000 x2 ReduceScatter: UCCL Lite, default NCCL P2P and independently tuned NCCL latency and bus throughput](docs/assets/collectives-pro6000x2-reducescatter-overview.svg)
+![PRO6000 x2 ReduceScatter: UCCL Lite, default NCCL, two-order tuned NCCL and ascending-only memcpy NCCL](docs/assets/collectives-pro6000x2-reducescatter-overview.svg)
 
 #### 8xL4 GPU
 
