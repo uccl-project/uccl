@@ -166,6 +166,39 @@ NCCL 2.28.9; PRO6000 used CUDA 13.0 and NCCL 2.29.7. Do not assign node
 differences solely to GPU count. Actual router thread placement was not
 independently verified. No current EAT inference/E2E benefit is established.
 
+## Shared collective components
+
+The PRO6000 path reuses the existing peer algorithm families through common
+inline components, with one prepared BF16 peer executor for two/four ranks.
+There is no separate PRO6000 copy of each collective.
+
+| Layer | Implementation and users |
+|---|---|
+| Device operations | `include/uccl_lite/collectives/device_primitives.cuh`: typed peer addresses, scalar/128-bit copies, ordered FP32 accumulation, and eight-lane BF16 reduction. Used by `peer_ag_rs.cu`, `peer_collectives.cu`, and `local_collectives.cu`. |
+| Peer execution | `src/collectives/peer_collectives.cu`: coordinator, peer-read, source-owned CE fan-out, and staged RS→AG schedules. Owns CUDA peer enablement, streams, events and scratch. |
+| Validation and routing | `src/collectives/joint_collectives.cu`: the existing `CollectiveCall`, topology/placement checks, eager-only contract, build identity and `CollectiveDispatcher`. |
+| Existing transports | Native L4 MSCCL++ memory/port/packet paths and CPU-router channels retain their own synchronization and transport ownership. The CPU-router core acquires no MSCCL++ or NCCL dependency. |
+
+The shared device operations require already-addressable memory and established
+producer/consumer ordering; they do not initialize a transport or synchronize
+peers. Copies preserve bits. Reduction preserves the existing source order,
+FP32 accumulation and single final BF16 rounding. The four-rank FP32 wrappers
+retain their launch geometry/tail handling; the eight-rank local fallback
+retains its two-NUMA staging and intermediate rounding behavior.
+
+The PRO6000 fast path continues to use ordinary CUDA peer loads/stores and
+source-owned copy-engine transfers. Replacing that transport with MSCCL++
+registration/signaling would be a separate algorithm change requiring new
+measurements. Sharing the primitives does not make the slow four-L4 BF16 peer
+schedule a replacement for the native MSCCL++ algorithms discussed above.
+All-pairs P2P validation, alignment gates, thresholds, scratch preparation,
+input-reader completion and stale-profile rejection remain in effect.
+
+[Refactor validation](../benchmarks/data/peer_common_refactor_20261115/README.md)
+records paired old/new measurements and machine-code comparisons separately
+from the historical figures. The new binary's build identity requires fresh
+calibration; old profiles are not promoted to validation of the refactor.
+
 ## Build and reproduce on a new checkout
 
 Run from `experimental/lite`. Install/provide CUDA, NCCL and CUTLASS as in
@@ -175,13 +208,14 @@ Run from `experimental/lite`. Install/provide CUDA, NCCL and CUTLASS as in
 CUDA_HOME=/usr/local/cuda-12.9
 CUTLASS_HOME=/path/to/cutlass
 NCCL_HOME=/path/to/nccl
-make -j2 joint-bench joint-nccl-reference router-checks \
+make -j2 joint-bench joint-peer-check joint-nccl-reference router-checks \
   joint-router-four joint-router-eight \
   CUDA_HOME="$CUDA_HOME" CUDA_ARCH=sm_89 \
   CUTLASS_HOME="$CUTLASS_HOME" NCCL_HOME="$NCCL_HOME"
 ```
 
-For PRO6000 use the installed CUDA toolchain and `CUDA_ARCH=sm_120`.
+For PRO6000 use the installed CUDA toolchain and `CUDA_ARCH=sm_120`, and run
+`./build/uccl_lite_joint_peer_check 2` for its two-GPU topology.
 The focused four/eight fixtures are copied unchanged from the router study;
 their hashes are in `benchmarks/joint/focused/source-hashes.json`. The four-rank
 mixed-alignment fixture includes the v1.1 stale-profile test correction.
@@ -210,6 +244,7 @@ revision=$(git rev-parse HEAD)
   --packet-bytes 4194304 --large
 ./build/uccl_lite_dispatcher_cuda_check
 ./build/uccl_lite_host_ring_check 4
+./build/uccl_lite_joint_peer_check 4
 ./build/uccl_lite_joint_bench --selftest --gpus 4 --end 4096 \
   --source-identity "$revision"
 ./build/uccl_lite_router_four_mixed --selftest --gpus 4 --end 4096 \

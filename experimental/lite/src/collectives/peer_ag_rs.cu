@@ -1,3 +1,4 @@
+#include "uccl_lite/collectives/device_primitives.cuh"
 // Four-GPU direct peer AllGather and ReduceScatter benchmark.
 // Every destination owns its output; source tensors stay immutable until all
 // peer copies and the destination reduction have completed.
@@ -340,7 +341,8 @@ __global__ void pullGather(float const* in0, float const* in1,
   if (index >= shard) return;
   int source = blockIdx.y;
   float const* input = source == 0 ? in0 : source == 1 ? in1 : source == 2 ? in2 : in3;
-  output[size_t(source) * shard + index] = input[index];
+  uccl_lite::collective::copyElement(
+      input, output + size_t(source) * shard, index);
 }
 __global__ void pullVecGather(float const* in0, float const* in1,
                               float const* in2, float const* in3,
@@ -352,7 +354,7 @@ __global__ void pullVecGather(float const* in0, float const* in1,
   if (index < vectors) {
     auto* out = reinterpret_cast<uint4*>(output + size_t(source) * shard);
     auto const* in = reinterpret_cast<uint4 const*>(input);
-    out[index] = in[index];
+    uccl_lite::collective::copyVector(in, out, index);
   }
   if (index == 0)
     for (size_t tail = vectors * 4; tail < shard; ++tail)
@@ -629,11 +631,8 @@ __global__ void pullScatter(float const* in0, float const* in1,
   size_t index = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
   if (index >= shard) return;
   size_t offset = size_t(destination) * shard + index;
-  float value = in0[offset];
-  value += in1[offset];
-  value += in2[offset];
-  value += in3[offset];
-  output[index] = value;
+  uccl_lite::collective::PeerInputs<float, 4> inputs{{in0, in1, in2, in3}};
+  output[index] = uccl_lite::collective::orderedSum(inputs, offset);
 }
 enum class Operation { Gather, Scatter };
 enum class Backend {

@@ -1,0 +1,266 @@
+[
+  {
+    "collective": "allgather",
+    "bytes": 1024,
+    "pairs": 1350,
+    "median_pair_ratio": 1.0,
+    "geomean_pair_ratio": 0.9932189898341882,
+    "median_pair_delta_us": 0.0
+  },
+  {
+    "collective": "allgather",
+    "bytes": 2048,
+    "pairs": 1350,
+    "median_pair_ratio": 1.0,
+    "geomean_pair_ratio": 1.004179891393593,
+    "median_pair_delta_us": 0.0
+  },
+  {
+    "collective": "allgather",
+    "bytes": 4096,
+    "pairs": 1350,
+    "median_pair_ratio": 1.0,
+    "geomean_pair_ratio": 1.001431985234387,
+    "median_pair_delta_us": 0.0
+  },
+  {
+    "collective": "allgather",
+    "bytes": 8192,
+    "pairs": 1350,
+    "median_pair_ratio": 1.0,
+    "geomean_pair_ratio": 0.9879296271669281,
+    "median_pair_delta_us": 0.0
+  },
+  {
+    "collective": "allgather",
+    "bytes": 16384,
+    "pairs": 1350,
+    "median_pair_ratio": 1.0,
+    "geomean_pair_ratio": 1.0038580221663989,
+    "median_pair_delta_us": 0.0
+  },
+  {
+    "collective": "allgather",
+    "bytes": 32768,
+    "pairs": 1350,
+    "median_pair_ratio": 1.0,
+    "geomean_pair_ratio": 0.9946662931398785,
+    "median_pair_delta_us": 0.0
+  },
+  {
+    "collective": "allgather",
+    "bytes": 65536,
+    "pairs": 1350,
+    "median_pair_ratio": 1.0,
+    "geomean_pair_ratio": 1.0040831136768322,
+    "median_pair_delta_us": 0.0
+  },
+  {
+    "collective": "allgather",
+    "bytes": 131072,
+    "pairs": 1350,
+    "median_pair_ratio": 1.0,
+    "geomean_pair_ratio": 1.004048906672099,
+    "median_pair_delta_us": 0.0
+  },
+  {
+    "collective": "allgather",
+    "bytes": 262144,
+    "pairs": 1350,
+    "median_pair_ratio": 1.0,
+    "geomean_pair_ratio": 1.0006970114394442,
+    "median_pair_delta_us": 0.0
+  },
+  {
+    "collective": "allgather",
+    "bytes": 524288,
+    "pairs": 1350,
+    "median_pair_ratio": 1.001453499727471,
+    "geomean_pair_ratio": 1.0070922824477129,
+    "median_pair_delta_us": 0.03200023999999857
+  },
+  {
+    "collective": "allgather",
+    "bytes": 1048576,
+    "pairs": 1350,
+    "median_pair_ratio": 0.9990224755522185,
+    "geomean_pair_ratio": 0.994711747873105,
+    "median_pair_delta_us": -0.03200023999999857
+  },
+  {
+    "collective": "allreduce",
+    "bytes": 1024,
+    "pairs": 1350,
+    "median_pair_ratio": 1.0,
+    "geomean_pair_ratio": 1.0114325322130033,
+    "median_pair_delta_us": 0.0
+  },
+  {
+    "collective": "allreduce",
+    "bytes": 2048,
+    "pairs": 1350,
+    "median_pair_ratio": 1.0,
+    "geomean_pair_ratio": 1.010132714479627,
+    "median_pair_delta_us": 0.0
+  },
+  {
+    "collective": "allreduce",
+    "bytes": 4096,
+    "pairs": 1350,
+    "median_pair_ratio": 1.0,
+    "geomean_pair_ratio": 0.9971857247820645,
+    "median_pair_delta_us": 0.0
+  },
+  {
+    "collective": "allreduce",
+    "bytes": 8192,
+    "pairs": 1350,
+    "median_pair_ratio": 1.0,
+    "geomean_pair_ratio": 0.9960933280112075,
+    "median_pair_delta_us": 0.0
+  },
+  {
+    "collective": "allreduce",
+    "bytes": 16384,
+    "pairs": 1350,
+    "median_pair_ratio": 1.0,
+    "geomean_pair_ratio": 0.9922496567288922,
+    "median_pair_delta_us": 0.0
+  },
+  {
+    "collective": "allreduce",
+    "bytes": 32768,
+    "pairs": 1350,
+    "median_pair_ratio": 1.0,
+    "geomean_pair_ratio": 1.012260414292875,
+    "median_pair_delta_us": 0.0
+  },
+  {
+    "collective": "allreduce",
+    "bytes": 65536,
+    "pairs": 1350,
+    "median_pair_ratio": 1.0,
+    "geomean_pair_ratio": 1.0100947328931666,
+    "median_pair_delta_us": 0.0
+  },
+  {
+    "collective": "allreduce",
+    "bytes": 131072,
+    "pairs": 1350,
+    "median_pair_ratio": 1.0,
+    "geomean_pair_ratio": 0.9975647542944124,
+    "median_pair_delta_us": 0.0
+  },
+  {
+    "collective": "allreduce",
+    "bytes": 262144,
+    "pairs": 1350,
+    "median_pair_ratio": 1.0,
+    "geomean_pair_ratio": 1.0010825108819963,
+    "median_pair_delta_us": 0.0
+  },
+  {
+    "collective": "allreduce",
+    "bytes": 524288,
+    "pairs": 1350,
+    "median_pair_ratio": 0.9989445826514202,
+    "geomean_pair_ratio": 1.001769420890132,
+    "median_pair_delta_us": -0.03200024999999762
+  },
+  {
+    "collective": "allreduce",
+    "bytes": 1048576,
+    "pairs": 1350,
+    "median_pair_ratio": 1.0006718224661753,
+    "geomean_pair_ratio": 1.0041571038821837,
+    "median_pair_delta_us": 0.03200024000000212
+  },
+  {
+    "collective": "reducescatter",
+    "bytes": 1024,
+    "pairs": 1350,
+    "median_pair_ratio": 1.0,
+    "geomean_pair_ratio": 0.9954297221568295,
+    "median_pair_delta_us": 0.0
+  },
+  {
+    "collective": "reducescatter",
+    "bytes": 2048,
+    "pairs": 1350,
+    "median_pair_ratio": 1.0,
+    "geomean_pair_ratio": 0.9980886846868494,
+    "median_pair_delta_us": 0.0
+  },
+  {
+    "collective": "reducescatter",
+    "bytes": 4096,
+    "pairs": 1350,
+    "median_pair_ratio": 1.0,
+    "geomean_pair_ratio": 1.0019533989882774,
+    "median_pair_delta_us": 0.0
+  },
+  {
+    "collective": "reducescatter",
+    "bytes": 8192,
+    "pairs": 1350,
+    "median_pair_ratio": 1.0,
+    "geomean_pair_ratio": 0.9956412078666146,
+    "median_pair_delta_us": 0.0
+  },
+  {
+    "collective": "reducescatter",
+    "bytes": 16384,
+    "pairs": 1350,
+    "median_pair_ratio": 1.0,
+    "geomean_pair_ratio": 0.9976291725183193,
+    "median_pair_delta_us": 0.0
+  },
+  {
+    "collective": "reducescatter",
+    "bytes": 32768,
+    "pairs": 1350,
+    "median_pair_ratio": 1.0,
+    "geomean_pair_ratio": 1.0029420546730203,
+    "median_pair_delta_us": 0.0
+  },
+  {
+    "collective": "reducescatter",
+    "bytes": 65536,
+    "pairs": 1350,
+    "median_pair_ratio": 1.0,
+    "geomean_pair_ratio": 1.0013110576361297,
+    "median_pair_delta_us": 0.0
+  },
+  {
+    "collective": "reducescatter",
+    "bytes": 131072,
+    "pairs": 1350,
+    "median_pair_ratio": 1.0,
+    "geomean_pair_ratio": 0.9905367109981045,
+    "median_pair_delta_us": 0.0
+  },
+  {
+    "collective": "reducescatter",
+    "bytes": 262144,
+    "pairs": 1350,
+    "median_pair_ratio": 1.0,
+    "geomean_pair_ratio": 1.007914102055538,
+    "median_pair_delta_us": 0.0
+  },
+  {
+    "collective": "reducescatter",
+    "bytes": 524288,
+    "pairs": 1350,
+    "median_pair_ratio": 1.0014524447031121,
+    "geomean_pair_ratio": 1.0075699613462268,
+    "median_pair_delta_us": 0.03200023999999857
+  },
+  {
+    "collective": "reducescatter",
+    "bytes": 1048576,
+    "pairs": 1350,
+    "median_pair_ratio": 1.0,
+    "geomean_pair_ratio": 0.9972510786887359,
+    "median_pair_delta_us": 0.0
+  }
+]

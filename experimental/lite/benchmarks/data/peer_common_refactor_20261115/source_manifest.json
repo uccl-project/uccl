@@ -1,0 +1,20 @@
+{
+  "baseline_revision": "b968a8011fb6979398a12ee2b5273bcf6693b94f",
+  "candidate_sha256": {
+    "Makefile": "bc7aebe30927d3d5eb976aa3470c603730a8060d48fd48c9afef433d8fc2aa03",
+    "src/collectives/joint_collectives.cu": "145b87fa0e5ffb44730fa49fd1293340bfb9a379e3f9c271a36c3b444df1bb6f",
+    "src/collectives/peer_collectives.cu": "2b0c880d8c817ed4b077a1faf5607cad0177f879947ef0cfd2d4760e21a5423d",
+    "src/collectives/local_collectives.cu": "91f15e5320ec62bd1d4ece6627d868ce28f8594434f4a438add4847bb3964f36",
+    "src/collectives/peer_ag_rs.cu": "849cc2e03e888954420cd0d5bc2071810700c1d7f78549c837375401375fcd57",
+    "include/uccl_lite/collectives/device_primitives.cuh": "bdad9a16a174d94c2ddf6836262c68a2dd786e32e2d98982f28df428b7801123",
+    "include/uccl_lite/collectives/peer_collectives.hpp": "1ce72d522f823df3a8bd2182145493d92979ab2aead928a4d20c14e9e397156c",
+    "include/uccl_lite/joint_collectives.hpp": "f0f8bd521340c3d26e1e815678a98627e94c466285f2dfd41fc1077bbbdced71",
+    "benchmarks/joint/joint_bench.cu": "f208e6e222f1286b5b64f648534b4f1f32ce783a835cfd3403d85122f11a2ed9",
+    "tests/collectives/joint_peer_check.cu": "e2075909ad8208f196caab6472cea7124b59d8a801757d6e423b9de72c4181d3"
+  },
+  "baseline_pro6000_binary_source": "b0ac7b4a (joint implementation, public header and frozen harness identical to b968a801)",
+  "local_host_text_sha256": {
+    "before": "8851d3bd817040ac1e57ce6368172d3c257cff06dc7efad41f33c34069d4c4ab",
+    "after": "8851d3bd817040ac1e57ce6368172d3c257cff06dc7efad41f33c34069d4c4ab"
+  }
+}

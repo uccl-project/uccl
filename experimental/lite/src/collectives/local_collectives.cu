@@ -1,3 +1,4 @@
+#include "uccl_lite/collectives/device_primitives.cuh"
 #include "uccl_lite/local_collectives.hpp"
 #include <linux/mempolicy.h>
 #include <algorithm>
@@ -42,10 +43,9 @@ __global__ void sumFour(__nv_bfloat16 const* own, __nv_bfloat16 const* peers,
                         __nv_bfloat16* output, size_t count) {
   for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x; i < count;
        i += size_t(gridDim.x) * blockDim.x) {
-    float sum = __bfloat162float(own[i]);
-    for (int p = 0; p < 3; ++p)
-      sum += __bfloat162float(peers[size_t(p) * count + i]);
-    output[i] = __float2bfloat16_rn(sum);
+    collective::PeerInputs<__nv_bfloat16, 4> inputs{
+        {own, peers, peers + count, peers + 2 * count}};
+    output[i] = collective::orderedSum(inputs, i);
   }
 }
 __global__ void sumTwo(__nv_bfloat16* partial, __nv_bfloat16 const* remote,

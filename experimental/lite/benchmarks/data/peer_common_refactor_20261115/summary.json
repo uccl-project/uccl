@@ -1,0 +1,200 @@
+[
+  {
+    "experiment": "eight-l4",
+    "dtype": "BF16",
+    "collective": "allgather",
+    "variant": "fallback",
+    "cases": 17,
+    "geomean_latency_ratio": 1.0061054505654787,
+    "worst_latency_ratio": 1.027945836934601
+  },
+  {
+    "experiment": "eight-l4",
+    "dtype": "BF16",
+    "collective": "allreduce",
+    "variant": "fallback",
+    "cases": 17,
+    "geomean_latency_ratio": 1.037684210625113,
+    "worst_latency_ratio": 1.0840576986327115
+  },
+  {
+    "experiment": "eight-l4",
+    "dtype": "BF16",
+    "collective": "reducescatter",
+    "variant": "fallback",
+    "cases": 17,
+    "geomean_latency_ratio": 1.0132742573882692,
+    "worst_latency_ratio": 1.062913349847286
+  },
+  {
+    "experiment": "eight-l4-pinned",
+    "dtype": "BF16",
+    "collective": "allgather",
+    "variant": "fallback",
+    "cases": 17,
+    "geomean_latency_ratio": 0.9846155711913758,
+    "worst_latency_ratio": 1.014945054945055
+  },
+  {
+    "experiment": "eight-l4-pinned",
+    "dtype": "BF16",
+    "collective": "allreduce",
+    "variant": "fallback",
+    "cases": 17,
+    "geomean_latency_ratio": 0.9851392441447441,
+    "worst_latency_ratio": 1.003489077669903
+  },
+  {
+    "experiment": "eight-l4-pinned",
+    "dtype": "BF16",
+    "collective": "reducescatter",
+    "variant": "fallback",
+    "cases": 17,
+    "geomean_latency_ratio": 0.9900224979643102,
+    "worst_latency_ratio": 1.011384335154827
+  },
+  {
+    "experiment": "l41",
+    "dtype": "BF16",
+    "collective": "allgather",
+    "variant": "peer",
+    "cases": 17,
+    "geomean_latency_ratio": 0.9985407413037237,
+    "worst_latency_ratio": 1.020038850330661
+  },
+  {
+    "experiment": "l41",
+    "dtype": "BF16",
+    "collective": "allreduce",
+    "variant": "peer",
+    "cases": 17,
+    "geomean_latency_ratio": 1.0010260133669264,
+    "worst_latency_ratio": 1.0227272803944991
+  },
+  {
+    "experiment": "l41",
+    "dtype": "BF16",
+    "collective": "reducescatter",
+    "variant": "peer",
+    "cases": 17,
+    "geomean_latency_ratio": 0.9950316316691196,
+    "worst_latency_ratio": 1.0265075910223032
+  },
+  {
+    "experiment": "l41",
+    "dtype": "FP32",
+    "collective": "allgather",
+    "variant": "nccl",
+    "cases": 11,
+    "geomean_latency_ratio": 1.0030238429656826,
+    "worst_latency_ratio": 1.0140067990563058
+  },
+  {
+    "experiment": "l41",
+    "dtype": "FP32",
+    "collective": "allgather",
+    "variant": "peer",
+    "cases": 11,
+    "geomean_latency_ratio": 0.9959994660010958,
+    "worst_latency_ratio": 1.015983493148213
+  },
+  {
+    "experiment": "l41",
+    "dtype": "FP32",
+    "collective": "allgather",
+    "variant": "pull",
+    "cases": 11,
+    "geomean_latency_ratio": 0.9995201869024317,
+    "worst_latency_ratio": 1.0091790523084407
+  },
+  {
+    "experiment": "l41",
+    "dtype": "FP32",
+    "collective": "allgather",
+    "variant": "pull-vec",
+    "cases": 11,
+    "geomean_latency_ratio": 0.9992317514146494,
+    "worst_latency_ratio": 1.014441497200118
+  },
+  {
+    "experiment": "l41",
+    "dtype": "FP32",
+    "collective": "reducescatter",
+    "variant": "nccl",
+    "cases": 11,
+    "geomean_latency_ratio": 1.0024003440013376,
+    "worst_latency_ratio": 1.011186806641352
+  },
+  {
+    "experiment": "l41",
+    "dtype": "FP32",
+    "collective": "reducescatter",
+    "variant": "peer",
+    "cases": 11,
+    "geomean_latency_ratio": 0.9969241469374609,
+    "worst_latency_ratio": 1.00298279109534
+  },
+  {
+    "experiment": "l41",
+    "dtype": "FP32",
+    "collective": "reducescatter",
+    "variant": "pull",
+    "cases": 11,
+    "geomean_latency_ratio": 0.9987667753290164,
+    "worst_latency_ratio": 1.001637153357835
+  },
+  {
+    "experiment": "pro6000",
+    "dtype": "BF16",
+    "collective": "allgather",
+    "variant": "peer",
+    "cases": 21,
+    "geomean_latency_ratio": 0.9964071596004203,
+    "worst_latency_ratio": 1.109123460096574
+  },
+  {
+    "experiment": "pro6000",
+    "dtype": "BF16",
+    "collective": "allreduce",
+    "variant": "peer",
+    "cases": 21,
+    "geomean_latency_ratio": 0.9932038710640892,
+    "worst_latency_ratio": 1.0801186534081169
+  },
+  {
+    "experiment": "pro6000",
+    "dtype": "BF16",
+    "collective": "reducescatter",
+    "variant": "peer",
+    "cases": 21,
+    "geomean_latency_ratio": 0.9991839617028078,
+    "worst_latency_ratio": 1.0472756505258976
+  },
+  {
+    "experiment": "pro6000-small-pinned",
+    "dtype": "BF16",
+    "collective": "allgather",
+    "variant": "peer",
+    "cases": 11,
+    "geomean_latency_ratio": 1.0119469946848643,
+    "worst_latency_ratio": 1.0584642640086728
+  },
+  {
+    "experiment": "pro6000-small-pinned",
+    "dtype": "BF16",
+    "collective": "allreduce",
+    "variant": "peer",
+    "cases": 11,
+    "geomean_latency_ratio": 1.00498961727564,
+    "worst_latency_ratio": 1.0432960525741193
+  },
+  {
+    "experiment": "pro6000-small-pinned",
+    "dtype": "BF16",
+    "collective": "reducescatter",
+    "variant": "peer",
+    "cases": 11,
+    "geomean_latency_ratio": 0.9871547809108543,
+    "worst_latency_ratio": 1.0245814461265605
+  }
+]

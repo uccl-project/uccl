@@ -32,6 +32,12 @@ and small GEMMs can lose to NCCL; negative results are retained.
 | [Retained router / peer optimizations](docs/retained-optimizations.md) | Optional BF16 joint interface, retained CPU/packet improvements, measured limitations and reproduction. |
 | [Fusion kernels](docs/fusion.md) | Combine collective communication with GEMM and MoE stages. |
 
+The RTX PRO 6000 BF16 peer path shares inline copy/reduction primitives with
+four-L4 FP32 peer collectives and the eight-L4 BF16 local fallback. One prepared
+peer executor owns the two/four-rank CUDA schedule; the joint layer owns
+validation and calibrated backend selection. See the
+[shared implementation and refactor checks](docs/retained-optimizations.md#shared-collective-components).
+
 ## Get started
 
 From the UCCL repository root on the 8xL4 GPU host:

@@ -1,0 +1,26 @@
+[
+  {
+    "kernel": "pullGather",
+    "before_words": 96,
+    "after_words": 96,
+    "before_sha256": "5181ae9e58da92d935024570e0a534cc51d10b0dc01b806318ecafc1421bc431",
+    "after_sha256": "5181ae9e58da92d935024570e0a534cc51d10b0dc01b806318ecafc1421bc431",
+    "identical": true
+  },
+  {
+    "kernel": "pullVecGather",
+    "before_words": 480,
+    "after_words": 480,
+    "before_sha256": "678abffabeed09e82ac5000631a1e25b39944718e99e19210a3630914da46971",
+    "after_sha256": "678abffabeed09e82ac5000631a1e25b39944718e99e19210a3630914da46971",
+    "identical": true
+  },
+  {
+    "kernel": "pullScatter",
+    "before_words": 96,
+    "after_words": 96,
+    "before_sha256": "819bd21b8f9c8e96acf839b64a70ff1c3ba2eeadaf9a507390f1d8579b64f5db",
+    "after_sha256": "819bd21b8f9c8e96acf839b64a70ff1c3ba2eeadaf9a507390f1d8579b64f5db",
+    "identical": true
+  }
+]

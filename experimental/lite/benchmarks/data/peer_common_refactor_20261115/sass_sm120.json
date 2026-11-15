@@ -1,0 +1,50 @@
+[
+  {
+    "kernel": "peerGather",
+    "before_words": 96,
+    "after_words": 96,
+    "before_sha256": "827895e525b64f11da81e3af6ba534727271e906ba8c47a1eb3c1c5ac7946413",
+    "after_sha256": "827895e525b64f11da81e3af6ba534727271e906ba8c47a1eb3c1c5ac7946413",
+    "identical": true
+  },
+  {
+    "kernel": "peerGatherVector",
+    "before_words": 96,
+    "after_words": 96,
+    "before_sha256": "274e718c9ade2d1ab1dd3bea1204af90a482da7c19c3f5a891a092be7cfbc3e4",
+    "after_sha256": "274e718c9ade2d1ab1dd3bea1204af90a482da7c19c3f5a891a092be7cfbc3e4",
+    "identical": true
+  },
+  {
+    "kernel": "peerReduce",
+    "before_words": 544,
+    "after_words": 544,
+    "before_sha256": "2f52705325c211c5de2f6027da99fd4145b593594f334c7d684684a22273757c",
+    "after_sha256": "2f52705325c211c5de2f6027da99fd4145b593594f334c7d684684a22273757c",
+    "identical": true
+  },
+  {
+    "kernel": "peerReduceVector",
+    "before_words": 784,
+    "after_words": 784,
+    "before_sha256": "80ea9d62e268c4e743ceb608258eb3fb5cea80e64dac495c8430d29456d0120f",
+    "after_sha256": "80ea9d62e268c4e743ceb608258eb3fb5cea80e64dac495c8430d29456d0120f",
+    "identical": true
+  },
+  {
+    "kernel": "peerCoordinator",
+    "before_words": 2016,
+    "after_words": 2016,
+    "before_sha256": "bc540385a8bccdf736d6cc822e5b6d3f431f68e494148ee2ef0b794d6e727b5f",
+    "after_sha256": "bc540385a8bccdf736d6cc822e5b6d3f431f68e494148ee2ef0b794d6e727b5f",
+    "identical": true
+  },
+  {
+    "kernel": "peerCoordinatorVector",
+    "before_words": 2048,
+    "after_words": 2048,
+    "before_sha256": "416d3ac24889734f68115250fef3384a2eae53c468136d0e286e48e7741966e8",
+    "after_sha256": "416d3ac24889734f68115250fef3384a2eae53c468136d0e286e48e7741966e8",
+    "identical": true
+  }
+]
