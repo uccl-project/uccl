@@ -1,49 +1,72 @@
-"""Fixed hybrid configuration against fresh tuned GPU and NCCL controls."""
+"""Plot the fixed hybrid AllReduce configuration against its fresh NCCL control."""
+
 import csv
 from pathlib import Path
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-root=Path(__file__).resolve().parent
-rows=list(csv.DictReader((root/'summary.csv').open()))
-fig,axes=plt.subplots(2,1,figsize=(4.6,6))
-styles=[('hybrid','UCCL Lite: GPU RS + host AG','#0068b5','-',2.6),
-        ('old','UCCL Lite: previous GPU path','#7a858f','-.',1.7),
-        ('nccl','NCCL Ring+Simple','#d65a00','--',1.8)]
-for mode,label,color,ls,lw in styles:
-    selected=sorted((r for r in rows if r['mode']==mode),key=lambda r:int(r['input_bytes_per_gpu']))
-    small=[r for r in selected if int(r['input_bytes_per_gpu'])<=8*2**20]
-    x=[int(r['input_bytes_per_gpu'])/2**20 for r in small]
-    y=[float(r['median_us']) for r in small]
-    err=[[float(r['median_us'])-float(r['min_us']) for r in small],
-         [float(r['max_us'])-float(r['median_us']) for r in small]]
-    axes[0].errorbar(x,y,yerr=err,color=color,linestyle=ls,linewidth=lw,marker='o',markersize=3,capsize=2,label=label)
-    axes[1].plot([int(r['input_bytes_per_gpu'])/2**20 for r in selected],
-                 [float(r['bus_GBps']) for r in selected],color=color,linestyle=ls,linewidth=lw,marker='o',markersize=3,label=label)
-for ax in axes:
-    ax.set_xscale('log',base=2)
-    ax.grid(True,color='#e6edf2',linewidth=.8)
-    ax.set_axisbelow(True)
-    ax.spines[['top','right']].set_visible(False)
-    ax.tick_params(labelsize=8)
-    ax.set_xlabel('Input per GPU (MiB)',fontsize=9)
-axes[0].set_xticks([1,2,4,8],labels=['1','2','4','8'])
-axes[0].set_ylabel('Latency (µs)',fontsize=9)
-axes[0].set_ylim(0,1050)
-axes[0].set_title('1–8 MiB latency',fontsize=10)
-axes[1].set_xticks([1,4,16,64,256,1024],labels=['1','4','16','64','256','1024'])
-axes[1].set_ylabel('Bus bandwidth (GB/s)',fontsize=9)
-axes[1].set_ylim(0,22)
-axes[1].set_title('1 MiB–1 GiB throughput',fontsize=10)
-axes[1].legend(loc='lower right',fontsize=6.7,frameon=False)
-fig.suptitle('AllReduce · 2 × 4 NVIDIA L4',fontsize=12,y=.98)
-fig.text(.5,.936,'FP32 · host enqueue-to-completion · three rounds',ha='center',fontsize=7.5)
-fig.text(.5,.025,'20 warmups + 10 checked calls · fixed 256-KiB host pieces\nBus BW = 7N/(4t); N is input bytes/GPU',ha='center',fontsize=7)
-fig.subplots_adjust(left=.15,right=.975,top=.865,bottom=.15,hspace=.53)
-fig.savefig(root/'results.svg')
-fig.savefig(root/'results.png',dpi=180)
-fig.savefig(root.parents[2]/'docs/assets/collectives-2x4l4-allreduce-hybrid.svg')
+import shutil
+import sys
 
-# Keep generated SVGs clean in source diffs.
-for path in (root/'results.svg', root.parents[2]/'docs/assets/collectives-2x4l4-allreduce-hybrid.svg'):
-    path.write_text('\n'.join(line.rstrip() for line in path.read_text().splitlines())+'\n')
+import matplotlib
+
+matplotlib.use("Agg")
+
+ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(ROOT / "scripts"))
+from figure_style import clean_axis, collective_panels, configure, save
+
+DATA = Path(__file__).resolve().parent
+NAME = "collectives-2x4l4-allreduce-hybrid"
+STYLES = (
+    ("hybrid", "UCCL Lite", "#0068B5", "o", "-"),
+    ("nccl", "NCCL", "#D8A17A", "s", (0, (5, 2.5))),
+)
+
+
+def main():
+    with (DATA / "summary.csv").open(newline="") as source:
+        rows = list(csv.DictReader(source))
+    configure(black_axes=True)
+    fig, axes = collective_panels()
+    for ax, powers, metric, ylabel in (
+        (axes[0], range(20, 24), "median_us", "Latency (µs)"),
+        (axes[1], range(20, 31), "bus_GBps", "Bus throughput (GB/s)"),
+    ):
+        sizes = [1 << power for power in powers]
+        clean_axis(ax)
+        ax.set_xscale("log", base=2)
+        ax.set_xlim(sizes[0] / 1.35, sizes[-1] * 1.35)
+        ticks = sizes if metric == "median_us" else [1 << p for p in (20, 22, 24, 26, 28, 30)]
+        ax.set_xticks(ticks, [f"{size >> 20}M" if size < 1 << 30 else "1G"
+                             for size in ticks])
+        ax.set_xlabel("Complete tensor bytes per rank")
+        ax.set_ylabel(ylabel)
+        upper = 0
+        for mode, label, color, marker, linestyle in STYLES:
+            selected = {int(row["input_bytes_per_gpu"]): row for row in rows
+                        if row["mode"] == mode}
+            values = [float(selected[size][metric]) for size in sizes]
+            style = dict(color=color, marker=marker, linestyle=linestyle,
+                         linewidth=3.6 if mode == "hybrid" else 2.2,
+                         markersize=6.5 if mode == "hybrid" else 5,
+                         markeredgecolor="white", markeredgewidth=0.7, label=label)
+            if metric == "median_us":
+                low = [float(selected[size]["min_us"]) for size in sizes]
+                high = [float(selected[size]["max_us"]) for size in sizes]
+                error = [[value - bound for value, bound in zip(values, low)],
+                         [bound - value for value, bound in zip(values, high)]]
+                ax.errorbar(sizes, values, yerr=error, capsize=2, **style)
+                upper = max(upper, *high)
+            else:
+                ax.plot(sizes, values, **style)
+                upper = max(upper, *values)
+        ax.set_ylim(0, upper * 1.13)
+    handles, labels = axes[1].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 0.99),
+               ncol=2, frameon=False, fontsize=11.5, handlelength=1.6,
+               handletextpad=0.5, labelspacing=0.3)
+    save(fig, NAME, preview=True)
+    shutil.copyfile(ROOT / "docs/assets" / f"{NAME}.svg", DATA / "results.svg")
+    shutil.copyfile(ROOT / "build/figures" / f"{NAME}.png", DATA / "results.png")
+
+
+if __name__ == "__main__":
+    main()

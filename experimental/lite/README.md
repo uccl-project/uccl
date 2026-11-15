@@ -139,7 +139,7 @@ workload from Testbed 1's SGLang serving and DDP/FSDP training.
 <table>
   <tr><th>AllReduce</th><th>AllGather</th><th>ReduceScatter</th></tr>
   <tr>
-    <td width="33%"><img src="docs/assets/collectives-2x4l4-allreduce-hybrid.svg" alt="Two-node FP32 AllReduce: 1–8 MiB latency and 1 MiB–1 GiB bus throughput, GPU ReduceScatter plus host AllGather versus previous UCCL Lite and NCCL Ring+Simple" width="100%"></td>
+    <td width="33%"><img src="docs/assets/collectives-2x4l4-allreduce-hybrid.svg" alt="Two-node FP32 AllReduce: 1–8 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite versus NCCL" width="100%"></td>
     <td width="33%"><img src="docs/assets/collectives-2x4l4-allgather-host-router.svg" alt="Two-node FP32 AllGather: 1–8 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite CPU router versus paired NCCL Ring+Simple" width="100%"></td>
     <td width="33%"><img src="docs/assets/collectives-2x4l4-reducescatter-optimized.svg" alt="Two-node ReduceScatter latency and bus throughput, UCCL Lite versus NCCL" width="100%"></td>
   </tr>
@@ -150,9 +150,8 @@ GPU ReduceScatter followed by shared-host packet AllGather, with **all reduction
 arithmetic on GPUs**. Eight MPI ranks, FP32 input/output bytes per GPU,
 slowest-rank host enqueue-to-completion timing, and three rounds of twenty
 warmups plus ten checked calls. One fixed 256-KiB host-piece configuration
-lowers median latency by **5.8–15.0% versus the previous tuned UCCL Lite** and
-**3.1–13.2% versus NCCL 2.28.7 Ring+Simple** at the eleven measured 1-MiB–1-GiB
-sizes. At 1 GiB it takes **96.33 ms / 19.51 GB/s**. This is an explicit eager
+lowers median latency by **3.1–13.2% versus NCCL 2.28.7 Ring+Simple** at the eleven
+measured 1-MiB–1-GiB sizes. At 1 GiB it takes **96.33 ms / 19.51 GB/s**. This is an explicit eager
 path; no automatic dispatch policy changes.
 
 AllGather uses the [November 15 CPU-router measurements](benchmarks/data/ag_host_router_2x4l4_20261115/README.md):
