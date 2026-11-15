@@ -10,7 +10,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from figure_style import ROOT, clean_axis, configure, save
+from figure_style import ROOT, clean_axis, configure, figure_metric_direction, save
 
 
 DATA = ROOT / "benchmarks/data/fusion_8l4_models_20261111"
@@ -22,9 +22,9 @@ MODELS = (
 )
 PHASES = (("decode", (1, 32, 64)), ("prefill", (2048, 4096, 8192)))
 METHODS = (
-    ("cublas+nccl", "cuBLAS + NCCL", "#D65A00"),
-    ("cublas+router", "cuBLAS + UCCL-Lite", "#0068B5"),
-    ("fused+router", "Fused UCCL-Lite", "#148D91"),
+    ("cublas+nccl", "cuBLAS + NCCL", "#D8A17A"),
+    ("cublas+router", "cuBLAS + UCCL Lite", "#82B4A3"),
+    ("fused+router", "Fused UCCL Lite", "#0068B5"),
 )
 
 
@@ -94,6 +94,7 @@ def plot(data, phase, sizes, preview):
         ax.tick_params(axis="both", colors="black")
         ax.xaxis.label.set_color("black")
         ax.yaxis.label.set_color("black")
+    figure_metric_direction(fig)
     handles, labels = axes.flat[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.54, 0.96),
                ncol=3, frameon=False, fontsize=10, labelcolor="black")
@@ -108,7 +109,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--preview", action="store_true")
     args = parser.parse_args()
-    configure()
+    configure(black_axes=True)
     data = load()
     write_summary(data)
     for phase, sizes in PHASES:

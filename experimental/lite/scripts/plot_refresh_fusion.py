@@ -10,11 +10,12 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from figure_style import GRID, INK, ROOT, clean_axis, configure, heading, save
+from figure_style import (GRID, INK, ROOT, clean_axis, configure,
+                          figure_metric_direction, heading, save)
 
 DATA = ROOT / "benchmarks/data/refresh_20261110"
 UCCL_COLOR = "#0068B5"
-NCCL_COLOR = "#D65A00"
+NCCL_COLOR = "#D8A17A"
 
 
 def rows(path: Path) -> list[dict[str, str]]:
@@ -23,7 +24,7 @@ def rows(path: Path) -> list[dict[str, str]]:
 
 
 def bars(ax, labels, baseline, own, title, xlabel, baseline_label,
-         own_label="UCCL-Lite selected"):
+         own_label="UCCL Lite selected"):
     y = np.arange(len(labels))
     clean_axis(ax)
     ax.grid(axis="y", visible=False)
@@ -74,6 +75,7 @@ def dense(preview: bool) -> None:
             bars(axes[row_index, column], labels, baseline, own,
                  title + (" · smaller shapes" if column == 0 else " · larger shapes"),
                  "Latency (ms) ↓", "NCCL collective + cuBLAS")
+    figure_metric_direction(figure, y=0.94)
     handles, labels = axes[0, 0].get_legend_handles_labels()
     figure.legend(handles[::-1], labels[::-1], loc="upper right",
                   bbox_to_anchor=(0.98, 0.87), ncol=2, frameon=False,
@@ -96,7 +98,8 @@ def moe(preview: bool) -> None:
         baseline = [float(row["baseline_us"]) / 1000 for row in group]
         own = [float(row["uccl_us"]) / 1000 for row in group]
         bars(ax, labels, baseline, own, title, "Full-layer latency (ms) ↓",
-             "NCCL + grouped cuBLAS", "UCCL-Lite fused")
+             "NCCL + grouped cuBLAS", "UCCL Lite fused")
+    figure_metric_direction(figure, y=0.94)
     handles, labels = axes[0].get_legend_handles_labels()
     figure.legend(handles[::-1], labels[::-1], loc="upper right",
                   bbox_to_anchor=(0.98, 0.87), ncol=2, frameon=False,
@@ -109,6 +112,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--preview", action="store_true")
     args = parser.parse_args()
-    configure()
+    configure(black_axes=True)
     dense(args.preview)
     moe(args.preview)

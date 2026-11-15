@@ -61,6 +61,15 @@ def metric_direction(ax, higher: bool = False) -> None:
                   "edgecolor": "none"})
 
 
+def figure_metric_direction(fig, higher: bool = False, y: float = 0.90) -> None:
+    """Label a figure whose panels all show the same metric direction."""
+    label = "↑ Higher is better" if higher else "↓ Lower is better"
+    fig.text(0.98, y, label, ha="right", va="bottom", fontsize=12,
+             fontweight="bold", color="#0068B5",
+             bbox={"boxstyle": "round,pad=0.3", "facecolor": "#EAF3FA",
+                   "edgecolor": "none"})
+
+
 def collective_panels():
     """Keep labels readable when three collective figures share a README row."""
     fig, axes = plt.subplots(2, 1, figsize=(4.6, 6.0))
