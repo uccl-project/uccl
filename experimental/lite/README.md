@@ -169,10 +169,55 @@ Implementation and in-place handoff details are in
 
 #### Optimization notes (temporary)
 
-For AllReduce, the successful transfer is to reduce on GPUs first, then apply
-the host-gather pipeline to the resulting N/8-byte shards. The complete
-operation, including its phase handoff and packed-input protection barrier,
-is measured. Uploading full inputs for CPU reduction did not produce a win.
+##### AllReduce
+
+The successful path is **GPU ReduceScatter followed by host-packet AllGather**.
+Here `N` is the full input/output size per GPU. The GPU phase produces one
+fully reduced `N/8`-byte shard on each of the eight GPUs; the host phase only
+moves and assembles those shards. No CPU reduction is involved.
+
+- **Reduce before host staging.** Reuse the tuned GPU ReduceScatter instead of
+  uploading full inputs for CPU summation. Staging already-reduced shards keeps
+  the host phase small enough to benefit from the AllGather pipeline.
+- **Reuse the AllGather movement and progress rules.** Retain the GPU's own
+  shard, upload adjacent pieces into NUMA-local paired packets, share local
+  packets through mapped memory, and advance ready work across three slots.
+  Reuse waits for GPU readers, network sends, and local consumption ACKs.
+- **Protect the in-place input at the phase boundary.** The packed GPU path
+  reads the current AllReduce input before peer receives overwrite its scratch
+  region. Complete packing and synchronize ranks before those writes; include
+  this barrier and the GPU-to-host handoff in the measured operation.
+- **Measure the composition end to end.** Separate ReduceScatter and AllGather
+  timings suggest a hypothesis, but do not prove the combined latency. Compare
+  the actual combined call with the exact previous tuned configuration and a
+  matched NCCL control, including every completion wait.
+- **Keep the tradeoff explicit.** This path sends `1.5N` bytes per node across
+  its two phases, versus `N` for the previous hierarchy. More host-network
+  traffic can still be worthwhile when it replaces slower GPU peer copying
+  on this PCIe topology.
+
+The [checked comparison](benchmarks/data/hybrid_ar_2x4l4_20261115/README.md)
+uses two four-L4 hosts, FP32, eight MPI ranks, slowest-rank host
+enqueue-to-completion timing, and three rounds of twenty warmups plus ten timed
+calls. Preparation, fill and validation are outside timing. Host pieces stay
+fixed at 256 KiB; the GPU phase retains the existing ReduceScatter selection.
+There is no best-host-variant-per-size envelope. Latencies below are milliseconds,
+reported as medians of the three round means.
+
+| Input/output per GPU | Previous UCCL Lite | GPU RS + host AG | NCCL Ring+Simple |
+| --- | ---: | ---: | ---: |
+| 1 MiB | 0.212 | **0.180** | 0.205 |
+| 8 MiB | 0.956 | **0.892** | 0.920 |
+| 64 MiB | 7.065 | **6.143** | 6.944 |
+| 1 GiB | 106.021 | **96.325** | 110.204 |
+
+Across the eleven tested power-of-two sizes from 1 MiB to 1 GiB, median latency
+falls 5.8–15.0% versus previous UCCL Lite and 3.1–13.2% versus NCCL 2.28.7
+Ring+Simple. These results do not establish a ReduceScatter speedup or a gain
+at unmeasured sizes. The path is eager-only and explicitly selected; automatic
+routing remains unchanged. See [the implementation and run command](docs/multinode-hybrid-allreduce.md).
+
+##### AllGather
 
 The main gains came from organizing data movement and progress around the NUMA
 layout. Each group's two GPUs upload adjacent pieces into a pinned host packet;
