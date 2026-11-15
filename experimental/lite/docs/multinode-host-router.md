@@ -62,6 +62,90 @@ phase sequence numbers even when the second request arrives before the worker
 observes the first. Exceptions propagate to the main thread. Workers stop before
 CUDA events and mapped memory are destroyed.
 
+## Optimization lessons
+
+The useful abstraction is a packet with explicit producer readiness and reader
+credits. NUMA-local D2H aggregation was already present in the original host
+pipeline. Its presence alone did not make that pipeline faster than the GPU
+path; the remaining copies and dependencies determined end-to-end performance.
+
+### Count copies at each memory boundary
+
+For complete output N per GPU, each GPU contributes N/8. Retaining that shard
+in GPU memory removes a redundant H2D read, but it must still be uploaded for
+other consumers. The two D2H operations land directly in adjacent packet
+intervals, so aggregation needs no extra CPU concatenation pass.
+
+The larger saving came from replacing the local NUMA-to-NUMA packet copy with
+a shared mapping. The destination GPUs read the original source packet. This
+removes the CPU copy and its scheduling/completion dependency; it does not
+eliminate cross-NUMA traffic. In fact, two GPU readers can move more bytes
+across that boundary than one CPU copy. The measured benefit comes from the
+complete schedule, not simply a smaller byte count on every link.
+
+### Overlap requires timely progress
+
+Three buffers provide capacity for overlap, but a fixed step loop can still
+stall: waiting for a future upload may postpone consumption of an older packet
+that has already arrived. The ready-driven loop tests outstanding work and
+advances eligible sends, consumption and retirement. It preserves logical MPI
+send order even when device completion order differs. Splitting local and
+remote consumption exposes useful work before all remote packets arrive.
+
+The fixed fast configuration uses one routing thread per NUMA group and no
+additional GPU submission workers. More threads were not needed for the final
+win. Likewise, smaller chunks increase control and launch costs; the measured
+256 KiB setting balances overlap, packet footprint and submission overhead on
+this testbed, rather than establishing a universal chunk size.
+
+### Reader completion is part of the algorithm
+
+A completed upload or network send does not imply that every GPU has finished
+reading a shared source packet. The owner waits for local consumers, outgoing
+transfers and the peer's consumption ACK before overwriting the slot. A peer
+sends its ACK only after both of its GPU consumers complete. Per-slot message
+tags and generation counters prevent completion of one slot or phase from
+releasing another. Delayed-consumer and tail tests exercise this lifetime rule.
+
+### Attribute gains to the measured changes
+
+The final host sweep uses FP32 on two four-L4 hosts, four MPI processes with
+two GPUs per process, host enqueue-to-completion timing, ten warmups and ten
+timed calls in each of three rounds. All outputs are checked. The following
+1-GiB values are medians of round means from the same sweep:
+
+| Configuration | Latency | Change from preceding row |
+| --- | ---: | --- |
+| Original host pipeline, 1 MiB chunks | 66.26 ms | Baseline |
+| 256 KiB chunks, own GPU shard retained, early consumption | 64.10 ms | Combined change; not an isolated attribution |
+| Shared local packets | 51.21 ms | Remove the intermediate local packet copy |
+| Ready-driven progress | **42.92 ms** | Avoid blocking eligible work on other stages |
+
+The final configuration reduces latency by 35.2% versus the original host
+pipeline. Against the separately measured eight-process GPU policy in the same
+comparison window, latency falls from 54.04 to 42.92 ms, a 20.6% reduction.
+That is an implementation-level comparison that includes process layout. The
+four-process host harness supplies a matching NCCL control as well. The headline
+1 MiB–1 GiB curve uses the same 256 KiB configuration at every size; it does not
+select a different winner at each point.
+
+GPU fan-in/out and cross-NUMA traffic remain useful hypotheses, but they need
+size-specific checks. Matched peer exchange improved large-message fan-out
+experiments and added overhead at small sizes. Sending a packet to fewer remote
+NUMA groups saved network bytes but added a dependent host relay and lost in the
+host-path pilots. Dedicated GPU workers, finer chunks and direct host RDMA also
+had mixed results. Preserve those outcomes instead of treating any one mechanism
+as an unconditional optimization.
+
+NCCL priming fixes a first-size measurement state effect; it is not an algorithmic
+speedup. The comparisons above use consistent, checked priming and warmups.
+Historical measurements do not validate later source changes, and core router
+graph tests do not establish graph support for this eager MPI implementation.
+Keep production selection behind explicit preparation and matching topology,
+process ownership, dtype, exact size, software identity and timing evidence.
+
+See the [full measured configurations, raw samples and negative results](../benchmarks/data/ag_host_router_2x4l4_20261115/README.md).
+
 ## Retained alternatives
 
 - `--network paired`: one inter-node copy, followed by a host relay to the other
