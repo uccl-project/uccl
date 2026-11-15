@@ -1,4 +1,4 @@
-"""Plot the integrated PRO6000 x2 joint/P2P results against default NCCL."""
+"""Plot PRO6000 joint/P2P, original default NCCL and independently tuned NCCL."""
 import argparse
 import csv
 import math
@@ -35,12 +35,24 @@ def load():
                 value = float(row[f"{prefix}{order}_us"])
                 if not math.isfinite(value) or value <= 0:
                     raise ValueError("invalid latency")
+    tuned_path = DATA.parent / "nccl_tuned_pro6000_20261115" / "cases.csv"
+    with tuned_path.open() as stream:
+        tuned_rows = list(csv.DictReader(stream))
+    tuned = {(row["operation"], int(row["bytes"])): row for row in tuned_rows}
+    if len(tuned) != len(tuned_rows) or set(tuned) != expected:
+        raise ValueError("incomplete or duplicate tuned NCCL results")
+    for key, row in tuned.items():
+        for order in ("forward", "reverse"):
+            value = float(row[f"{order}_us"])
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError("invalid tuned NCCL latency")
+            result[key][f"tuned_{order}_us"] = value
     return result
 
 
 def make_figure(data, operation, title, factor):
-    fig, axes = plt.subplots(1, 2, figsize=(10.8, 4.5))
-    fig.subplots_adjust(left=0.085, right=0.985, top=0.74, bottom=0.23, wspace=0.28)
+    fig, axes = plt.subplots(1, 2, figsize=(10.8, 4.8))
+    fig.subplots_adjust(left=0.085, right=0.985, top=0.74, bottom=0.27, wspace=0.28)
     fig.suptitle(f"RTX PRO 6000 ×2 · {title}", y=0.98,
                  fontsize=15, fontweight="bold")
     for ax, powers, ylabel, throughput in (
@@ -60,6 +72,7 @@ def make_figure(data, operation, title, factor):
         upper = 0.0
         for prefix, label, color, marker, linestyle in (
             ("nccl_", "NCCL 2.29.7 (default P2P)", "#D65A00", "s", (0, (5, 2.5))),
+            ("tuned_", "NCCL 2.29.7 (tuned)", "#168B67", "D", (0, (2, 1.5))),
             ("", "UCCL Lite (joint/P2P)", "#0068B5", "o", "-"),
         ):
             runs = [[float(data[operation, size][f"{prefix}{order}_us"])
@@ -77,13 +90,16 @@ def make_figure(data, operation, title, factor):
         ax.set_ylim(0, upper * 1.13)
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(handles[::-1], labels[::-1], loc="upper center",
-               bbox_to_anchor=(0.5, 0.91), ncol=2, frameon=False,
-               fontsize=12, handlelength=2.8, columnspacing=2.5)
-    fig.text(0.5, 0.075,
+               bbox_to_anchor=(0.5, 0.91), ncol=3, frameon=False,
+               fontsize=10.5, handlelength=2.4, columnspacing=1.6)
+    fig.text(0.5, 0.11,
              "BF16 · out of place · prepared eager · slowest-rank CUDA events including submission gaps",
              ha="center", fontsize=8.5, color="#607486")
-    fig.text(0.5, 0.025,
-             "Median of two run medians; shading: run range · 100 warmups + 5 × 20 calls/run · commit b0ac7b4a",
+    fig.text(0.5, 0.065,
+             "Median of two run medians; shading: run range · 100 warmups + 5 × 20 calls/run",
+             ha="center", fontsize=8.5, color="#607486")
+    fig.text(0.5, 0.02,
+             "UCCL/default: original b0ac7b4a results · tuned NCCL: independent per-size calibration, 2026-11-15",
              ha="center", fontsize=8.5, color="#607486")
     return fig
 

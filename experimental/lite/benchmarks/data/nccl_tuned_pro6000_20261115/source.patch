@@ -1,0 +1,98 @@
+--- benchmarks/joint/joint_bench.cu
++++ build/nccl_tuned_20261115/nccl_reference.cu
+@@ -1,5 +1,5 @@
+ // Frozen common BF16 benchmark: NCCL_REFERENCE_ONLY removes all solution links.
+-#include "../cpu_router/nccl_identity.hpp"
++#include "nccl_identity.hpp"
+ #include <cuda_bf16.h>
+ #include <cuda_runtime.h>
+ #include <nccl.h>
+@@ -117,7 +117,9 @@
+   std::vector<cudaStream_t> streams;
+   std::vector<cudaEvent_t> start, stop;
+   std::vector<int *> errors;
+-  Buffers(int ranks, size_t bytes) {
++  bool registered = std::getenv("UCCL_NCCL_REGISTER") != nullptr;
++  size_t allocationBytes;
++  Buffers(int ranks, size_t bytes) : allocationBytes(bytes + 4 * kGuard) {
+     for (int r = 0; r < ranks; ++r) {
+       ck(cudaSetDevice(r));
+       devices.push_back(r);
+@@ -125,8 +127,13 @@
+       int *e;
+       cudaStream_t s;
+       cudaEvent_t x, y;
+-      ck(cudaMalloc(&a, bytes + 4 * kGuard));
+-      ck(cudaMalloc(&b, bytes + 4 * kGuard));
++      if (registered) {
++        nk(ncclMemAlloc(reinterpret_cast<void **>(&a), allocationBytes));
++        nk(ncclMemAlloc(reinterpret_cast<void **>(&b), allocationBytes));
++      } else {
++        ck(cudaMalloc(&a, allocationBytes));
++        ck(cudaMalloc(&b, allocationBytes));
++      }
+       ck(cudaMalloc(&e, sizeof(int)));
+       ck(cudaStreamCreateWithFlags(&s, cudaStreamNonBlocking));
+       ck(cudaEventCreate(&x));
+@@ -143,8 +150,13 @@
+     for (size_t r = 0; r < devices.size(); ++r) {
+       cudaSetDevice(devices[r]);
+       cudaStreamSynchronize(streams[r]);
+-      cudaFree(in[r] - kGuard);
+-      cudaFree(out[r] - kGuard);
++      if (registered) {
++        ncclMemFree(in[r] - kGuard);
++        ncclMemFree(out[r] - kGuard);
++      } else {
++        cudaFree(in[r] - kGuard);
++        cudaFree(out[r] - kGuard);
++      }
+       cudaFree(errors[r]);
+       cudaEventDestroy(start[r]);
+       cudaEventDestroy(stop[r]);
+@@ -241,10 +253,36 @@
+ struct Nccl {
+   Buffers &b;
+   std::vector<ncclComm_t> comm;
++  std::vector<ncclWindow_t> inputWindows, outputWindows;
+   explicit Nccl(Buffers &buffers) : b(buffers), comm(b.devices.size()) {
+     nk(ncclCommInitAll(comm.data(), int(comm.size()), b.devices.data()));
++    if (b.registered) {
++      inputWindows.resize(comm.size());
++      outputWindows.resize(comm.size());
++      nk(ncclGroupStart());
++      for (size_t r = 0; r < comm.size(); ++r) {
++        ck(cudaSetDevice(b.devices[r]));
++        nk(ncclCommWindowRegister(comm[r], b.in[r] - kGuard, b.allocationBytes,
++                                 &inputWindows[r], NCCL_WIN_COLL_SYMMETRIC));
++        nk(ncclCommWindowRegister(comm[r], b.out[r] - kGuard, b.allocationBytes,
++                                 &outputWindows[r], NCCL_WIN_COLL_SYMMETRIC));
++      }
++      nk(ncclGroupEnd());
++      for (size_t r = 0; r < comm.size(); ++r)
++        if (!inputWindows[r] || !outputWindows[r])
++          throw std::runtime_error("symmetric window registration unavailable");
++      std::cerr << "Symmetric windows registered on every rank\n";
++    }
+   }
+   ~Nccl() {
++    if (b.registered) {
++      for (size_t r = 0; r < comm.size(); ++r) {
++        cudaSetDevice(b.devices[r]);
++        cudaStreamSynchronize(b.streams[r]);
++        ncclCommWindowDeregister(comm[r], inputWindows[r]);
++        ncclCommWindowDeregister(comm[r], outputWindows[r]);
++      }
++    }
+     for (auto c : comm)
+       ncclCommDestroy(c);
+   }
+@@ -575,7 +613,7 @@
+               << " repeats=" << cfg.repeats << " iterations=" << cfg.iterations
+               << " seed=" << cfg.seed << " source=" << cfg.source
+               << " profile=" << cfg.profile << '\n';
+-    Buffers b(cfg.gpus, std::max(cfg.end, size_t(4096)));
++    Buffers b(cfg.gpus, std::max(cfg.end, size_t(1UL << 30)));
+ #ifndef NCCL_REFERENCE_ONLY
+     if (cfg.selftest) {
+       selftest(cfg, b);

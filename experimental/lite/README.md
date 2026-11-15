@@ -224,17 +224,30 @@ AG output or complete RS input per rank. For two GPUs, bus throughput is
 [Raw data, checks and reproduction](benchmarks/data/pro6000_b0ac7b4a_validation/README.md)
 · [Implementation and limitations](docs/retained-optimizations.md).
 
+The figures also include a **tuned NCCL reference** from a separate
+2026-11-15 retest of all three collectives. Its settings are selected per
+collective and exact size from two independent calibration sweeps, then frozen
+before forward/reverse validation with the same 100-warmup, 5×20-call timing
+protocol. This is a calibrated benchmark schedule, not a best-of-final-results
+curve or a portable NCCL policy. Registered-buffer preparation is excluded
+where selected. The original UCCL/default-NCCL curves and their measurements
+are preserved; the reported UCCL speedups above remain comparisons against
+default NCCL. [Tuned settings, fresh controls, transport logs and results](benchmarks/data/nccl_tuned_pro6000_20261115/README.md).
+At 1 GiB, validated tuned NCCL bus throughput is **36.75 / 36.66 / 36.77 GB/s**
+for AR/AG/RS. Fast memcpy-transport candidates that stalled in largest-first
+validation are excluded; small-message regressions are retained.
+
 ##### AllReduce on RTX PRO 6000 ×2
 
-![PRO6000 x2 AllReduce: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, calibrated UCCL Lite peer versus default NCCL P2P](docs/assets/collectives-pro6000x2-allreduce-overview.svg)
+![PRO6000 x2 AllReduce: UCCL Lite, default NCCL P2P and independently tuned NCCL latency and bus throughput](docs/assets/collectives-pro6000x2-allreduce-overview.svg)
 
 ##### AllGather on RTX PRO 6000 ×2
 
-![PRO6000 x2 AllGather: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, calibrated UCCL Lite peer versus default NCCL P2P](docs/assets/collectives-pro6000x2-allgather-overview.svg)
+![PRO6000 x2 AllGather: UCCL Lite, default NCCL P2P and independently tuned NCCL latency and bus throughput](docs/assets/collectives-pro6000x2-allgather-overview.svg)
 
 ##### ReduceScatter on RTX PRO 6000 ×2
 
-![PRO6000 x2 ReduceScatter: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, calibrated UCCL Lite peer versus default NCCL P2P](docs/assets/collectives-pro6000x2-reducescatter-overview.svg)
+![PRO6000 x2 ReduceScatter: UCCL Lite, default NCCL P2P and independently tuned NCCL latency and bus throughput](docs/assets/collectives-pro6000x2-reducescatter-overview.svg)
 
 #### 8xL4 GPU
 

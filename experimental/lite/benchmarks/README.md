@@ -26,6 +26,7 @@ records give their own topology and measurement protocol.
 
 | File | Scope and method |
 | --- | --- |
+| [nccl_tuned_pro6000_20261115](data/nccl_tuned_pro6000_20261115/README.md) | Two-PRO6000 BF16 AR/AG/RS: independent per-size NCCL calibration, forward/reverse validation, transport evidence and retained stalled candidates; tuned reference added to the README figures. |
 | [overview_8l4_20261114](data/overview_8l4_20261114/README.md) | Six GPU/SHM README figures using fresh measurements at all 126 keys from 1 KiB–1 GiB, with no historical tails. |
 | [full_refresh_8l4_20261114](data/full_refresh_8l4_20261114/README.md) | Complete paired BF16 AR/AG/RS rerun on GPU-default and explicit SHM testbeds: two reversed sweeps, 22,680 checked timed calls, full-output guards, base-router ablation and actual NCCL transport evidence. |
 | [rs_recovery_8l4_20261114](data/rs_recovery_8l4_20261114/README.md) | Opt-in BF16 host-ring ReduceScatter at 1–8 MiB: 6–15% lower latency than the paired previous schedule, four full GPU/SHM sweeps, 7,560 checked timed calls, and retained failed candidates. |
