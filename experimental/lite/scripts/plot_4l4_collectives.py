@@ -69,7 +69,7 @@ def size_name(n):
 
 
 if __name__ == "__main__":
-    configure()
+    configure(black_axes=True)
     data = ROOT / "benchmarks/data/small_medium_4l4_20261113"
     for prefix, name, timer, factor in (
         ("ar", "AllReduce", "4 processes, host timer", 1.5),

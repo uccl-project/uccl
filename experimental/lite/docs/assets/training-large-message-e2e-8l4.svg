@@ -40,14 +40,14 @@ z
     <g id="xtick_1">
      <g id="line2d_1"/>
      <g id="text_1">
-      <text style="font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="230.603478" y="282.229187" transform="rotate(-0 230.603478 282.229187)">DDP</text>
+      <text style="font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: middle" x="230.603478" y="282.229187" transform="rotate(-0 230.603478 282.229187)">DDP</text>
      </g>
     </g>
     <g id="xtick_2">
      <g id="line2d_2"/>
      <g id="text_2">
-      <text style="font-size: 12px; font-family: 'DejaVu Sans'; fill: #607486" transform="translate(460.323709 283.430359)">FSDP</text>
-      <text style="font-size: 12px; font-family: 'DejaVu Sans'; fill: #607486" transform="translate(410.519959 297.833641)">experimental adapter</text>
+      <text style="font-size: 12px; font-family: 'DejaVu Sans'" transform="translate(460.323709 283.430359)">FSDP</text>
+      <text style="font-size: 12px; font-family: 'DejaVu Sans'" transform="translate(410.519959 297.833641)">experimental adapter</text>
      </g>
     </g>
    </g>
@@ -60,7 +60,7 @@ L 635.04 266.112
      </g>
      <g id="line2d_4"/>
      <g id="text_3">
-      <text style="font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #607486" x="64.28" y="270.670594" transform="rotate(-0 64.28 270.670594)">0</text>
+      <text style="font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: end" x="64.28" y="270.670594" transform="rotate(-0 64.28 270.670594)">0</text>
      </g>
     </g>
     <g id="ytick_2">
@@ -71,7 +71,7 @@ L 635.04 231.222857
      </g>
      <g id="line2d_6"/>
      <g id="text_4">
-      <text style="font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #607486" x="64.28" y="235.781451" transform="rotate(-0 64.28 235.781451)">200</text>
+      <text style="font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: end" x="64.28" y="235.781451" transform="rotate(-0 64.28 235.781451)">200</text>
      </g>
     </g>
     <g id="ytick_3">
@@ -82,7 +82,7 @@ L 635.04 196.333714
      </g>
      <g id="line2d_8"/>
      <g id="text_5">
-      <text style="font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #607486" x="64.28" y="200.892308" transform="rotate(-0 64.28 200.892308)">400</text>
+      <text style="font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: end" x="64.28" y="200.892308" transform="rotate(-0 64.28 200.892308)">400</text>
      </g>
     </g>
     <g id="ytick_4">
@@ -93,7 +93,7 @@ L 635.04 161.444571
      </g>
      <g id="line2d_10"/>
      <g id="text_6">
-      <text style="font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #607486" x="64.28" y="166.003165" transform="rotate(-0 64.28 166.003165)">600</text>
+      <text style="font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: end" x="64.28" y="166.003165" transform="rotate(-0 64.28 166.003165)">600</text>
      </g>
     </g>
     <g id="ytick_5">
@@ -104,7 +104,7 @@ L 635.04 126.555429
      </g>
      <g id="line2d_12"/>
      <g id="text_7">
-      <text style="font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #607486" x="64.28" y="131.114022" transform="rotate(-0 64.28 131.114022)">800</text>
+      <text style="font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: end" x="64.28" y="131.114022" transform="rotate(-0 64.28 131.114022)">800</text>
      </g>
     </g>
     <g id="ytick_6">
@@ -115,11 +115,11 @@ L 635.04 91.666286
      </g>
      <g id="line2d_14"/>
      <g id="text_8">
-      <text style="font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #607486" x="64.28" y="96.224879" transform="rotate(-0 64.28 96.224879)">1000</text>
+      <text style="font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: end" x="64.28" y="96.224879" transform="rotate(-0 64.28 96.224879)">1000</text>
      </g>
     </g>
     <g id="text_9">
-     <text style="font-size: 13px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="26.616953" y="174.528" transform="rotate(-90 26.616953 174.528)">Training step latency (ms)</text>
+     <text style="font-size: 13px; font-family: 'DejaVu Sans'; text-anchor: middle" x="26.616953" y="174.528" transform="rotate(-90 26.616953 174.528)">Training step latency (ms)</text>
     </g>
    </g>
    <g id="patch_3">
@@ -212,7 +212,7 @@ z
 " style="fill: #f6c99f"/>
     </g>
     <g id="text_17">
-     <text style="font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #172a3a" x="115.68" y="102.862125" transform="rotate(-0 115.68 102.862125)">NCCL (default)</text>
+     <text style="font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: start" x="115.68" y="102.862125" transform="rotate(-0 115.68 102.862125)">NCCL (default)</text>
     </g>
     <g id="patch_9">
      <path d="M 82.08 120.863063
@@ -223,7 +223,7 @@ z
 " style="fill: #0068b5"/>
     </g>
     <g id="text_18">
-     <text style="font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #172a3a" x="115.68" y="120.863063" transform="rotate(-0 115.68 120.863063)">UCCL Lite</text>
+     <text style="font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: start" x="115.68" y="120.863063" transform="rotate(-0 115.68 120.863063)">UCCL Lite</text>
     </g>
    </g>
   </g>

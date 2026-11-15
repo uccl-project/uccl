@@ -44,7 +44,7 @@ def main():
     for case in cases:
         requests, inputs, outputs = map(int, case.split(":"))
         labels.append(f"{requests} × {inputs:,}\n{outputs} output")
-    configure()
+    configure(black_axes=True)
     plt.rcParams.update({"axes.labelsize": 13, "xtick.labelsize": 12, "ytick.labelsize": 12})
     fig, ax = plt.subplots(figsize=(9, 4.8))
     fig.subplots_adjust(left=0.11, right=0.98, top=0.76, bottom=0.23)

@@ -18,7 +18,7 @@ MUTED = "#607486"
 GRID = "#E6EDF2"
 
 
-def configure() -> None:
+def configure(black_axes: bool = False) -> None:
     plt.rcParams.update(
         {
             "font.family": "DejaVu Sans",
@@ -26,14 +26,15 @@ def configure() -> None:
             "axes.titlesize": 12,
             "axes.titleweight": "bold",
             "axes.labelsize": 11,
-            "axes.labelcolor": MUTED,
+            "axes.labelcolor": "#000000" if black_axes else MUTED,
             "axes.spines.top": False,
             "axes.spines.right": False,
             "axes.spines.left": False,
             "axes.spines.bottom": False,
             "text.color": INK,
-            "xtick.color": MUTED,
-            "ytick.color": MUTED,
+            "xtick.color": "#000000" if black_axes else MUTED,
+            "ytick.color": "#000000" if black_axes else MUTED,
+            "legend.labelcolor": "#000000" if black_axes else INK,
             "svg.fonttype": "none",
             "svg.hashsalt": "uccl-lite-figures-v2",
         }

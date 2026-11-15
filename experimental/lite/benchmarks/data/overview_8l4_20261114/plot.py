@@ -97,7 +97,7 @@ def main():
     parser.add_argument("--testbed", choices=("gpu", "shm", "all"), default="all")
     parser.add_argument("--op", choices=("all_reduce", "all_gather", "reduce_scatter", "all"), default="all")
     args = parser.parse_args()
-    configure()
+    configure(black_axes=True)
     data = load()
     for mode in (("gpu", "shm") if args.testbed == "all" else (args.testbed,)):
         for operation, name, factor in OPERATIONS:

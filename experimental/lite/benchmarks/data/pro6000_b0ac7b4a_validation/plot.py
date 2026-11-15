@@ -110,7 +110,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--preview", action="store_true")
     args = parser.parse_args()
-    configure()
+    configure(black_axes=True)
     data = load()
     for operation, title, factor in OPERATIONS:
         fig = make_figure(data, operation, title, factor)
