@@ -8,6 +8,15 @@
 
 </div>
 
+## Testbeds
+
+| GPUs | GPU P2P |
+| --- | --- |
+| 8 × NVIDIA L4 | Partial P2P |
+| 8 × NVIDIA L4 | Without P2P |
+| 4 × NVIDIA L4 | With P2P |
+| 2 × NVIDIA RTX PRO 6000 | With P2P |
+
 UCCL Lite is an experimental collection of CUDA collective kernels, an
 optional CPU router, fusion kernels, and hardware probes. The direct peer paths
 target **four NVIDIA L4 GPUs on a PCIe Gen4 dual-socket node**; the network
