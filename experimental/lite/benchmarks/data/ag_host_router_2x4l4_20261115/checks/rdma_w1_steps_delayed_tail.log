@@ -1,0 +1,48 @@
+# two-node host-RDMA AllGather; FP32; 4 GPUs/node; 2 MPI groups/node; 2 IB rails; chunk=131200 B; slots=3; download=sm
+# host network=precredited-rdma local_input=self gpu_workers=1 early_consume=1 progress=steps upload=dma lean_context=0 consume_threads=256 local_exchange=shared delay_rank=1
+# timing=host enqueue+completion, slowest of 4 groups/8 GPUs; warmups=5 iterations=10 repeats=1; every output checked
+collective,bytes,backend,median_us,min_us,max_us
+# sample,allgather,1572864,host-rdma-direct,1,1,108.835,0
+# sample,allgather,1572864,host-rdma-direct,1,2,505.200,0
+# sample,allgather,1572864,host-rdma-direct,1,3,109.634,0
+# sample,allgather,1572864,host-rdma-direct,1,4,106.562,0
+# sample,allgather,1572864,host-rdma-direct,1,5,503.282,0
+# sample,allgather,1572864,host-rdma-direct,1,6,118.662,0
+# sample,allgather,1572864,host-rdma-direct,1,7,110.516,0
+# sample,allgather,1572864,host-rdma-direct,1,8,499.227,0
+# sample,allgather,1572864,host-rdma-direct,1,9,108.522,0
+# sample,allgather,1572864,host-rdma-direct,1,10,106.595,0
+allgather,1572864,host-rdma-direct,227.703,227.703,227.703
+# sample,allgather,3145728,host-rdma-direct,1,1,179.924,0
+# sample,allgather,3145728,host-rdma-direct,1,2,776.774,0
+# sample,allgather,3145728,host-rdma-direct,1,3,175.223,0
+# sample,allgather,3145728,host-rdma-direct,1,4,178.750,0
+# sample,allgather,3145728,host-rdma-direct,1,5,770.328,0
+# sample,allgather,3145728,host-rdma-direct,1,6,181.519,0
+# sample,allgather,3145728,host-rdma-direct,1,7,178.205,0
+# sample,allgather,3145728,host-rdma-direct,1,8,772.416,0
+# sample,allgather,3145728,host-rdma-direct,1,9,183.286,0
+# sample,allgather,3145728,host-rdma-direct,1,10,177.687,0
+allgather,3145728,host-rdma-direct,357.411,357.411,357.411
+# sample,allgather,6291456,host-rdma-direct,1,1,364.630,0
+# sample,allgather,6291456,host-rdma-direct,1,2,945.875,0
+# sample,allgather,6291456,host-rdma-direct,1,3,949.699,0
+# sample,allgather,6291456,host-rdma-direct,1,4,366.686,0
+# sample,allgather,6291456,host-rdma-direct,1,5,948.925,0
+# sample,allgather,6291456,host-rdma-direct,1,6,946.750,0
+# sample,allgather,6291456,host-rdma-direct,1,7,368.407,0
+# sample,allgather,6291456,host-rdma-direct,1,8,949.995,0
+# sample,allgather,6291456,host-rdma-direct,1,9,947.113,0
+# sample,allgather,6291456,host-rdma-direct,1,10,362.346,0
+allgather,6291456,host-rdma-direct,715.043,715.043,715.043
+# sample,allgather,12582912,host-rdma-direct,1,1,1292.503,0
+# sample,allgather,12582912,host-rdma-direct,1,2,1890.936,0
+# sample,allgather,12582912,host-rdma-direct,1,3,1284.142,0
+# sample,allgather,12582912,host-rdma-direct,1,4,1278.883,0
+# sample,allgather,12582912,host-rdma-direct,1,5,1880.551,0
+# sample,allgather,12582912,host-rdma-direct,1,6,1286.801,0
+# sample,allgather,12582912,host-rdma-direct,1,7,1283.449,0
+# sample,allgather,12582912,host-rdma-direct,1,8,1872.034,0
+# sample,allgather,12582912,host-rdma-direct,1,9,1273.409,0
+# sample,allgather,12582912,host-rdma-direct,1,10,1279.605,0
+allgather,12582912,host-rdma-direct,1462.231,1462.231,1462.231

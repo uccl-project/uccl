@@ -1,0 +1,15 @@
+round=1 mode=serial
+round=1 mode=ring
+round=1 mode=ce4096
+round=1 mode=nccl_default
+round=1 mode=nccl_simple
+round=2 mode=nccl_simple
+round=2 mode=nccl_default
+round=2 mode=ce4096
+round=2 mode=ring
+round=2 mode=serial
+round=3 mode=serial
+round=3 mode=ring
+round=3 mode=ce4096
+round=3 mode=nccl_default
+round=3 mode=nccl_simple

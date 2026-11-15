@@ -1,14 +1,52 @@
 # Two-node collectives
 
-## Direct local schedules
+The [November 15 hierarchy experiment](multinode-hierarchy.md) evaluates an
+explicit remote-first ReduceScatter and describes a NUMA packet hierarchy for
+the optional CPU router. It does not change automatic backend selection.
+
+The [AllGather copy-engine and pipeline experiment](multinode-allgather-pipeline.md)
+adds explicit SM, CE, and NUMA-relay variants, with paired measurements through
+64 MiB complete output per GPU. These do not change `--ag-auto`.
+
+The [dual-RDMA and matched-P2P experiments](multinode-allgather-matched.md)
+test two remote destinations and phase-by-phase single-peer communication.
+Their small-message and large-message comparisons are recorded separately.
+
+The [NUMA host-router experiment](multinode-host-router.md) evaluates explicit
+D2H aggregation, shared host packets, ready-driven progress, and host RDMA over
+1 MiB–1 GiB complete output per GPU.
+
+## Current AllGather: NUMA host router
+
+![Two-node FP32 AllGather: CPU-router latency and bus throughput versus paired NCCL](assets/collectives-2x4l4-allgather-host-router.svg)
+
+The README AllGather figure uses the
+[November 15 checked host-router sweep](../benchmarks/data/ag_host_router_2x4l4_20261115/README.md).
+It covers **1 MiB–1 GiB complete output per GPU** on eight FP32 L4 GPUs;
+the latency panel shows 1–8 MiB. Both UCCL Lite and NCCL 2.28.7 Ring+Simple
+use four MPI processes, each controlling one two-GPU NUMA group. Timing is
+slowest-process host enqueue-to-completion, with ten warmups and ten timed calls
+in each of three rounds, full output checks, and checked NCCL priming before
+comparison. Points are medians of round means; ranges remain in the CSV.
+
+One fixed 256 KiB per-GPU input chunk configuration uses shared local host
+packets, early consumption and readiness-driven progress. It reaches
+12.1/16.0/18.6/20.1 GB/s at 1/2/4/8 MiB and 21.9 GB/s at 1 GiB. Bus throughput
+is `7N/(8t)` for complete output N. There is no best-variant-per-size selection
+and no splice with older sub-MiB data. The path remains an explicit eager
+experiment; automatic dispatch is unchanged. Regenerate this SVG with
+`python3 scripts/plot_multinode_host_router.py`.
+
+## Historical direct local schedules (November 11)
 
 The [November 11 two-node paired sweep](../benchmarks/data/multinode_serial_20261111/README.md)
 uses one CTA per GPU to visit the three local CUDA-IPC peers sequentially.
 GPU semaphores complete the local phases while the IB PortChannel remains
 independent. AllReduce uses direct local ReduceScatter, IB exchange, and
 direct local AllGather through 1 MiB. The direct AllGather candidate uses
-local writes through 2 MiB; the main figure now selects the host multicast
-candidate through 256 KiB and resumes the direct candidate at 512 KiB.
+local writes through 2 MiB; the historical AllGather figure below selects the
+host multicast candidate through 256 KiB and resumes the direct candidate at
+512 KiB.
 ReduceScatter uses direct local writes and reduction through 1 MiB. Larger
 sizes retain the previously measured ring and packed paths.
 
@@ -18,7 +56,7 @@ sizes retain the previously measured ring and packed paths.
 
 ![Two-node ReduceScatter latency and bus throughput](assets/collectives-2x4l4-reducescatter-optimized.svg)
 
-The current figures match eight FP32 GPUs, full bytes per GPU,
+These November 11 figures match eight FP32 GPUs, full bytes per GPU,
 slowest-process host enqueue+completion timing, 20 warmups, three alternating
 paired rounds of ten calls, and complete output checks on every invocation.
 At 64 KiB, selected UCCL Lite AR/AG/RS take **47.08/30.58/34.59 µs** versus
@@ -193,7 +231,7 @@ RDMA WRITE with 128 KiB packets takes 160.63 µs versus direct UCCL
 UCCL and loses to NCCL; the 1-GiB path is slower. These candidate runs
 use four MPI processes controlling eight GPUs, while the direct path and
 the previous main NCCL control use eight processes. The path remains opt-in
-at runtime. The main AllGather figure now selects its UCX-auto variant
+at runtime. The historical AllGather figure selected its UCX-auto variant
 through 256 KiB; the [selection record](../benchmarks/data/host_multicast_selected_2x4l4_20261111/README.md)
 documents the MPI layout change and the 256-KiB regression versus direct UCCL.
 

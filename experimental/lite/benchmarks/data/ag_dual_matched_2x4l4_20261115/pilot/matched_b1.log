@@ -1,0 +1,70 @@
+# UCCL Lite two-node hierarchical AllGather, float32
+# timing=host enqueue+completion; slowest of eight ranks
+# rank 0 node mibura-sky-test-02 gpu 0 NVIDIA L4 rail 0 (mlx5_0)
+# rank 1 node mibura-sky-test-02 gpu 1 NVIDIA L4 rail 0 (mlx5_0)
+# rank 2 node mibura-sky-test-02 gpu 2 NVIDIA L4 rail 1 (mlx5_1)
+# rank 3 node mibura-sky-test-02 gpu 3 NVIDIA L4 rail 1 (mlx5_1)
+# rank 4 node mibura-sky-test-01 gpu 0 NVIDIA L4 rail 0 (mlx5_0)
+# rank 5 node mibura-sky-test-01 gpu 1 NVIDIA L4 rail 0 (mlx5_0)
+# rank 6 node mibura-sky-test-01 gpu 2 NVIDIA L4 rail 1 (mlx5_1)
+# rank 7 node mibura-sky-test-01 gpu 3 NVIDIA L4 rail 1 (mlx5_1)
+# local multicast, remote-rank IB exchange; rail map 0,0,1,1; RS pieces 1
+# local ring 0->1->3->2->0; AG ring; rail map 0,0,1,1; piece 2097152 B; pipeline >= 4194304 B
+#      size(B)        count   pieces   time(us)      algbw      busbw  maxrelerr
+# selected,allgather,1024,matched-ce
+# ag_pipeline,piece_bytes=4194304,pieces=1,depth=4,blocks=1,threads=256,slots=2
+rank 4 first bad index 0 got -nan want 1.0 relerr nan
+rank 5 first bad index 0 got -nan want 1.0 relerr nan
+rank 6 first bad index 0 got -nan want 1.0 relerr nan
+rank 7 first bad index 0 got -nan want 1.0 relerr nan
+rank 7 first bad index 0 got -nan want 9.0 relerr nan
+rank 6 first bad index 0 got -nan want 9.0 relerr nan
+rank 5 first bad index 0 got -nan want 9.0 relerr nan
+rank 4 first bad index 0 got -nan want 9.0 relerr nan
+rank 7 first bad index 0 got -nan want 81.0 relerr nan
+# sample,allgather,1024,1,91.234,inf
+rank 6 first bad index 0 got -nan want 81.0 relerr nan
+# sample,allgather,1024,2,81.722,inf
+rank 5 first bad index 0 got -nan want 81.0 relerr nan
+rank 4 first bad index 0 got -nan want 81.0 relerr nan
+# sample,allgather,1024,3,82.887,inf
+rank 7 first bad index 0 got -nan want 89.0 relerr nan
+rank 6 first bad index 0 got -nan want 89.0 relerr nan
+rank 4 first bad index 0 got -nan want 89.0 relerr nan
+# sample,allgather,1024,4,93.198,inf
+rank 5 first bad index 0 got -nan want 89.0 relerr nan
+# sample,allgather,1024,5,81.154,inf
+rank 7 first bad index 0 got -nan want 97.0 relerr nan
+rank 6 first bad index 0 got -nan want 97.0 relerr nan
+rank 5 first bad index 0 got -nan want 97.0 relerr nan
+rank 4 first bad index 0 got -nan want 97.0 relerr nan
+rank 4 first bad index 0 got -nan want 105.0 relerr nan
+rank 6 first bad index 0 got -nan want 105.0 relerr nan
+rank 7 first bad index 0 got -nan want 105.0 relerr nan
+rank 5 first bad index 0 got -nan want 105.0 relerr nan
+--------------------------------------------------------------------------
+MPI_ABORT was invoked on rank 1 in communicator MPI_COMM_WORLD
+with errorcode 1.
+
+NOTE: invoking MPI_ABORT causes Open MPI to kill all MPI processes.
+You may or may not see output from other processes, depending on
+exactly when Open MPI kills them.
+--------------------------------------------------------------------------
+rank 7 first bad index 0 got -nan want 113.0 relerr nan
+rank 6 first bad index 0 got -nan want 113.0 relerr nan
+rank 4 first bad index 0 got -nan want 113.0 relerr nan
+rank 5 first bad index 0 got -nan want 113.0 relerr nan
+rank 7 first bad index 0 got -nan want 121.0 relerr nan
+rank 4 first bad index 0 got -nan want 121.0 relerr nan
+rank 5 first bad index 0 got -nan want 121.0 relerr nan
+rank 6 first bad index 0 got -nan want 121.0 relerr nan
+rank 7 first bad index 0 got -nan want 129.0 relerr nan
+rank 6 first bad index 0 got -nan want 129.0 relerr nan
+rank 4 first bad index 0 got -nan want 129.0 relerr nan
+rank 5 first bad index 0 got -nan want 129.0 relerr nan
+rank 6 first bad index 0 got -nan want 137.0 relerr nan
+rank 7 first bad index 0 got -nan want 137.0 relerr nan
+rank 5 first bad index 0 got -nan want 137.0 relerr nan
+rank 4 first bad index 0 got -nan want 137.0 relerr nan
+[mibura-sky-test-02:2321384] 7 more processes have sent help message help-mpi-api.txt / mpi-abort
+[mibura-sky-test-02:2321384] Set MCA parameter "orte_base_help_aggregate" to 0 to see all help / error messages

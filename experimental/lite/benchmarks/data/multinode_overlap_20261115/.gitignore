@@ -1,0 +1,5 @@
+# Preserve this experiment's measurements and report artifacts.
+!*.csv
+!*.json
+!*.log
+!*.png

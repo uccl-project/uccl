@@ -1,0 +1,331 @@
+--- a/src/collectives/multinode_allreduce.cu
++++ b/src/collectives/multinode_allreduce.cu
+@@ -426,10 +426,9 @@
+ 
+ template <bool CopyEngine, bool PairRelay = false, bool DualRdma = false>
+ __global__ void hierarchicalAllGatherPipeline(
+-    LocalDirectChans local, LocalAgChans dma, PortChan ib, PortChan duplicateIb,
+-    float* base, size_t nelem, Layout layout, int rank, int localRank,
+-    size_t receiveOffset, size_t pieceBytes, int depth, size_t relayOffset,
+-    size_t relayHalfBytes) {
++    LocalDirectChans local, LocalAgChans dma, PortChan ib, PortChan duplicateIb, float* base,
++    size_t nelem, Layout layout, int rank, int localRank, size_t receiveOffset,
++    size_t pieceBytes, int depth, size_t relayOffset, size_t relayHalfBytes) {
+   int tid = blockIdx.x * blockDim.x + threadIdx.x;
+   int nth = gridDim.x * blockDim.x;
+   char* bytes = reinterpret_cast<char*>(base);
+@@ -485,8 +484,7 @@
+         ib.putWithSignal(receiveOffset + nextOff, layout.ibSend + nextOff,
+                          min(pieceBytes, shardBytes - nextOff));
+         if constexpr (DualRdma)
+-          duplicateIb.putWithSignal(relayOffset + nextOff,
+-                                    layout.ibSend + nextOff,
++          duplicateIb.putWithSignal(relayOffset + nextOff, layout.ibSend + nextOff,
+                                     min(pieceBytes, shardBytes - nextOff));
+       }
+     }
+@@ -499,9 +497,7 @@
+     agPipelineSync();
+     for (int step = 1; step < kLocalRanks; ++step) {
+       int peer = (localRank + step) % kLocalRanks;
+-      if constexpr (DualRdma) {
+-        if (peer == (localRank ^ 1)) continue;
+-      }
++      if constexpr (DualRdma) { if (peer == (localRank ^ 1)) continue; }
+       if constexpr (CopyEngine) {
+         if (tid == 0) {
+           if constexpr (PairRelay) {
+@@ -525,11 +521,9 @@
+     if constexpr (DualRdma) {
+       if (tid == 0) duplicateIb.wait();
+       agPipelineSync();
+-      auto const* duplicate =
+-          reinterpret_cast<uint4 const*>(bytes + relayOffset + off);
++      auto const* duplicate = reinterpret_cast<uint4 const*>(bytes + relayOffset + off);
+       auto* duplicateOutput = reinterpret_cast<uint4*>(
+-          bytes + layout.data + size_t(rank ^ kLocalRanks ^ 1) * shardBytes +
+-          off);
++          bytes + layout.data + size_t(rank ^ kLocalRanks ^ 1) * shardBytes + off);
+       for (size_t i = tid; i < count / sizeof(uint4); i += nth)
+         duplicateOutput[i] = duplicate[i];
+       agPipelineSync();
+@@ -587,16 +581,14 @@
+   }
+ }
+ 
+-// Recursive doubling over logical pairs {local shard, remote shard}, stored
+-// directly in standard output layout to avoid full-output packing/unpacking.
+-// By default XOR-2 exchanges one logical pair across NUMA, then XOR-1 two pairs
++// Recursive doubling over bundles {local shard, corresponding remote shard}.
++// XOR-2 exchanges one bundle across NUMA, then XOR-1 exchanges two bundles
+ // within NUMA. Ready/data handshakes and send flushes keep one P2P payload
+ // ingress and egress per GPU, including when ranks advance at different speeds.
+ template <bool CopyEngine>
+ __global__ void hierarchicalAllGatherMatched(
+-    LocalDirectChans direct, LocalAgChans local, PortChan ib, float* base,
+-    size_t nelem, Layout layout, int rank, int localRank, size_t receiveOffset,
+-    size_t pieceBytes, int depth, int firstMask) {
++    LocalDirectChans direct, LocalAgChans local, PortChan ib, float* base, size_t nelem, Layout layout,
++    int rank, int localRank, size_t receiveOffset, size_t pieceBytes, int depth, int firstMask) {
+   int tid = blockIdx.x * blockDim.x + threadIdx.x;
+   int nth = gridDim.x * blockDim.x;
+   char* bytes = reinterpret_cast<char*>(base);
+@@ -612,6 +604,7 @@
+   for (int p = 0; p < pieces; ++p) {
+     size_t off = size_t(p) * pieceBytes;
+     size_t count = min(pieceBytes, shardBytes - off);
++    size_t span = 2 * count;
+     if (tid == 0) {
+       ib.wait();
+       if (p + depth < pieces) {
+@@ -625,8 +618,7 @@
+       auto const* source = reinterpret_cast<uint4 const*>(
+           bytes + (half ? receiveOffset : layout.ibSend) + off);
+       auto* dest = reinterpret_cast<uint4*>(
+-          bytes + layout.data +
+-          size_t(rank ^ (half * kLocalRanks)) * shardBytes + off);
++          bytes + layout.localScratch + size_t(localRank) * span + half * count);
+       for (size_t i = tid; i < count / sizeof(uint4); i += nth)
+         dest[i] = source[i];
+     }
+@@ -642,22 +634,16 @@
+       agPipelineSync();
+       for (int bundle = 0; bundle <= phase; ++bundle) {
+         int owner = bundle == 0 ? localRank : localRank ^ firstMask;
+-        for (int half = 0; half < 2; ++half) {
+-          int global = ((rank - localRank) ^ (half * kLocalRanks)) + owner;
+-          size_t src = layout.data + size_t(global) * shardBytes + off;
+-          // Source and incoming destination shard sets are disjoint within
+-          // each phase. Ready/data handshakes guard forwarding and reuse.
+-          if constexpr (CopyEngine) {
+-            if (tid == 0) local.c[peer].put(src, src, count);
+-          } else {
+-            auto const* from = reinterpret_cast<uint4 const*>(bytes + src);
+-            auto* to = reinterpret_cast<uint4*>(
+-                reinterpret_cast<char*>(direct.c[peer].dst_) + src);
+-            for (size_t i = tid; i < count / sizeof(uint4); i += nth)
+-              to[i] = from[i];
+-          }
+-          agPipelineSync();
++        size_t src = layout.localScratch + size_t(owner) * span;
++        if constexpr (CopyEngine) {
++          if (tid == 0) local.c[peer].put(src, src, span);
++        } else {
++          auto const* from = reinterpret_cast<uint4 const*>(bytes + src);
++          auto* to = reinterpret_cast<uint4*>(
++              reinterpret_cast<char*>(direct.c[peer].dst_) + src);
++          for (size_t i = tid; i < span / sizeof(uint4); i += nth) to[i] = from[i];
+         }
++        agPipelineSync();
+       }
+       if (tid == 0) {
+         if constexpr (CopyEngine) {
+@@ -671,6 +657,17 @@
+       }
+       agPipelineSync();
+     }
++    // Undo the bundle layout into standard global-rank output order.
++    for (int source = 0; source < kLocalRanks; ++source)
++      for (int half = 0; half < 2; ++half) {
++        int global = ((rank - localRank) ^ (half * kLocalRanks)) + source;
++        auto const* from = reinterpret_cast<uint4 const*>(
++            bytes + layout.localScratch + size_t(source) * span + half * count);
++        auto* to = reinterpret_cast<uint4*>(
++            bytes + layout.data + size_t(global) * shardBytes + off);
++        for (size_t i = tid; i < count / sizeof(uint4); i += nth) to[i] = from[i];
++      }
++    agPipelineSync();
+   }
+   if (tid == 0) ib.flush();
+ }
+@@ -1229,8 +1226,7 @@
+   bool agRing = false;
+   bool agAuto = false;
+   bool agSerialLocal = false;
+-  int agPipeline =
+-      0;  // 1: SM, 2: CE, 3: CE relay, 4: matched CE, 5: matched SM.
++  int agPipeline = 0;  // 1: SM, 2: copy engine, 3: NUMA-pair CE relay.
+   bool agDualRdma = false;
+   int agFirstMask = 2;
+   size_t agPieceBytes = 64UL << 10;
+@@ -1373,15 +1369,9 @@
+         cfg.agAuto = std::atoi(next()) != 0;
+       else if (key == "--ag-pipeline") {
+         std::string mode = next();
+-        if (mode != "sm" && mode != "ce" && mode != "ce-pair" &&
+-            mode != "matched" && mode != "matched-sm")
+-          throw std::runtime_error(
+-              "--ag-pipeline must be sm, ce, ce-pair, matched, or matched-sm");
+-        cfg.agPipeline = mode == "sm"        ? 1
+-                         : mode == "ce"      ? 2
+-                         : mode == "ce-pair" ? 3
+-                         : mode == "matched" ? 4
+-                                             : 5;
++        if (mode != "sm" && mode != "ce" && mode != "ce-pair" && mode != "matched" && mode != "matched-sm")
++          throw std::runtime_error("--ag-pipeline must be sm, ce, ce-pair, matched, or matched-sm");
++        cfg.agPipeline = mode == "sm" ? 1 : mode == "ce" ? 2 : mode == "ce-pair" ? 3 : mode == "matched" ? 4 : 5;
+       } else if (key == "--ag-piece-bytes")
+         cfg.agPieceBytes = std::strtoull(next(), nullptr, 0);
+       else if (key == "--ag-first-mask")
+@@ -1446,8 +1436,7 @@
+     MPI_Abort(MPI_COMM_WORLD, 2);
+   }
+   if (cfg.agDualRdma && cfg.agPipeline != 1 && cfg.agPipeline != 2) {
+-    if (rank == 0)
+-      std::fprintf(stderr, "--ag-dual-rdma requires --ag-pipeline sm or ce\n");
++    if (rank == 0) std::fprintf(stderr, "--ag-dual-rdma requires --ag-pipeline sm or ce\n");
+     MPI_Abort(MPI_COMM_WORLD, 2);
+   }
+   if (cfg.agPipeline &&
+@@ -1543,19 +1532,16 @@
+   if (cfg.allGather) {
+     if (cfg.agPipeline == 5)
+       CUDACHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+-          &residentBlocks, hierarchicalAllGatherMatched<false>, cfg.threads,
+-          0));
++          &residentBlocks, hierarchicalAllGatherMatched<false>, cfg.threads, 0));
+     else if (cfg.agPipeline == 4)
+       CUDACHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+           &residentBlocks, hierarchicalAllGatherMatched<true>, cfg.threads, 0));
+     else if (cfg.agDualRdma && cfg.agPipeline == 1)
+       CUDACHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+-          &residentBlocks, hierarchicalAllGatherPipeline<false, false, true>,
+-          cfg.threads, 0));
++          &residentBlocks, hierarchicalAllGatherPipeline<false, false, true>, cfg.threads, 0));
+     else if (cfg.agDualRdma)
+       CUDACHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+-          &residentBlocks, hierarchicalAllGatherPipeline<true, false, true>,
+-          cfg.threads, 0));
++          &residentBlocks, hierarchicalAllGatherPipeline<true, false, true>, cfg.threads, 0));
+     else if (cfg.agPipeline == 1)
+       CUDACHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+           &residentBlocks, hierarchicalAllGatherPipeline<false>, cfg.threads,
+@@ -1749,9 +1735,8 @@
+   LocalDirectChans localDirect{};
+   std::array<std::unique_ptr<mscclpp::MemoryChannel>, 3> directObjects;
+   bool needsDirectLocal =
+-      cfg.agPipeline == 1 || cfg.agPipeline >= 4 || cfg.rsOverlapLocal ||
+-      cfg.rsPullLocal || cfg.agSerialLocal || cfg.rsSerialLocal ||
+-      cfg.arSerialLocal ||
++      cfg.agPipeline == 1 || cfg.agPipeline >= 4 || cfg.rsOverlapLocal || cfg.rsPullLocal ||
++      cfg.agSerialLocal || cfg.rsSerialLocal || cfg.arSerialLocal ||
+       (cfg.agAuto && cfg.allGather && cfg.minBytes <= kSerialAgMaxBytes) ||
+       (cfg.rsAuto && cfg.reduceScatter && cfg.minBytes <= kSerialRsMaxBytes) ||
+       (cfg.arAuto && !cfg.allGather && !cfg.reduceScatter &&
+@@ -1890,52 +1875,41 @@
+         size_t relayHalfBytes = cfg.maxBytes / kWorld;
+         size_t relayOffset = layout.localScratch + slot * 2 * relayHalfBytes;
+         if (cfg.agPipeline == 5)
+-          hierarchicalAllGatherMatched<false>
+-              <<<cfg.blocks, cfg.threads, 0, stream>>>(
+-                  localDirect, localAg, ib, reinterpret_cast<float*>(buffer),
+-                  count, layout, rank, localRank, receiveOffset,
+-                  cfg.agPieceBytes, cfg.agDepth, cfg.agFirstMask);
++          hierarchicalAllGatherMatched<false><<<cfg.blocks, cfg.threads, 0, stream>>>(
++              localDirect, localAg, ib, reinterpret_cast<float*>(buffer), count, layout,
++              rank, localRank, receiveOffset, cfg.agPieceBytes, cfg.agDepth, cfg.agFirstMask);
+         else if (cfg.agPipeline == 4)
+-          hierarchicalAllGatherMatched<true>
+-              <<<cfg.blocks, cfg.threads, 0, stream>>>(
+-                  localDirect, localAg, ib, reinterpret_cast<float*>(buffer),
+-                  count, layout, rank, localRank, receiveOffset,
+-                  cfg.agPieceBytes, cfg.agDepth, cfg.agFirstMask);
++          hierarchicalAllGatherMatched<true><<<cfg.blocks, cfg.threads, 0, stream>>>(
++              localDirect, localAg, ib, reinterpret_cast<float*>(buffer), count, layout,
++              rank, localRank, receiveOffset, cfg.agPieceBytes, cfg.agDepth, cfg.agFirstMask);
+         else if (cfg.agDualRdma && cfg.agPipeline == 1)
+-          hierarchicalAllGatherPipeline<false, false, true>
+-              <<<cfg.blocks, cfg.threads, 0, stream>>>(
+-                  localDirect, localAg, ib, duplicateIb,
+-                  reinterpret_cast<float*>(buffer), count, layout, rank,
+-                  localRank, receiveOffset, cfg.agPieceBytes, cfg.agDepth,
+-                  relayOffset, relayHalfBytes);
++          hierarchicalAllGatherPipeline<false, false, true><<<cfg.blocks, cfg.threads, 0, stream>>>(
++              localDirect, localAg, ib, duplicateIb, reinterpret_cast<float*>(buffer), count,
++              layout, rank, localRank, receiveOffset, cfg.agPieceBytes, cfg.agDepth,
++              relayOffset, relayHalfBytes);
+         else if (cfg.agDualRdma)
+-          hierarchicalAllGatherPipeline<true, false, true>
+-              <<<cfg.blocks, cfg.threads, 0, stream>>>(
+-                  localDirect, localAg, ib, duplicateIb,
+-                  reinterpret_cast<float*>(buffer), count, layout, rank,
+-                  localRank, receiveOffset, cfg.agPieceBytes, cfg.agDepth,
+-                  relayOffset, relayHalfBytes);
++          hierarchicalAllGatherPipeline<true, false, true><<<cfg.blocks, cfg.threads, 0, stream>>>(
++              localDirect, localAg, ib, duplicateIb, reinterpret_cast<float*>(buffer), count,
++              layout, rank, localRank, receiveOffset, cfg.agPieceBytes, cfg.agDepth,
++              relayOffset, relayHalfBytes);
+         else if (cfg.agPipeline == 3)
+           hierarchicalAllGatherPipeline<true, true>
+               <<<cfg.blocks, cfg.threads, 0, stream>>>(
+-                  localDirect, localAg, ib, duplicateIb,
+-                  reinterpret_cast<float*>(buffer), count, layout, rank,
+-                  localRank, receiveOffset, cfg.agPieceBytes, cfg.agDepth,
+-                  relayOffset, relayHalfBytes);
++                  localDirect, localAg, ib, duplicateIb, reinterpret_cast<float*>(buffer),
++                  count, layout, rank, localRank, receiveOffset,
++                  cfg.agPieceBytes, cfg.agDepth, relayOffset, relayHalfBytes);
+         else if (cfg.agPipeline == 2)
+           hierarchicalAllGatherPipeline<true>
+               <<<cfg.blocks, cfg.threads, 0, stream>>>(
+-                  localDirect, localAg, ib, duplicateIb,
+-                  reinterpret_cast<float*>(buffer), count, layout, rank,
+-                  localRank, receiveOffset, cfg.agPieceBytes, cfg.agDepth,
+-                  relayOffset, relayHalfBytes);
++                  localDirect, localAg, ib, duplicateIb, reinterpret_cast<float*>(buffer),
++                  count, layout, rank, localRank, receiveOffset,
++                  cfg.agPieceBytes, cfg.agDepth, relayOffset, relayHalfBytes);
+         else
+           hierarchicalAllGatherPipeline<false>
+               <<<cfg.blocks, cfg.threads, 0, stream>>>(
+-                  localDirect, localAg, ib, duplicateIb,
+-                  reinterpret_cast<float*>(buffer), count, layout, rank,
+-                  localRank, receiveOffset, cfg.agPieceBytes, cfg.agDepth,
+-                  relayOffset, relayHalfBytes);
++                  localDirect, localAg, ib, duplicateIb, reinterpret_cast<float*>(buffer),
++                  count, layout, rank, localRank, receiveOffset,
++                  cfg.agPieceBytes, cfg.agDepth, relayOffset, relayHalfBytes);
+       } else if (useAgSerial(bytes))
+         hierarchicalAllGatherSerial<<<1, 256, 0, stream>>>(
+             localDirect, ib, reinterpret_cast<float*>(buffer), count,
+@@ -2102,17 +2076,15 @@
+             : 1;
+     if (rank == 0) {
+       char const* selected =
+-          cfg.allGather
+-              ? (cfg.agPipeline == 5   ? "matched-sm"
+-                 : cfg.agPipeline == 4 ? "matched-ce"
+-                 : cfg.agDualRdma
+-                     ? (cfg.agPipeline == 1 ? "dual-rdma-sm" : "dual-rdma-ce")
+-                 : cfg.agPipeline == 3 ? "pipeline-ce-pair"
+-                 : cfg.agPipeline == 2 ? "pipeline-ce"
+-                 : cfg.agPipeline == 1 ? "pipeline-sm"
+-                 : useAgSerial(bytes)  ? "serial-local"
+-                 : useAgRing(bytes)    ? "ring"
+-                                       : "multicast")
++          cfg.allGather ? (cfg.agPipeline == 5 ? "matched-sm"
++                           : cfg.agPipeline == 4 ? "matched-ce"
++                           : cfg.agDualRdma ? (cfg.agPipeline == 1 ? "dual-rdma-sm" : "dual-rdma-ce")
++                           : cfg.agPipeline == 3 ? "pipeline-ce-pair"
++                           : cfg.agPipeline == 2 ? "pipeline-ce"
++                           : cfg.agPipeline == 1 ? "pipeline-sm"
++                           : useAgSerial(bytes)  ? "serial-local"
++                           : useAgRing(bytes)    ? "ring"
++                                                 : "multicast")
+           : cfg.reduceScatter
+               ? (cfg.rsOverlapLocal       ? "overlap-local"
+                  : cfg.rsPullLocal        ? "pull-local"
+@@ -2131,11 +2103,10 @@
+         std::printf(
+             "# "
+             "ag_pipeline,piece_bytes=%zu,pieces=%zu,depth=%d,blocks=%d,threads="
+-            "%d,slots=2,dual=%d,first_mask=%d\n",
++            "%d,slots=2\n",
+             cfg.agPieceBytes,
+             (bytes / kWorld + cfg.agPieceBytes - 1) / cfg.agPieceBytes,
+-            cfg.agDepth, cfg.blocks, cfg.threads, int(cfg.agDualRdma),
+-            cfg.agFirstMask);
++            cfg.agDepth, cfg.blocks, cfg.threads, int(cfg.agDualRdma), cfg.agFirstMask);
+     }
+     double relerr = -1.0;
+     if (cfg.check) {

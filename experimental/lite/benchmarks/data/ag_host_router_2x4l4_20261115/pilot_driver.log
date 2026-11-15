@@ -1,0 +1,8 @@
+sm chunk=128 KiB
+sm chunk=1024 KiB
+sm chunk=4096 KiB
+sm chunk=16384 KiB
+dma chunk=128 KiB
+dma chunk=1024 KiB
+dma chunk=4096 KiB
+dma chunk=16384 KiB

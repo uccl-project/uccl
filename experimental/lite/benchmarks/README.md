@@ -45,9 +45,10 @@ in Git history. Restore those logs before rerunning historical summarizers.
 | [multinode_serial_20261111](data/multinode_serial_20261111/README.md) | Two-node AR/AG/RS direct local CUDA-IPC variants against paired NCCL 2.28.7, 1 KiB–1 GiB, with 20 warmups, three alternating runs, complete per-call checks, raw samples, launch-geometry losses, and NCCL protocol diagnostics. |
 | [nccl_spike_2x4l4_20261111](data/nccl_spike_2x4l4_20261111/README.md) | Targeted two-node NCCL 2.28.7 protocol diagnosis: tuning logs show default RING+LL at the spike sizes; three alternating checked rounds compare LL and forced SIMPLE with the same ring and channels. |
 | [nccl_tuned_2x4l4_20261111](data/nccl_tuned_2x4l4_20261111/README.md) | Eight freshly paired RING+SIMPLE rechecks at NCCL spike sizes, merged with the complete default-control sweep into one explicit per-size NCCL policy for the current two-node figures. All 63 points retain source and configuration labels. |
+| [ag_host_router_2x4l4_20261115](data/ag_host_router_2x4l4_20261115/README.md) | Current README multi-node AllGather: fixed 256 KiB shared-host-packet route, 1 MiB–1 GiB FP32 output/GPU, checked host timing and same four-process NCCL control; full samples, negative variants and validation. |
 | [host_rdma_multicast_2x4l4_20261111](data/host_rdma_multicast_2x4l4_20261111/README.md) | Experimental two-copy host-RDMA AllGather with three-slot pipeline and NUMA-local GPU multicast. Retains the 1 KiB–2 MiB three-way comparison, exact RDMA-write and UCX-auto variants, tail checks, and large-size regressions. |
 | [ucx_eager_nccl_2x4l4_20261111](data/ucx_eager_nccl_2x4l4_20261111/README.md) | Matched-binary two-node host AllGather: forced UCX eager versus paired NCCL 2.28.7 at 1–256 KiB, with tuned NCCL at 128/256 KiB, full samples, protocol trace, and automatic-UCX diagnostics. |
-| [host_multicast_selected_2x4l4_20261111](data/host_multicast_selected_2x4l4_20261111/README.md) | Selected main two-node AllGather figure: host multicast with paired NCCL at 1–256 KiB, previous direct-GPU paired points thereafter, and explicit path/process-layout provenance for every size. |
+| [host_multicast_selected_2x4l4_20261111](data/host_multicast_selected_2x4l4_20261111/README.md) | Historical selected two-node AllGather figure: host multicast with paired NCCL at 1–256 KiB, previous direct-GPU paired points thereafter, and explicit path/process-layout provenance for every size. |
 | [cpu_router_4l4_apply_20261111](data/cpu_router_4l4_apply_20261111/README.md) | Fresh BF16 CPU-router transfer test on this single four-L4 host: paired NCCL over 1 KiB–1 GiB in both placements, 8,940 checked timed samples, automatic replay, compact/GPU-progress negative variants, and topology identity. |
 | [cpu_router_4l4_workers_20261111](data/cpu_router_4l4_workers_20261111/README.md) | Four-L4 BF16 CPU worker sweep and adapted eight-worker-per-NUMA AllGather-only profile: 29,100 paired timed calls, both placements, negative AR/RS results, and 126 fresh-process selection checks. |
 | [cpu_router_ag_4l4_geometry_20261111](data/cpu_router_ag_4l4_geometry_20261111/README.md) | Four-L4 BF16 AllGather transfer-grid and packet-cap optimization: 248-block/4-MiB-cap profile, 3,900 checked paired calls, 126 automatic decisions, negative small-size results, and Nsight diagnosis. |
@@ -144,6 +145,7 @@ python3 scripts/plot_cpu_router_8l4.py
 python3 scripts/plot_refresh_collectives.py
 python3 scripts/plot_refresh_fusion.py
 python3 scripts/plot_optimized_collectives.py
+python3 scripts/plot_multinode_host_router.py
 ```
 
 Requires Matplotlib and NumPy. `plot_results.py` reads committed CSV/text data
@@ -157,8 +159,11 @@ two-panel figures, one per collective. `plot_cpu_router_8l4.py` draws one diagno
 from the current eight-L4 paired BF16 local/router calibration and automatic
 selection replay, with the earlier NCCL run as a separate control, for ten
 older figures. The two refresh plotting scripts draw six collective and two
-fusion SVGs. `plot_optimized_collectives.py` draws five follow-up collective
-figures. These scripts do not run GPU work or benchmarks.
+fusion SVGs. `plot_optimized_collectives.py` draws the archived follow-up
+collective figures plus the current two-node host-router AllGather SVG. The latter can
+also be regenerated alone with `plot_multinode_host_router.py`; it reads the
+November 15 `shared_ready` and its own `nccl_shared_ready` control, with no
+per-size variant selection. These scripts do not run GPU work or benchmarks.
 Use `python3 scripts/plot_results.py --preview` to also export PNG and PDF copies
 under ignored `build/figures/` for inspection or reuse in a technical report.
 `python3 scripts/plot_multinode_peer.py --preview` exports PNG/PDF copies there.
