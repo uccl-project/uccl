@@ -60,8 +60,6 @@ validation and calibrated backend selection. See the
   </tr>
 </table>
 
-[Measurements, raw data, and reproduction](integration/nccl_lite/e2e_large_messages_8l4_20261115.md) · [Earlier serving profile](docs/assets/sglang-e2e-latency-8l4.svg)
-
 ### Single-node collectives
 
 #### Testbed 1
