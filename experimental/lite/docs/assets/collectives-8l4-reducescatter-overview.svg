@@ -9,7 +9,7 @@
     <dc:format>image/svg+xml</dc:format>
     <dc:creator>
      <cc:Agent>
-      <dc:title>Matplotlib v3.10.9, https://matplotlib.org/</dc:title>
+      <dc:title>Matplotlib v3.11.2, https://matplotlib.org/</dc:title>
      </cc:Agent>
     </dc:creator>
    </cc:Work>
@@ -40,41 +40,41 @@ z
     <g id="xtick_1">
      <g id="line2d_1"/>
      <g id="text_1">
-      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="78.326512" y="251.518281" transform="rotate(-0 78.326512 251.518281)">1K</text>
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="78.326512" y="251.517422" transform="rotate(-0 78.326512 251.517422)">1K</text>
      </g>
     </g>
     <g id="xtick_2">
      <g id="line2d_2"/>
      <g id="text_2">
-      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="134.823781" y="251.518281" transform="rotate(-0 134.823781 251.518281)">4K</text>
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="134.823781" y="251.517422" transform="rotate(-0 134.823781 251.517422)">4K</text>
      </g>
     </g>
     <g id="xtick_3">
      <g id="line2d_3"/>
      <g id="text_3">
-      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="191.32105" y="251.518281" transform="rotate(-0 191.32105 251.518281)">16K</text>
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="191.32105" y="251.517422" transform="rotate(-0 191.32105 251.517422)">16K</text>
      </g>
     </g>
     <g id="xtick_4">
      <g id="line2d_4"/>
      <g id="text_4">
-      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="247.818319" y="251.518281" transform="rotate(-0 247.818319 251.518281)">64K</text>
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="247.818319" y="251.517422" transform="rotate(-0 247.818319 251.517422)">64K</text>
      </g>
     </g>
     <g id="xtick_5">
      <g id="line2d_5"/>
      <g id="text_5">
-      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="304.315588" y="251.518281" transform="rotate(-0 304.315588 251.518281)">256K</text>
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="304.315588" y="251.517422" transform="rotate(-0 304.315588 251.517422)">256K</text>
      </g>
     </g>
     <g id="xtick_6">
      <g id="line2d_6"/>
      <g id="text_6">
-      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="360.812856" y="251.518281" transform="rotate(-0 360.812856 251.518281)">1M</text>
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="360.812856" y="251.517422" transform="rotate(-0 360.812856 251.517422)">1M</text>
      </g>
     </g>
     <g id="text_7">
-     <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="219.569684" y="266.164219" transform="rotate(-0 219.569684 266.164219)">Complete tensor bytes per rank</text>
+     <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="219.569684" y="266.518281" transform="rotate(-0 219.569684 266.518281)">Complete tensor bytes per rank</text>
     </g>
    </g>
    <g id="matplotlib.axis_2">
@@ -86,7 +86,7 @@ L 373.043368 236.16
      </g>
      <g id="line2d_8"/>
      <g id="text_8">
-      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #607486" x="59.096" y="240.339141" transform="rotate(-0 59.096 240.339141)">0</text>
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #607486" x="59.096" y="240.338711" transform="rotate(-0 59.096 240.338711)">0</text>
      </g>
     </g>
     <g id="ytick_2">
@@ -97,7 +97,7 @@ L 373.043368 191.389238
      </g>
      <g id="line2d_10"/>
      <g id="text_9">
-      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #607486" x="59.096" y="195.568379" transform="rotate(-0 59.096 195.568379)">100</text>
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #607486" x="59.096" y="195.567949" transform="rotate(-0 59.096 195.567949)">100</text>
      </g>
     </g>
     <g id="ytick_3">
@@ -108,7 +108,7 @@ L 373.043368 146.618476
      </g>
      <g id="line2d_12"/>
      <g id="text_10">
-      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #607486" x="59.096" y="150.797617" transform="rotate(-0 59.096 150.797617)">200</text>
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #607486" x="59.096" y="150.797187" transform="rotate(-0 59.096 150.797187)">200</text>
      </g>
     </g>
     <g id="ytick_4">
@@ -119,11 +119,11 @@ L 373.043368 101.847715
      </g>
      <g id="line2d_14"/>
      <g id="text_11">
-      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #607486" x="59.096" y="106.026855" transform="rotate(-0 59.096 106.026855)">300</text>
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #607486" x="59.096" y="106.026426" transform="rotate(-0 59.096 106.026426)">300</text>
      </g>
     </g>
     <g id="text_12">
-     <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="31.812094" y="150.552" transform="rotate(-90 31.812094 150.552)">Latency (µs)</text>
+     <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="31.457172" y="150.552" transform="rotate(-90 31.457172 150.552)">Latency (µs)</text>
     </g>
    </g>
    <g id="line2d_15">
@@ -215,41 +215,41 @@ z
     <g id="xtick_7">
      <g id="line2d_17"/>
      <g id="text_13">
-      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="471.219144" y="251.518281" transform="rotate(-0 471.219144 251.518281)">1M</text>
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="471.219144" y="251.517422" transform="rotate(-0 471.219144 251.517422)">1M</text>
      </g>
     </g>
     <g id="xtick_8">
      <g id="line2d_18"/>
      <g id="text_14">
-      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="527.716412" y="251.518281" transform="rotate(-0 527.716412 251.518281)">4M</text>
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="527.716412" y="251.517422" transform="rotate(-0 527.716412 251.517422)">4M</text>
      </g>
     </g>
     <g id="xtick_9">
      <g id="line2d_19"/>
      <g id="text_15">
-      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="584.213681" y="251.518281" transform="rotate(-0 584.213681 251.518281)">16M</text>
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="584.213681" y="251.517422" transform="rotate(-0 584.213681 251.517422)">16M</text>
      </g>
     </g>
     <g id="xtick_10">
      <g id="line2d_20"/>
      <g id="text_16">
-      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="640.71095" y="251.518281" transform="rotate(-0 640.71095 251.518281)">64M</text>
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="640.71095" y="251.517422" transform="rotate(-0 640.71095 251.517422)">64M</text>
      </g>
     </g>
     <g id="xtick_11">
      <g id="line2d_21"/>
      <g id="text_17">
-      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="697.208219" y="251.518281" transform="rotate(-0 697.208219 251.518281)">256M</text>
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="697.208219" y="251.517422" transform="rotate(-0 697.208219 251.517422)">256M</text>
      </g>
     </g>
     <g id="xtick_12">
      <g id="line2d_22"/>
      <g id="text_18">
-      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="753.705488" y="251.518281" transform="rotate(-0 753.705488 251.518281)">1G</text>
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="753.705488" y="251.517422" transform="rotate(-0 753.705488 251.517422)">1G</text>
      </g>
     </g>
     <g id="text_19">
-     <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="612.462316" y="266.164219" transform="rotate(-0 612.462316 266.164219)">Complete tensor bytes per rank</text>
+     <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="612.462316" y="266.518281" transform="rotate(-0 612.462316 266.518281)">Complete tensor bytes per rank</text>
     </g>
    </g>
    <g id="matplotlib.axis_4">
@@ -261,7 +261,7 @@ L 765.936 236.16
      </g>
      <g id="line2d_24"/>
      <g id="text_20">
-      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #607486" x="451.988632" y="240.339141" transform="rotate(-0 451.988632 240.339141)">0</text>
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #607486" x="451.988632" y="240.338711" transform="rotate(-0 451.988632 240.338711)">0</text>
      </g>
     </g>
     <g id="ytick_6">
@@ -272,7 +272,7 @@ L 765.936 208.251803
      </g>
      <g id="line2d_26"/>
      <g id="text_21">
-      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #607486" x="451.988632" y="212.430943" transform="rotate(-0 451.988632 212.430943)">1</text>
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #607486" x="451.988632" y="212.430514" transform="rotate(-0 451.988632 212.430514)">1</text>
      </g>
     </g>
     <g id="ytick_7">
@@ -283,7 +283,7 @@ L 765.936 180.343605
      </g>
      <g id="line2d_28"/>
      <g id="text_22">
-      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #607486" x="451.988632" y="184.522746" transform="rotate(-0 451.988632 184.522746)">2</text>
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #607486" x="451.988632" y="184.522316" transform="rotate(-0 451.988632 184.522316)">2</text>
      </g>
     </g>
     <g id="ytick_8">
@@ -294,7 +294,7 @@ L 765.936 152.435408
      </g>
      <g id="line2d_30"/>
      <g id="text_23">
-      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #607486" x="451.988632" y="156.614549" transform="rotate(-0 451.988632 156.614549)">3</text>
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #607486" x="451.988632" y="156.614119" transform="rotate(-0 451.988632 156.614119)">3</text>
      </g>
     </g>
     <g id="ytick_9">
@@ -305,7 +305,7 @@ L 765.936 124.527211
      </g>
      <g id="line2d_32"/>
      <g id="text_24">
-      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #607486" x="451.988632" y="128.706352" transform="rotate(-0 451.988632 128.706352)">4</text>
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #607486" x="451.988632" y="128.705922" transform="rotate(-0 451.988632 128.705922)">4</text>
      </g>
     </g>
     <g id="ytick_10">
@@ -316,7 +316,7 @@ L 765.936 96.619014
      </g>
      <g id="line2d_34"/>
      <g id="text_25">
-      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #607486" x="451.988632" y="100.798154" transform="rotate(-0 451.988632 100.798154)">5</text>
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #607486" x="451.988632" y="100.797725" transform="rotate(-0 451.988632 100.797725)">5</text>
      </g>
     </g>
     <g id="ytick_11">
@@ -327,11 +327,11 @@ L 765.936 68.710816
      </g>
      <g id="line2d_36"/>
      <g id="text_26">
-      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #607486" x="451.988632" y="72.889957" transform="rotate(-0 451.988632 72.889957)">6</text>
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #607486" x="451.988632" y="72.889527" transform="rotate(-0 451.988632 72.889527)">6</text>
      </g>
     </g>
     <g id="text_27">
-     <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="438.702225" y="150.552" transform="rotate(-90 438.702225 150.552)">Bus throughput (GB/s)</text>
+     <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="438.347303" y="150.552" transform="rotate(-90 438.347303 150.552)">Bus throughput (GB/s)</text>
     </g>
    </g>
    <g id="line2d_37">
@@ -389,9 +389,6 @@ L 753.705488 84.641416
     </g>
    </g>
   </g>
-  <g id="text_28">
-   <text style="font-size: 8.5px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="388.8" y="287.82" transform="rotate(-0 388.8 287.82)">BF16 · out of place · CUDA-event timing · Fresh 1 KiB–1 GiB measurements · two reversed paired sweeps</text>
-  </g>
   <g id="legend_1">
    <g id="line2d_39">
     <path d="M 255.852734 19.325047
@@ -415,7 +412,7 @@ z
      <use xlink:href="#m99c216711a" x="273.352734" y="19.325047" style="fill: #0068b5; stroke: #ffffff; stroke-width: 0.7"/>
     </g>
    </g>
-   <g id="text_29">
+   <g id="text_28">
     <text style="font-size: 12.5px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #172a3a" x="300.852734" y="23.700047" transform="rotate(-0 300.852734 23.700047)">UCCL-Lite</text>
    </g>
    <g id="line2d_40">
@@ -435,7 +432,7 @@ z
      <use xlink:href="#ma80281dc45" x="416.743359" y="19.325047" style="fill: #d65a00; stroke: #ffffff; stroke-width: 0.7; stroke-linejoin: miter"/>
     </g>
    </g>
-   <g id="text_30">
+   <g id="text_29">
     <text style="font-size: 12.5px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #172a3a" x="444.243359" y="23.700047" transform="rotate(-0 444.243359 23.700047)">NCCL 2.28.9</text>
    </g>
   </g>

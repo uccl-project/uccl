@@ -1254,9 +1254,6 @@ z
   <g id="text_125">
    <text style="font-size: 10.5px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #607486" x="129.6" y="110.938359" transform="rotate(-0 129.6 110.938359)">4 × L4 · FP16 · complete-operation latency · lower is better</text>
   </g>
-  <g id="text_126">
-   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #172a3a" x="540" y="924.768" transform="rotate(-0 540 924.768)">l40 · three run medians · selected path per shape in CSV</text>
-  </g>
   <g id="legend_1">
    <g id="patch_56">
     <path d="M 718.147656 139.938281
@@ -1266,7 +1263,7 @@ L 718.147656 132.238281
 z
 " style="fill: #0068b5"/>
    </g>
-   <g id="text_127">
+   <g id="text_126">
     <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #172a3a" x="748.947656" y="139.938281" transform="rotate(-0 748.947656 139.938281)">UCCL-Lite selected</text>
    </g>
    <g id="patch_57">
@@ -1277,7 +1274,7 @@ L 874.462813 132.238281
 z
 " style="fill: #d65a00"/>
    </g>
-   <g id="text_128">
+   <g id="text_127">
     <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #172a3a" x="905.262812" y="139.938281" transform="rotate(-0 905.262812 139.938281)">NCCL collective + cuBLAS</text>
    </g>
   </g>

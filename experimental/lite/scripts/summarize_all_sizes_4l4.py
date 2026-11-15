@@ -112,8 +112,6 @@ def plot(rows, name, timer, factor):
                bbox_to_anchor=(.5, .995), ncol=2, frameon=False,
                fontsize=12.5, handlelength=2.8, columnspacing=3, markerscale=1.2)
     fig.text(.5, .865, f'4×L4 FP32 {name} · {timer}', ha='center', fontsize=10.5)
-    fig.text(.5, .035, 'K/M/G denote KiB/MiB/GiB · median of 3 run means · per-size UCCL selection',
-             ha='center', fontsize=9)
     save_figure(fig, f'collectives-4l4-{name.lower()}-all-sizes', preview=True)
 
 

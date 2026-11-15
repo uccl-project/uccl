@@ -106,15 +106,6 @@ def make_figure(data, operation, title, factor):
     fig.legend(handles[::-1], labels[::-1], loc="upper center",
                bbox_to_anchor=(0.5, 0.91), ncol=2, frameon=False,
                fontsize=10.5, handlelength=2.4, columnspacing=1.6)
-    fig.text(0.5, 0.11,
-             "BF16 · out of place · prepared eager · slowest-rank CUDA events including submission gaps",
-             ha="center", fontsize=8.5, color="#607486")
-    fig.text(0.5, 0.065,
-             "Median of two run medians; shading: run range · 100 warmups + 5 × 20 calls/run",
-             ha="center", fontsize=8.5, color="#607486")
-    fig.text(0.5, 0.02,
-             "NCCL green: both size orders · purple: calibrated choice from full ascending sweeps; no largest-first claim",
-             ha="center", fontsize=8.5, color="#607486")
     return fig
 
 

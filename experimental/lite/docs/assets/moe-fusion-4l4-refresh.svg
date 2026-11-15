@@ -591,9 +591,6 @@ z
   <g id="text_59">
    <text style="font-size: 10.5px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #607486" x="129.6" y="79.258359" transform="rotate(-0 129.6 79.258359)">4 × L4 · BF16 · complete-layer latency · lower is better</text>
   </g>
-  <g id="text_60">
-   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #172a3a" x="540" y="639.576" transform="rotate(-0 540 639.576)">BF16 · l40 · 12 settled interleaved rounds · full dispatch, projections, activation and combine</text>
-  </g>
   <g id="legend_1">
    <g id="patch_30">
     <path d="M 740.9125 102.498281
@@ -603,7 +600,7 @@ L 740.9125 94.798281
 z
 " style="fill: #0068b5"/>
    </g>
-   <g id="text_61">
+   <g id="text_60">
     <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #172a3a" x="771.7125" y="102.498281" transform="rotate(-0 771.7125 102.498281)">UCCL-Lite fused</text>
    </g>
    <g id="patch_31">
@@ -614,7 +611,7 @@ L 881.117813 94.798281
 z
 " style="fill: #d65a00"/>
    </g>
-   <g id="text_62">
+   <g id="text_61">
     <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #172a3a" x="911.917813" y="102.498281" transform="rotate(-0 911.917813 102.498281)">NCCL + grouped cuBLAS</text>
    </g>
   </g>

@@ -392,9 +392,6 @@ L 753.705488 93.63823
   <g id="text_28">
    <text style="font-size: 10.5px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #172a3a" x="388.8" y="42.768" transform="rotate(-0 388.8 42.768)">4×L4 FP32 AllGather · 1 process, eager GPU events</text>
   </g>
-  <g id="text_29">
-   <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #172a3a" x="388.8" y="305.712" transform="rotate(-0 388.8 305.712)">K/M/G denote KiB/MiB/GiB · median of 3 run means · per-size UCCL selection</text>
-  </g>
   <g id="legend_1">
    <g id="line2d_39">
     <path d="M 256.011914 17.957047
@@ -418,7 +415,7 @@ z
      <use xlink:href="#m99c216711a" x="273.511914" y="17.957047" style="fill: #0068b5; stroke: #ffffff; stroke-width: 0.7"/>
     </g>
    </g>
-   <g id="text_30">
+   <g id="text_29">
     <text style="font-size: 12.5px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #172a3a" x="301.011914" y="22.332047" transform="rotate(-0 301.011914 22.332047)">UCCL Lite</text>
    </g>
    <g id="line2d_40">
@@ -438,7 +435,7 @@ z
      <use xlink:href="#ma80281dc45" x="416.58418" y="17.957047" style="fill: #d65a00; stroke: #ffffff; stroke-width: 0.7; stroke-linejoin: miter"/>
     </g>
    </g>
-   <g id="text_31">
+   <g id="text_30">
     <text style="font-size: 12.5px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #172a3a" x="444.08418" y="22.332047" transform="rotate(-0 444.08418 22.332047)">NCCL 2.28.7</text>
    </g>
   </g>

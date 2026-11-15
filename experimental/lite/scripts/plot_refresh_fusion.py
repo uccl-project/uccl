@@ -78,8 +78,6 @@ def dense(preview: bool) -> None:
     figure.legend(handles[::-1], labels[::-1], loc="upper right",
                   bbox_to_anchor=(0.98, 0.87), ncol=2, frameon=False,
                   fontsize=11)
-    figure.text(0.5, 0.012, "l40 · three run medians · selected path per shape in CSV",
-                ha="center", fontsize=10, color=INK)
     figure.tight_layout(rect=(0.02, 0.04, 0.99, 0.78), h_pad=2.2, w_pad=3)
     save(figure, "dense-fusion-4l4-refresh", preview)
 
@@ -103,9 +101,6 @@ def moe(preview: bool) -> None:
     figure.legend(handles[::-1], labels[::-1], loc="upper right",
                   bbox_to_anchor=(0.98, 0.87), ncol=2, frameon=False,
                   fontsize=11)
-    figure.text(0.5, 0.013,
-                "BF16 · l40 · 12 settled interleaved rounds · full dispatch, projections, activation and combine",
-                ha="center", fontsize=10, color=INK)
     figure.tight_layout(rect=(0.02, 0.04, 0.99, 0.78), w_pad=3)
     save(figure, "moe-fusion-4l4-refresh", preview)
 

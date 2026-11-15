@@ -66,10 +66,6 @@ def make_figure(data, mode, operation, factor):
     fig.legend(handles[::-1], labels[::-1], loc="upper center",
                bbox_to_anchor=(0.5, 0.99), ncol=2, frameon=False,
                fontsize=12.5, handlelength=2.8, columnspacing=3.0, markerscale=1.2)
-    placement = "in place" if operation == "all_reduce" else "out of place"
-    fig.text(0.5, 0.025,
-             f"BF16 · {placement} · CUDA-event timing · Fresh 1 KiB–1 GiB measurements · two reversed paired sweeps",
-             ha="center", fontsize=8.5, color="#607486")
     return fig
 
 

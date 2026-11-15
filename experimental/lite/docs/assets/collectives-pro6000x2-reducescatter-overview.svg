@@ -779,15 +779,6 @@ L 753.705488 114.051626
   <g id="text_28">
    <text style="font-weight: 700; font-size: 15px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #172a3a" x="388.8" y="18.309656" transform="rotate(-0 388.8 18.309656)">RTX PRO 6000 ×2 · ReduceScatter</text>
   </g>
-  <g id="text_29">
-   <text style="font-size: 8.5px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="388.8" y="307.584" transform="rotate(-0 388.8 307.584)">BF16 · out of place · prepared eager · slowest-rank CUDA events including submission gaps</text>
-  </g>
-  <g id="text_30">
-   <text style="font-size: 8.5px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="388.8" y="323.136" transform="rotate(-0 388.8 323.136)">Median of two run medians; shading: run range · 100 warmups + 5 × 20 calls/run</text>
-  </g>
-  <g id="text_31">
-   <text style="font-size: 8.5px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #607486" x="388.8" y="338.688" transform="rotate(-0 388.8 338.688)">NCCL green: both size orders · purple: calibrated choice from full ascending sweeps; no largest-first claim</text>
-  </g>
   <g id="legend_1">
    <g id="line2d_43">
     <path d="M 253.159688 44.857359
@@ -798,7 +789,7 @@ L 278.359688 44.857359
      <use xlink:href="#me8a90994ab" x="265.759688" y="44.857359" style="fill: #0068b5; stroke: #ffffff; stroke-width: 0.7"/>
     </g>
    </g>
-   <g id="text_32">
+   <g id="text_29">
     <text style="font-size: 10.5px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #172a3a" x="286.759688" y="48.532359" transform="rotate(-0 286.759688 48.532359)">UCCL Lite</text>
    </g>
    <g id="line2d_44">
@@ -810,7 +801,7 @@ L 278.359688 60.60818
      <use xlink:href="#mf104dbe9ff" x="265.759688" y="60.60818" style="fill: #8c49ad; stroke: #ffffff; stroke-width: 0.7; stroke-linejoin: miter"/>
     </g>
    </g>
-   <g id="text_33">
+   <g id="text_30">
     <text style="font-size: 10.5px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #172a3a" x="286.759688" y="64.28318" transform="rotate(-0 286.759688 64.28318)">NCCL CE (tuned)</text>
    </g>
    <g id="line2d_45">
@@ -822,7 +813,7 @@ L 416.515078 44.857359
      <use xlink:href="#m9a01a7dcfe" x="403.915078" y="44.857359" style="fill: #168b67; stroke: #ffffff; stroke-width: 0.7; stroke-linejoin: miter"/>
     </g>
    </g>
-   <g id="text_34">
+   <g id="text_31">
     <text style="font-size: 10.5px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #172a3a" x="424.915078" y="48.532359" transform="rotate(-0 424.915078 48.532359)">NCCL SM (tuned)</text>
    </g>
    <g id="line2d_46">
@@ -834,7 +825,7 @@ L 416.515078 60.60818
      <use xlink:href="#mbd1e659322" x="403.915078" y="60.60818" style="fill: #d65a00; stroke: #ffffff; stroke-width: 0.7; stroke-linejoin: miter"/>
     </g>
    </g>
-   <g id="text_35">
+   <g id="text_32">
     <text style="font-size: 10.5px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #172a3a" x="424.915078" y="64.28318" transform="rotate(-0 424.915078 64.28318)">NCCL (default P2P)</text>
    </g>
   </g>
