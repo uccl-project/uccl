@@ -201,6 +201,41 @@ Separate [paired NCCL graph controls](benchmarks/data/small_medium_4l4_20261113/
 and the graph limitations are documented in the study. Native AR retains
 nominal losses at 32 KiB and 4 MiB; none are omitted from the table above.
 
+#### RTX PRO 6000 ×2
+
+Two RTX PRO 6000 Blackwell Server Edition GPUs with PIX topology, CUDA 13.0.88
+and NCCL 2.29.7. BF16, out-of-place AllReduce, AllGather and ReduceScatter on
+commit `b0ac7b4a`; NCCL uses its default policy with P2P verified in transport
+logs. The calibrated joint interface selects direct peer for all 63 cases,
+with a **1.5633× / 1.5586×** geometric-mean speedup over NCCL in the forward /
+reverse sweeps. These are prepared eager collective measurements, not inference
+or CUDA-graph results.
+
+Each curve shows the median of the two run medians; shading shows their range,
+not a confidence interval. Each run uses 100 warmups and five repetitions of
+20 timed calls per case. Slowest-rank CUDA events include submission gaps;
+preparation, initialization and full-output correctness checks are outside
+timing. The algorithm thresholds are fixed, with independently calibrated
+backend selection; no per-size best-of envelope is plotted.
+
+The 1-MiB point appears in both panels. Size means complete AR input, complete
+AG output or complete RS input per rank. For two GPUs, bus throughput is
+`bytes / time` for AR and `0.5 × bytes / time` for AG/RS, in decimal GB/s.
+[Raw data, checks and reproduction](benchmarks/data/pro6000_b0ac7b4a_validation/README.md)
+· [Implementation and limitations](docs/retained-optimizations.md).
+
+##### AllReduce on RTX PRO 6000 ×2
+
+![PRO6000 x2 AllReduce: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, calibrated UCCL Lite peer versus default NCCL P2P](docs/assets/collectives-pro6000x2-allreduce-overview.svg)
+
+##### AllGather on RTX PRO 6000 ×2
+
+![PRO6000 x2 AllGather: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, calibrated UCCL Lite peer versus default NCCL P2P](docs/assets/collectives-pro6000x2-allgather-overview.svg)
+
+##### ReduceScatter on RTX PRO 6000 ×2
+
+![PRO6000 x2 ReduceScatter: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, calibrated UCCL Lite peer versus default NCCL P2P](docs/assets/collectives-pro6000x2-reducescatter-overview.svg)
+
 #### 8xL4 GPU
 
 BF16; AllReduce in place, AllGather and ReduceScatter out of place. Updated

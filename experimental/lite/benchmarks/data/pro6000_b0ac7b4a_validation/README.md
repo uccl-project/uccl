@@ -63,6 +63,22 @@ To verify without a GPU, copy this directory to a temporary directory, run
 `cases.csv` and `summary.json` from the raw evidence. Keep the original package
 unchanged when comparing hashes.
 
+## Regenerate figures
+
+To regenerate the three README figures from `cases.csv`, run from
+`experimental/lite`:
+
+```bash
+python3 benchmarks/data/pro6000_b0ac7b4a_validation/plot.py --preview
+```
+
+SVGs go to `docs/assets/`; optional PNG/PDF previews go to `build/figures/`.
+The plots use calibrated joint (peer at every size) versus default NCCL P2P,
+with the median of the forward/reverse run medians and shaded run ranges.
+Latency covers 1 KiB–1 MiB; bus throughput covers 1 MiB–1 GiB, computed from
+the central latency as `bytes / time` for AR and `0.5 × bytes / time` for AG/RS
+(decimal GB/s). No best-of selection or new GPU measurement is performed.
+
 ## Reproduce on aws-pro6000
 
 The dependency paths in `config.json` refer to the existing installation on
