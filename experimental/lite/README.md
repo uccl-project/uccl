@@ -78,10 +78,6 @@ validation and calibrated backend selection. See the
   </tr>
 </table>
 
-Testbeds 1/2 retain the original UCCL Lite and NCCL (default) curves.
-NCCL CE/SM (tuned) use per-size configurations selected before independent
-validation; see [settings, timing scope and communication logs](benchmarks/data/nccl_tuned_testbeds12_20261115/README.md).
-
 #### Testbed 3
 
 <table>
