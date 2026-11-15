@@ -1,0 +1,98 @@
+# UCCL Lite two-node hierarchical ReduceScatter, float32
+# timing=host enqueue+completion; slowest of eight ranks
+# rank 0 node mibura-sky-test-02 gpu 0 NVIDIA L4 rail 0 (mlx5_0)
+# rank 1 node mibura-sky-test-02 gpu 1 NVIDIA L4 rail 0 (mlx5_0)
+# rank 2 node mibura-sky-test-02 gpu 2 NVIDIA L4 rail 1 (mlx5_1)
+# rank 3 node mibura-sky-test-02 gpu 3 NVIDIA L4 rail 1 (mlx5_1)
+# rank 4 node mibura-sky-test-01 gpu 0 NVIDIA L4 rail 0 (mlx5_0)
+# rank 5 node mibura-sky-test-01 gpu 1 NVIDIA L4 rail 0 (mlx5_0)
+# rank 6 node mibura-sky-test-01 gpu 2 NVIDIA L4 rail 1 (mlx5_1)
+# rank 7 node mibura-sky-test-01 gpu 3 NVIDIA L4 rail 1 (mlx5_1)
+# local adaptive direct/packed/flat reduction, remote-rank IB exchange; rail map 0,0,1,1; RS pieces 1
+# RS target piece 8388608 B per destination shard
+#      size(B)        count   pieces   time(us)      algbw      busbw  maxrelerr
+# selected,reducescatter,1024,serial-local
+# sample,reducescatter,1024,1,28.521,0.000e+00
+# sample,reducescatter,1024,2,28.317,0.000e+00
+# sample,reducescatter,1024,3,29.719,0.000e+00
+          1024          256        1      28.85       0.04       0.03    0.0e+00
+# selected,reducescatter,2048,serial-local
+# sample,reducescatter,2048,1,28.963,0.000e+00
+# sample,reducescatter,2048,2,28.436,0.000e+00
+# sample,reducescatter,2048,3,28.646,0.000e+00
+          2048          512        1      28.68       0.07       0.06    0.0e+00
+# selected,reducescatter,4096,serial-local
+# sample,reducescatter,4096,1,28.886,0.000e+00
+# sample,reducescatter,4096,2,27.905,0.000e+00
+# sample,reducescatter,4096,3,27.379,0.000e+00
+          4096         1024        1      28.06       0.15       0.13    0.0e+00
+# selected,reducescatter,8192,serial-local
+# sample,reducescatter,8192,1,29.327,0.000e+00
+# sample,reducescatter,8192,2,28.109,0.000e+00
+# sample,reducescatter,8192,3,28.578,0.000e+00
+          8192         2048        1      28.67       0.29       0.25    0.0e+00
+# selected,reducescatter,16384,serial-local
+# sample,reducescatter,16384,1,29.499,0.000e+00
+# sample,reducescatter,16384,2,28.610,0.000e+00
+# sample,reducescatter,16384,3,28.667,0.000e+00
+         16384         4096        1      28.93       0.57       0.50    0.0e+00
+# selected,reducescatter,32768,serial-local
+# sample,reducescatter,32768,1,29.720,0.000e+00
+# sample,reducescatter,32768,2,29.795,0.000e+00
+# sample,reducescatter,32768,3,30.915,0.000e+00
+         32768         8192        1      30.14       1.09       0.95    0.0e+00
+# selected,reducescatter,65536,serial-local
+# sample,reducescatter,65536,1,31.840,0.000e+00
+# sample,reducescatter,65536,2,32.260,0.000e+00
+# sample,reducescatter,65536,3,32.999,0.000e+00
+         65536        16384        1      32.37       2.02       1.77    0.0e+00
+# selected,reducescatter,131072,serial-local
+# sample,reducescatter,131072,1,39.089,0.000e+00
+# sample,reducescatter,131072,2,38.192,0.000e+00
+# sample,reducescatter,131072,3,38.287,0.000e+00
+        131072        32768        1      38.52       3.40       2.98    0.0e+00
+# selected,reducescatter,262144,serial-local
+# sample,reducescatter,262144,1,48.636,0.000e+00
+# sample,reducescatter,262144,2,47.943,0.000e+00
+# sample,reducescatter,262144,3,53.797,0.000e+00
+        262144        65536        1      50.13       5.23       4.58    0.0e+00
+# selected,reducescatter,524288,serial-local
+# sample,reducescatter,524288,1,67.594,0.000e+00
+# sample,reducescatter,524288,2,67.212,0.000e+00
+# sample,reducescatter,524288,3,71.798,0.000e+00
+        524288       131072        1      68.87       7.61       6.66    0.0e+00
+# selected,reducescatter,1048576,serial-local
+# sample,reducescatter,1048576,1,111.889,0.000e+00
+# sample,reducescatter,1048576,2,116.715,0.000e+00
+# sample,reducescatter,1048576,3,113.579,0.000e+00
+       1048576       262144        1     114.06       9.19       8.04    0.0e+00
+# selected,reducescatter,2097152,packed-ring
+# sample,reducescatter,2097152,1,194.513,0.000e+00
+# sample,reducescatter,2097152,2,186.339,0.000e+00
+# sample,reducescatter,2097152,3,194.541,0.000e+00
+       2097152       524288        1     191.80      10.93       9.57    0.0e+00
+# selected,reducescatter,4194304,packed-ring
+# sample,reducescatter,4194304,1,293.611,0.000e+00
+# sample,reducescatter,4194304,2,294.144,0.000e+00
+# sample,reducescatter,4194304,3,296.461,0.000e+00
+       4194304      1048576        1     294.74      14.23      12.45    0.0e+00
+# selected,reducescatter,8388608,packed-ring
+# sample,reducescatter,8388608,1,508.154,0.000e+00
+# sample,reducescatter,8388608,2,513.455,0.000e+00
+# sample,reducescatter,8388608,3,506.833,0.000e+00
+       8388608      2097152        1     509.48      16.47      14.41    0.0e+00
+# selected,reducescatter,16777216,packed-ring
+# sample,reducescatter,16777216,1,973.106,0.000e+00
+# sample,reducescatter,16777216,2,970.052,0.000e+00
+# sample,reducescatter,16777216,3,983.160,0.000e+00
+      16777216      4194304        1     975.44      17.20      15.05    0.0e+00
+# selected,reducescatter,33554432,direct-ring
+# sample,reducescatter,33554432,1,1826.677,0.000e+00
+# sample,reducescatter,33554432,2,1827.365,0.000e+00
+# sample,reducescatter,33554432,3,1849.020,0.000e+00
+      33554432      8388608        2    1834.35      18.29      16.01    0.0e+00
+# selected,reducescatter,67108864,direct-ring
+# sample,reducescatter,67108864,1,3437.367,0.000e+00
+# sample,reducescatter,67108864,2,3423.730,0.000e+00
+# sample,reducescatter,67108864,3,3446.933,0.000e+00
+      67108864     16777216        2    3436.01      19.53      17.09    0.0e+00

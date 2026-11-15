@@ -139,11 +139,21 @@ workload from Testbed 1's SGLang serving and DDP/FSDP training.
 <table>
   <tr><th>AllReduce</th><th>AllGather</th><th>ReduceScatter</th></tr>
   <tr>
-    <td width="33%"><img src="docs/assets/collectives-2x4l4-allreduce-optimized.svg" alt="Two-node AllReduce latency and bus throughput, UCCL Lite versus NCCL" width="100%"></td>
+    <td width="33%"><img src="docs/assets/collectives-2x4l4-allreduce-hybrid.svg" alt="Two-node FP32 AllReduce: 1–8 MiB latency and 1 MiB–1 GiB bus throughput, GPU ReduceScatter plus host AllGather versus previous UCCL Lite and NCCL Ring+Simple" width="100%"></td>
     <td width="33%"><img src="docs/assets/collectives-2x4l4-allgather-host-router.svg" alt="Two-node FP32 AllGather: 1–8 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite CPU router versus paired NCCL Ring+Simple" width="100%"></td>
     <td width="33%"><img src="docs/assets/collectives-2x4l4-reducescatter-optimized.svg" alt="Two-node ReduceScatter latency and bus throughput, UCCL Lite versus NCCL" width="100%"></td>
   </tr>
 </table>
+
+AllReduce uses the [November 15 hybrid measurements](benchmarks/data/hybrid_ar_2x4l4_20261115/README.md):
+GPU ReduceScatter followed by shared-host packet AllGather, with **all reduction
+arithmetic on GPUs**. Eight MPI ranks, FP32 input/output bytes per GPU,
+slowest-rank host enqueue-to-completion timing, and three rounds of twenty
+warmups plus ten checked calls. One fixed 256-KiB host-piece configuration
+lowers median latency by **5.8–15.0% versus the previous tuned UCCL Lite** and
+**3.1–13.2% versus NCCL 2.28.7 Ring+Simple** at the eleven measured 1-MiB–1-GiB
+sizes. At 1 GiB it takes **96.33 ms / 19.51 GB/s**. This is an explicit eager
+path; no automatic dispatch policy changes.
 
 AllGather uses the [November 15 CPU-router measurements](benchmarks/data/ag_host_router_2x4l4_20261115/README.md):
 eight L4 GPUs, FP32, complete output bytes per GPU, slowest-process host
@@ -152,10 +162,18 @@ calls. UCCL Lite and its NCCL 2.28.7 Ring+Simple control both use four MPI
 processes, two GPUs per NUMA group; NCCL is primed before comparison.
 The CPU-router curve uses one fixed 256 KiB chunk configuration throughout,
 reaching **12.1/16.0/18.6/20.1 GB/s at 1/2/4/8 MiB** and **21.9 GB/s at 1 GiB**.
-This path remains explicitly selected. AllReduce and ReduceScatter retain their
+This path remains explicitly selected. ReduceScatter retains its
 [November 11 measurements](benchmarks/data/multinode_serial_20261111/README.md).
 
+Implementation and in-place handoff details are in
+[hybrid AllReduce](docs/multinode-hybrid-allreduce.md).
+
 #### Optimization notes (temporary)
+
+For AllReduce, the successful transfer is to reduce on GPUs first, then apply
+the host-gather pipeline to the resulting N/8-byte shards. The complete
+operation, including its phase handoff and packed-input protection barrier,
+is measured. Uploading full inputs for CPU reduction did not produce a win.
 
 The main gains came from organizing data movement and progress around the NUMA
 layout. Each group's two GPUs upload adjacent pieces into a pinned host packet;

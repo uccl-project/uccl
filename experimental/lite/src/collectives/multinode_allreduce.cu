@@ -11,6 +11,7 @@
 // sizes.  Both algorithms move the minimum N bytes in each direction between
 // two nodes, spread over the two HCAs without routing GPU traffic over UPI.
 
+#include "uccl_lite/multinode_host_gather.cuh"
 #include <mscclpp/concurrency_device.hpp>
 #include <mscclpp/core.hpp>
 #include <mscclpp/memory_channel.hpp>
@@ -1226,6 +1227,9 @@ struct Config {
   bool allGather = false;
   bool reduceScatter = false;
   bool arAuto = false;
+  bool hostGather = false;
+  int hostRepeatCheck = 0;
+  size_t hostPieceBytes = 256UL << 10;
   bool agRing = false;
   bool agAuto = false;
   bool agSerialLocal = false;
@@ -1311,6 +1315,20 @@ static int ringPredecessor(int localRank) {
 }
 
 int main(int argc, char** argv) {
+  // UCX is selected by the explicit hybrid runner; route each process to
+  // its NUMA-local HCA before MPI creates its endpoints.
+  bool hostRequested = false;
+  for (int i = 1; i + 1 < argc; ++i)
+    if (std::string(argv[i]) == "--host-gather" && std::atoi(argv[i + 1]))
+      hostRequested = true;
+  if (hostRequested) {
+    char const* local = std::getenv("OMPI_COMM_WORLD_LOCAL_RANK");
+    int gpu = local ? std::atoi(local) : 0;
+    if (!std::getenv("UCX_NET_DEVICES"))
+      setenv("UCX_NET_DEVICES", gpu < 2 ? "mlx5_0:1" : "mlx5_1:1", 1);
+    if (!std::getenv("UCX_TLS"))
+      setenv("UCX_TLS", "rc_mlx5,ud_mlx5,sm,self", 1);
+  }
   MPICHECK(MPI_Init(&argc, &argv));
   int rank = 0, world = 0;
   MPICHECK(MPI_Comm_rank(MPI_COMM_WORLD, &rank));
@@ -1352,6 +1370,12 @@ int main(int argc, char** argv) {
         cfg.pipelineDistance = std::atoi(next());
       else if (key == "-a")
         cfg.flatAg = std::atoi(next()) != 0;
+      else if (key == "--host-repeat-check")
+        cfg.hostRepeatCheck = std::atoi(next());
+      else if (key == "--host-gather")
+        cfg.hostGather = std::atoi(next()) != 0;
+      else if (key == "--host-piece-bytes")
+        cfg.hostPieceBytes = std::strtoull(next(), nullptr, 0);
       else if (key == "--ar-auto")
         cfg.arAuto = std::atoi(next()) != 0;
       else if (key == "--ar-serial-local")
@@ -1525,6 +1549,36 @@ int main(int argc, char** argv) {
     MPI_Abort(MPI_COMM_WORLD, 2);
   }
 
+  bool hybridRs = cfg.hostGather && !cfg.allGather;
+  if (cfg.hostRepeatCheck < 0 || cfg.hostRepeatCheck > 8 ||
+      (cfg.hostRepeatCheck && (!hybridRs || cfg.reduceScatter))) {
+    if (rank == 0)
+      std::fprintf(
+          stderr,
+          "--host-repeat-check requires hybrid AllReduce and count 1..8\n");
+    MPI_Abort(MPI_COMM_WORLD, 2);
+  }
+  if (cfg.hostGather) {
+    if (cfg.reduceScatter || cfg.gpuTiming || cfg.arAuto || cfg.agAuto ||
+        cfg.agPipeline || cfg.agRing || cfg.agSerialLocal ||
+        cfg.arSerialLocal || cfg.rsAuto || cfg.rsRing || cfg.rsSerialLocal ||
+        cfg.rsPullLocal || cfg.rsOverlapLocal || cfg.maxBytes > (1UL << 30) ||
+        cfg.hostPieceBytes < 128 || cfg.hostPieceBytes > (16UL << 20) ||
+        cfg.hostPieceBytes % 128) {
+      if (rank == 0)
+        std::fprintf(stderr,
+                     "--host-gather requires exclusive eager AR/AG, host "
+                     "timing and aligned host pieces\n");
+      MPI_Abort(MPI_COMM_WORLD, 2);
+    }
+    if (hybridRs) {
+      cfg.rsAuto = cfg.rsRing = cfg.rsDirectRing = true;
+      cfg.rsTargetPieceBytes = 8UL << 20;
+      cfg.blocks = 96;
+      cfg.threads = 512;
+    }
+  }
+
   MPI_Comm localComm;
   MPICHECK(MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, rank,
                                MPI_INFO_NULL, &localComm));
@@ -1580,7 +1634,7 @@ int main(int argc, char** argv) {
           &flatResidentBlocks, hierarchicalAllGather, cfg.threads, 0));
       residentBlocks = std::min(residentBlocks, flatResidentBlocks);
     }
-  } else if (cfg.reduceScatter) {
+  } else if (cfg.reduceScatter || hybridRs) {
     if (cfg.rsPullLocal)
       CUDACHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
           &residentBlocks, hierarchicalReduceScatterOverlap<true>, cfg.threads,
@@ -1645,7 +1699,7 @@ int main(int argc, char** argv) {
   Layout layout{0, dataBytes, dataBytes + localScratchBytes,
                 dataBytes + localScratchBytes + ibSlotBytes, 0};
   size_t bufferBytes = layout.ibScratch + ibSlotBytes;
-  if (cfg.rsRing && (!cfg.rsDirectRing || cfg.rsAuto)) {
+  if (!hybridRs && cfg.rsRing && (!cfg.rsDirectRing || cfg.rsAuto)) {
     layout.immutableInput = bufferBytes;
     bufferBytes += dataBytes;
   }
@@ -1753,7 +1807,8 @@ int main(int argc, char** argv) {
       cfg.rsPullLocal || cfg.agSerialLocal || cfg.rsSerialLocal ||
       cfg.arSerialLocal ||
       (cfg.agAuto && cfg.allGather && cfg.minBytes <= kSerialAgMaxBytes) ||
-      (cfg.rsAuto && cfg.reduceScatter && cfg.minBytes <= kSerialRsMaxBytes) ||
+      (cfg.rsAuto && (cfg.reduceScatter || hybridRs) &&
+       cfg.minBytes <= kSerialRsMaxBytes) ||
       (cfg.arAuto && !cfg.allGather && !cfg.reduceScatter &&
        cfg.minBytes <= kSerialArMaxBytes);
   if (needsDirectLocal) {
@@ -1878,11 +1933,21 @@ int main(int argc, char** argv) {
   // data still being consumed. A partner cannot reach call i+2 until it has
   // received call i+1, by which time this rank has finished consuming call i.
   // The allocation already reserves two maximum-size RS shards for IB scratch.
+  std::unique_ptr<uccl_lite::host_gather::Gather> hostGather;
+  if (cfg.hostGather)
+    hostGather = std::make_unique<uccl_lite::host_gather::Gather>(
+        rank, localComm, cfg.maxBytes / kWorld, cfg.hostPieceBytes);
   unsigned overlapSequence = 0;
   unsigned agSequence = 0;
   auto launch = [&](size_t count, size_t bytes) {
     CUDACHECK(cudaSetDevice(localRank));
+    if (hostGather) uccl_lite::host_gather::clearMpiProbeStatus();
     if (cfg.allGather) {
+      if (hostGather) {
+        hostGather->run(buffer + layout.ibSend, buffer + layout.data,
+                        bytes / kWorld);
+        return;
+      }
       if (cfg.agPipeline) {
         size_t slot = agSequence++ & 1;
         size_t receiveOffset =
@@ -1950,7 +2015,7 @@ int main(int argc, char** argv) {
             rank, localRank);
       return;
     }
-    if (cfg.reduceScatter) {
+    if (cfg.reduceScatter || hybridRs) {
       if (cfg.rsPullLocal)
         hierarchicalReduceScatterOverlap<true>
             <<<cfg.blocks, cfg.threads, 0, stream>>>(
@@ -1992,8 +2057,16 @@ int main(int argc, char** argv) {
           size_t shard = count / kWorld;
           int blocks = int(std::min<size_t>(128, (shard + 255) / 256));
           packReduceScatterRing<<<dim3(blocks, kWorld), 256, 0, stream>>>(
-              reinterpret_cast<float*>(buffer + layout.immutableInput),
+              reinterpret_cast<float*>(
+                  buffer + (hybridRs ? layout.data : layout.immutableInput)),
               reinterpret_cast<float*>(buffer + layout.localScratch), shard);
+          if (hybridRs) {
+            // Packed RS receives into data. Every GPU must finish reading its
+            // in-place AR input before any peer can overwrite that scratch.
+            CUDACHECK(cudaGetLastError());
+            CUDACHECK(cudaStreamSynchronize(stream));
+            MPICHECK(MPI_Barrier(MPI_COMM_WORLD));
+          }
         }
         hierarchicalReduceScatterRing<<<cfg.blocks, cfg.threads, 0, stream>>>(
             localSend, localRecv, ib, reinterpret_cast<float*>(buffer), count,
@@ -2004,6 +2077,13 @@ int main(int argc, char** argv) {
                                     0, stream>>>(
             localAg, ib, reinterpret_cast<float*>(buffer), count, layout,
             rank, localRank);
+      if (hybridRs) {
+        CUDACHECK(cudaGetLastError());
+        CUDACHECK(cudaStreamSynchronize(stream));
+        hostGather->run(buffer + layout.ibSend +
+                            size_t(rank / kLocalRanks) * (bytes / kWorld),
+                        buffer + layout.data, bytes / kWorld);
+      }
       return;
     }
     size_t shardBytes = (bytes + kLocalRanks - 1) / kLocalRanks;
@@ -2046,6 +2126,12 @@ int main(int argc, char** argv) {
                 cfg.gpuTiming ? "CUDA event" : "host enqueue+completion");
     for (int r = 0; r < world; r++)
       std::fputs(lines.data() + r * sizeof(line), stdout);
+    if (cfg.hostGather)
+      std::printf(
+          "# explicit host packet gather; chunk=%zu; slots=3; GPU "
+          "reduction=%s; timing includes phase handoff\n",
+          cfg.hostPieceBytes,
+          hybridRs ? "tuned RS 96x512, 8MiB target" : "none");
     if (cfg.allGather || cfg.reduceScatter)
       std::printf("# local %s, remote-rank IB exchange; rail map "
                   "%d,%d,%d,%d; RS pieces %d\n",
@@ -2100,9 +2186,19 @@ int main(int argc, char** argv) {
                   2, std::min<size_t>(32, (shardBytes + cfg.pieceBytes - 1) /
                                               cfg.pieceBytes))
             : 1;
+    if (hybridRs) {
+      pieces =
+          useRsSerial(bytes) || !useRsDirectRing(bytes)
+              ? 1
+              : std::min(int(std::max<size_t>(
+                             2, (bytes / kWorld + cfg.rsTargetPieceBytes - 1) /
+                                    cfg.rsTargetPieceBytes)),
+                         int(std::max<size_t>(1, count / kWorld / 32)));
+    }
     if (rank == 0) {
       char const* selected =
-          cfg.allGather
+          cfg.hostGather ? (hybridRs ? "gpu-rs-host-ag" : "host-ag-eight-rank")
+          : cfg.allGather
               ? (cfg.agPipeline == 5   ? "matched-sm"
                  : cfg.agPipeline == 4 ? "matched-ce"
                  : cfg.agDualRdma
@@ -2138,6 +2234,31 @@ int main(int argc, char** argv) {
             cfg.agFirstMask);
     }
     double relerr = -1.0;
+    if (cfg.hostRepeatCheck) {
+      fill(count, 1);
+      MPICHECK(MPI_Barrier(MPI_COMM_WORLD));
+      for (int repeat = 0; repeat < cfg.hostRepeatCheck; ++repeat)
+        launch(count, bytes);
+      CUDACHECK(cudaStreamSynchronize(stream));
+      hostOut.resize(count);
+      CUDACHECK(cudaMemcpy(hostOut.data(), buffer + layout.data, bytes,
+                           cudaMemcpyDeviceToHost));
+      double factor = (double(kWorld) * (kWorld + 1) / 2 + kWorld * kWorld) *
+                      std::pow(double(kWorld), cfg.hostRepeatCheck - 1);
+      double error = 0;
+      for (size_t i = 0; i < count; ++i) {
+        double want = factor * (1 + i % 97);
+        double e = std::fabs(double(hostOut[i]) - want) / want;
+        error = std::max(error, std::isfinite(e) ? e : INFINITY);
+      }
+      double worst = 0;
+      MPICHECK(MPI_Allreduce(&error, &worst, 1, MPI_DOUBLE, MPI_MAX,
+                             MPI_COMM_WORLD));
+      if (rank == 0)
+        std::printf("# host_repeat_check,%zu,%d,%.3e\n", bytes,
+                    cfg.hostRepeatCheck, worst);
+      if (worst > 1e-5) MPI_Abort(MPI_COMM_WORLD, 1);
+    }
     if (cfg.check) {
       int generations = (cfg.allGather || cfg.reduceScatter) ? 2 : 1;
       for (int generation = 0; generation < generations; ++generation) {
@@ -2239,6 +2360,7 @@ int main(int argc, char** argv) {
 
   CUDACHECK(cudaStreamSynchronize(stream));
   MPICHECK(MPI_Barrier(MPI_COMM_WORLD));
+  hostGather.reset();
   ibProxy->stopProxy();
   localProxy->stopProxy();
   if (timingEnd) CUDACHECK(cudaEventDestroy(timingEnd));

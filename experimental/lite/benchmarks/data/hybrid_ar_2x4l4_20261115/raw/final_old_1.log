@@ -1,0 +1,144 @@
+# UCCL Lite two-node hierarchical AllReduce, float32
+# timing=host enqueue+completion; slowest of eight ranks
+# rank 0 node mibura-sky-test-02 gpu 0 NVIDIA L4 rail 0 (mlx5_0)
+# rank 1 node mibura-sky-test-02 gpu 1 NVIDIA L4 rail 0 (mlx5_0)
+# rank 2 node mibura-sky-test-02 gpu 2 NVIDIA L4 rail 1 (mlx5_1)
+# rank 3 node mibura-sky-test-02 gpu 3 NVIDIA L4 rail 1 (mlx5_1)
+# rank 4 node mibura-sky-test-01 gpu 0 NVIDIA L4 rail 0 (mlx5_0)
+# rank 5 node mibura-sky-test-01 gpu 1 NVIDIA L4 rail 0 (mlx5_0)
+# rank 6 node mibura-sky-test-01 gpu 2 NVIDIA L4 rail 1 (mlx5_1)
+# rank 7 node mibura-sky-test-01 gpu 3 NVIDIA L4 rail 1 (mlx5_1)
+# local ring 0->1->3->2->0; AG adaptive flat/ring; rail map 0,0,1,1; piece 2097152 B; pipeline >= 4194304 B
+#      size(B)        count   pieces   time(us)      algbw      busbw  maxrelerr
+# selected,allreduce,1048576,serial-local
+# sample,allreduce,1048576,1,225.275,0.000e+00
+# sample,allreduce,1048576,2,222.512,0.000e+00
+# sample,allreduce,1048576,3,227.743,0.000e+00
+# sample,allreduce,1048576,4,219.047,0.000e+00
+# sample,allreduce,1048576,5,222.708,0.000e+00
+# sample,allreduce,1048576,6,222.554,0.000e+00
+# sample,allreduce,1048576,7,212.387,0.000e+00
+# sample,allreduce,1048576,8,211.982,0.000e+00
+# sample,allreduce,1048576,9,217.392,0.000e+00
+# sample,allreduce,1048576,10,217.935,0.000e+00
+       1048576       262144        1     219.95       4.77       8.34    0.0e+00
+# selected,allreduce,2097152,ring-local-gather
+# sample,allreduce,2097152,1,328.431,0.000e+00
+# sample,allreduce,2097152,2,318.401,0.000e+00
+# sample,allreduce,2097152,3,336.683,0.000e+00
+# sample,allreduce,2097152,4,314.028,0.000e+00
+# sample,allreduce,2097152,5,329.499,0.000e+00
+# sample,allreduce,2097152,6,321.248,0.000e+00
+# sample,allreduce,2097152,7,322.714,0.000e+00
+# sample,allreduce,2097152,8,331.664,0.000e+00
+# sample,allreduce,2097152,9,325.260,0.000e+00
+# sample,allreduce,2097152,10,349.981,0.000e+00
+       2097152       524288        1     327.79       6.40      11.20    0.0e+00
+# selected,allreduce,4194304,ring-local-gather
+# sample,allreduce,4194304,1,565.493,0.000e+00
+# sample,allreduce,4194304,2,562.380,0.000e+00
+# sample,allreduce,4194304,3,576.471,0.000e+00
+# sample,allreduce,4194304,4,561.002,0.000e+00
+# sample,allreduce,4194304,5,566.865,0.000e+00
+# sample,allreduce,4194304,6,570.871,0.000e+00
+# sample,allreduce,4194304,7,571.594,0.000e+00
+# sample,allreduce,4194304,8,567.057,0.000e+00
+# sample,allreduce,4194304,9,563.650,0.000e+00
+# sample,allreduce,4194304,10,568.786,0.000e+00
+       4194304      1048576        2     567.42       7.39      12.94    0.0e+00
+# selected,allreduce,8388608,ring-local-gather
+# sample,allreduce,8388608,1,951.901,0.000e+00
+# sample,allreduce,8388608,2,956.453,0.000e+00
+# sample,allreduce,8388608,3,939.912,0.000e+00
+# sample,allreduce,8388608,4,964.826,0.000e+00
+# sample,allreduce,8388608,5,951.619,0.000e+00
+# sample,allreduce,8388608,6,956.709,0.000e+00
+# sample,allreduce,8388608,7,953.908,0.000e+00
+# sample,allreduce,8388608,8,950.786,0.000e+00
+# sample,allreduce,8388608,9,970.800,0.000e+00
+# sample,allreduce,8388608,10,967.694,0.000e+00
+       8388608      2097152        2     956.46       8.77      15.35    0.0e+00
+# selected,allreduce,16777216,ring-local-gather
+# sample,allreduce,16777216,1,1807.173,0.000e+00
+# sample,allreduce,16777216,2,1804.274,0.000e+00
+# sample,allreduce,16777216,3,1776.030,0.000e+00
+# sample,allreduce,16777216,4,1793.432,0.000e+00
+# sample,allreduce,16777216,5,1789.996,0.000e+00
+# sample,allreduce,16777216,6,1777.969,0.000e+00
+# sample,allreduce,16777216,7,1774.818,0.000e+00
+# sample,allreduce,16777216,8,1790.773,0.000e+00
+# sample,allreduce,16777216,9,1797.305,0.000e+00
+# sample,allreduce,16777216,10,1770.595,0.000e+00
+      16777216      4194304        2    1788.24       9.38      16.42    0.0e+00
+# selected,allreduce,33554432,ring-local-gather
+# sample,allreduce,33554432,1,3534.640,0.000e+00
+# sample,allreduce,33554432,2,3534.554,0.000e+00
+# sample,allreduce,33554432,3,3511.895,0.000e+00
+# sample,allreduce,33554432,4,3549.441,0.000e+00
+# sample,allreduce,33554432,5,3526.793,0.000e+00
+# sample,allreduce,33554432,6,3560.442,0.000e+00
+# sample,allreduce,33554432,7,3508.474,0.000e+00
+# sample,allreduce,33554432,8,3550.880,0.000e+00
+# sample,allreduce,33554432,9,3546.879,0.000e+00
+# sample,allreduce,33554432,10,3541.526,0.000e+00
+      33554432      8388608        4    3536.55       9.49      16.60    0.0e+00
+# selected,allreduce,67108864,ring-local-gather
+# sample,allreduce,67108864,1,7039.954,0.000e+00
+# sample,allreduce,67108864,2,7083.815,0.000e+00
+# sample,allreduce,67108864,3,7076.231,0.000e+00
+# sample,allreduce,67108864,4,7039.609,0.000e+00
+# sample,allreduce,67108864,5,7065.709,0.000e+00
+# sample,allreduce,67108864,6,7050.970,0.000e+00
+# sample,allreduce,67108864,7,7083.240,0.000e+00
+# sample,allreduce,67108864,8,7061.343,0.000e+00
+# sample,allreduce,67108864,9,7093.456,0.000e+00
+# sample,allreduce,67108864,10,7058.927,0.000e+00
+      67108864     16777216        8    7065.33       9.50      16.62    0.0e+00
+# selected,allreduce,134217728,ring-local-gather
+# sample,allreduce,134217728,1,14157.687,0.000e+00
+# sample,allreduce,134217728,2,14059.256,0.000e+00
+# sample,allreduce,134217728,3,14144.010,0.000e+00
+# sample,allreduce,134217728,4,14104.062,0.000e+00
+# sample,allreduce,134217728,5,14136.407,0.000e+00
+# sample,allreduce,134217728,6,14131.030,0.000e+00
+# sample,allreduce,134217728,7,14124.190,0.000e+00
+# sample,allreduce,134217728,8,14149.349,0.000e+00
+# sample,allreduce,134217728,9,14122.453,0.000e+00
+# sample,allreduce,134217728,10,14156.862,0.000e+00
+     134217728     33554432       16   14128.53       9.50      16.62    0.0e+00
+# selected,allreduce,268435456,ring-local-gather
+# sample,allreduce,268435456,1,28268.418,0.000e+00
+# sample,allreduce,268435456,2,28083.310,0.000e+00
+# sample,allreduce,268435456,3,28263.079,0.000e+00
+# sample,allreduce,268435456,4,28220.200,0.000e+00
+# sample,allreduce,268435456,5,28306.249,0.000e+00
+# sample,allreduce,268435456,6,28186.494,0.000e+00
+# sample,allreduce,268435456,7,28275.187,0.000e+00
+# sample,allreduce,268435456,8,28173.458,0.000e+00
+# sample,allreduce,268435456,9,28244.999,0.000e+00
+# sample,allreduce,268435456,10,28320.245,0.000e+00
+     268435456     67108864       32   28234.16       9.51      16.64    0.0e+00
+# selected,allreduce,536870912,ring-local-gather
+# sample,allreduce,536870912,1,54211.037,0.000e+00
+# sample,allreduce,536870912,2,54276.137,0.000e+00
+# sample,allreduce,536870912,3,54052.397,0.000e+00
+# sample,allreduce,536870912,4,54089.236,0.000e+00
+# sample,allreduce,536870912,5,54030.455,0.000e+00
+# sample,allreduce,536870912,6,54225.652,0.000e+00
+# sample,allreduce,536870912,7,54175.644,0.000e+00
+# sample,allreduce,536870912,8,54061.923,0.000e+00
+# sample,allreduce,536870912,9,54077.700,0.000e+00
+# sample,allreduce,536870912,10,54079.791,0.000e+00
+     536870912    134217728       32   54128.00       9.92      17.36    0.0e+00
+# selected,allreduce,1073741824,ring-local-gather
+# sample,allreduce,1073741824,1,106061.885,0.000e+00
+# sample,allreduce,1073741824,2,105977.920,0.000e+00
+# sample,allreduce,1073741824,3,106108.753,0.000e+00
+# sample,allreduce,1073741824,4,106027.111,0.000e+00
+# sample,allreduce,1073741824,5,105939.449,0.000e+00
+# sample,allreduce,1073741824,6,105914.315,0.000e+00
+# sample,allreduce,1073741824,7,105979.754,0.000e+00
+# sample,allreduce,1073741824,8,106136.025,0.000e+00
+# sample,allreduce,1073741824,9,105906.888,0.000e+00
+# sample,allreduce,1073741824,10,106038.450,0.000e+00
+    1073741824    268435456       32  106009.06      10.13      17.73    0.0e+00

@@ -16,7 +16,7 @@ EXTRA_NVCC_FLAGS ?=
 NVCC_FLAGS := -O3 -arch=$(CUDA_ARCH) -MMD -MP $(EXTRA_NVCC_FLAGS)
 MSCCLPP_INC = -Iinclude -I$(MSCCLPP_HOME)/include -I$(MSCCLPP_BUILD)/include
 MSCCLPP_LIB = -L$(MSCCLPP_BUILD)/lib -lmscclpp -Xlinker -rpath=$(MSCCLPP_BUILD)/lib
-IB_INC = -I$(MSCCLPP_HOME)/include -I$(MSCCLPP_IB_BUILD)/include
+IB_INC = -Iinclude -I$(MSCCLPP_HOME)/include -I$(MSCCLPP_IB_BUILD)/include
 IB_LIB = -L$(MSCCLPP_IB_BUILD)/lib -lmscclpp -Xlinker -rpath=$(MSCCLPP_IB_BUILD)/lib
 MPI_INC = $(shell $(MPICXX) --showme:compile)
 # Open MPI emits host-compiler -Wl options; nvcc needs -Xlinker instead.
