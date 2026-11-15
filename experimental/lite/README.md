@@ -39,18 +39,11 @@ validation and calibrated backend selection. See the
 
 ## Measured results
 
-Recorded measurements; linked studies document hardware, dtype, baselines,
-timing scope, repetitions, variant selection and limitations.
-
 ### SGLang end-to-end (8×L4)
-
-[Experimental setup and measurements](integration/nccl_lite/README.md).
 
 ![SGLang whole-batch latency, UCCL Lite versus NCCL](docs/assets/sglang-e2e-latency-8l4.svg)
 
 ### Single-node collectives
-
-[Four-L4 FP32 methods and data](benchmarks/data/small_medium_4l4_20261113/README.md).
 
 #### AllReduce on single 4xL4 GPU
 
@@ -66,8 +59,6 @@ timing scope, repetitions, variant selection and limitations.
 
 #### RTX PRO 6000 ×2
 
-[BF16 methods and data](benchmarks/data/pro6000_b0ac7b4a_validation/README.md) · [Tuned NCCL](benchmarks/data/nccl_tuned_pro6000_20261115/README.md) · [Ascending-only NCCL](benchmarks/data/nccl_ascending_pro6000_20261115/README.md).
-
 ##### AllReduce on RTX PRO 6000 ×2
 
 ![PRO6000 x2 AllReduce: UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (default P2P)](docs/assets/collectives-pro6000x2-allreduce-overview.svg)
@@ -81,8 +72,6 @@ timing scope, repetitions, variant selection and limitations.
 ![PRO6000 x2 ReduceScatter: UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (default P2P)](docs/assets/collectives-pro6000x2-reducescatter-overview.svg)
 
 #### 8xL4 GPU
-
-[BF16 methods and data](benchmarks/data/overview_8l4_20261114/README.md) · [Full refresh](benchmarks/data/full_refresh_8l4_20261114/README.md) · [RS recovery](benchmarks/data/rs_recovery_8l4_20261114/README.md).
 
 ##### AllReduce on single 8xL4 GPU
 
@@ -98,8 +87,6 @@ timing scope, repetitions, variant selection and limitations.
 
 #### 8xL4 SHM
 
-[BF16 methods, data and transport policy](benchmarks/data/full_refresh_8l4_20261114/README.md).
-
 ##### AllReduce on single 8xL4 SHM
 
 ![8xL4 SHM AllReduce: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite versus NCCL SHM](docs/assets/collectives-8l4-shm-allreduce-overview.svg)
@@ -113,8 +100,6 @@ timing scope, repetitions, variant selection and limitations.
 ![8xL4 SHM ReduceScatter: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite versus NCCL SHM](docs/assets/collectives-8l4-shm-reducescatter-overview.svg)
 
 ### Multi-node collectives
-
-[FP32 AllGather methods and data](benchmarks/data/host_multicast_selected_2x4l4_20261111/README.md) · [AllReduce and ReduceScatter](benchmarks/data/nccl_tuned_2x4l4_20261111/README.md).
 
 #### AllReduce on two 4xL4 GPU nodes
 
@@ -130,8 +115,6 @@ timing scope, repetitions, variant selection and limitations.
 
 ### Fusion on single 4xL4 GPU
 
-[Fusion methods, data and limitations](docs/fusion.md).
-
 #### Dense AG+GEMM, GEMM+RS, GEMM+AR
 
 ![Complete-operation latency at every dense shape, UCCL Lite versus NCCL and cuBLAS](docs/assets/dense-fusion-4l4-refresh.svg)
@@ -141,8 +124,6 @@ timing scope, repetitions, variant selection and limitations.
 ![Complete-layer latency at every token count, UCCL Lite versus NCCL and grouped cuBLAS](docs/assets/moe-fusion-4l4-refresh.svg)
 
 ### Fusion on single 8xL4 GPU
-
-[BF16 AR methods and data](benchmarks/data/fusion_8l4_models_20261111/README.md) · [AG](benchmarks/data/fusion_8l4_models_ag_rs_20261111/README.md) · [RS](benchmarks/data/fusion_rs_8l4_optimized_20261111/README.md).
 
 #### GEMM + AllReduce on single 8xL4 GPU
 
