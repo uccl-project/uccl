@@ -4,21 +4,22 @@ set -euo pipefail
 
 # GitHub's ubuntu-24.04 sources already use this APT mirror list. A lower
 # priority number is preferred; keep the runner's default mirrors as fallbacks.
-if ! grep -Fq 'mirror+file:/etc/apt/apt-mirrors.txt' /etc/apt/sources.list.d/ubuntu.sources; then
-  echo '::error::Expected the GitHub Ubuntu runner APT mirror-list configuration.'
-  exit 1
-fi
-mirror=$'https://mirrors.edge.kernel.org/ubuntu/\tpriority:0'
-if ! grep -Fxq "$mirror" /etc/apt/apt-mirrors.txt; then
-  if curl --fail --silent --show-error --connect-timeout 5 --max-time 10 \
-      --output /dev/null https://mirrors.edge.kernel.org/ubuntu/dists/noble/InRelease; then
-    printf '%s\n' "$mirror" | sudo tee -a /etc/apt/apt-mirrors.txt
-  else
-    echo '::warning::Preferred Ubuntu mirror is unreachable; using the runner defaults.'
+if grep -Fq 'mirror+file:/etc/apt/apt-mirrors.txt' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null; then
+  mirror=$'https://mirrors.edge.kernel.org/ubuntu/\tpriority:0'
+  if ! grep -Fxq "$mirror" /etc/apt/apt-mirrors.txt; then
+    if curl --fail --silent --show-error --connect-timeout 5 --max-time 10 \
+        --output /dev/null https://mirrors.edge.kernel.org/ubuntu/dists/noble/InRelease; then
+      printf '%s\n' "$mirror" | sudo tee -a /etc/apt/apt-mirrors.txt
+    else
+      echo '::warning::Preferred Ubuntu mirror is unreachable; using the runner defaults.'
+    fi
   fi
+else
+  echo '::warning::Runner APT sources do not use the expected mirror list; using the configured sources unchanged.'
 fi
 
-apt_options=(-o Acquire::Retries=1
+# Retain three retries; the workflow's eight-minute setup limit bounds the step.
+apt_options=(-o Acquire::Retries=3
              -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15
              -o DPkg::Lock::Timeout=30)
 

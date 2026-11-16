@@ -120,6 +120,10 @@ jobs:
           sparse-checkout: ci/setup_cpu.sh
           sparse-checkout-cone-mode: false
           persist-credentials: false
+      - name: Stage CPU setup outside the test checkout
+        run: |
+          cp .ci-workflow/ci/setup_cpu.sh "$RUNNER_TEMP/uccl-setup-cpu.sh"
+          rm -rf .ci-workflow
       - uses: actions/download-artifact@v4
         with:
           name: ci-plan
@@ -128,7 +132,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p ci-results
-          bash .ci-workflow/ci/setup_cpu.sh 2>&1 | tee ci-results/cpu-setup.log
+          bash "$RUNNER_TEMP/uccl-setup-cpu.sh" 2>&1 | tee ci-results/cpu-setup.log
       - name: Run CPU suites
         run: python3 ci/run.py --local --target cpu --plan ci-plan.json
       - name: Summarize results

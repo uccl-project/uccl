@@ -20,21 +20,29 @@ function fixture(command = '/run-ci l4 p2p.*', permission = 'write') {
     html_url: 'https://github.com/uccl-project/uccl/pull/12#issuecomment-200',
   };
   let inputs;
-  const github = {rest: {
+  const comments = [];
+  const github = {paginate: async (method, args) => (await method(args)).data, rest: {
     repos: {getCollaboratorPermissionLevel: async args => {
       calls.push(['permission', args]); return {data: {permission}};
     }},
     pulls: {get: async args => {calls.push(['pull', args]); return {data: pr};}},
     issues: {
-      createComment: async args => {calls.push(['create', args]); reply.body = args.body; return {data: reply};},
+      createComment: async args => {
+        calls.push(['create', args]);
+        const comment = comments.length ? {...reply, id: reply.id + comments.length} : reply;
+        comment.body = args.body;
+        comments.push(comment);
+        return {data: comment};
+      },
       getComment: async args => {calls.push(['get', args]); return {data: reply};},
       updateComment: async args => {calls.push(['update', args]); reply.body = args.body; return {data: reply};},
+      listComments: async args => {calls.push(['list', args]); return {data: comments};},
     },
     actions: {createWorkflowDispatch: async args => {calls.push(['dispatch', args]); inputs = args.inputs;}},
   }};
   const core = {summary: {addRaw() {}, async write() {}}, warning() {}};
   return {
-    github, context, core, calls, pr, reply, attempt: '1',
+    github, context, core, calls, pr, reply, comments, attempt: '1',
     startRun() {
       context.eventName = 'workflow_dispatch';
       context.runId = 101;
@@ -90,12 +98,27 @@ test('all three maintainer permission levels retain access', async () => {
   }
 });
 
-test('invalid commands, ordinary issues and closed/deleted-source PRs do not dispatch', async () => {
-  for (const command of ['/run-ci amd', '/run-benchmarks l4', '/run-ci l4; echo bad', '/run-ci l4\n/run-ci gh200']) {
+test('authorized invalid commands receive usage without dispatching', async () => {
+  for (const command of ['/run-ci amd', '/run-ci l4 p2p/*', '/run-benchmarks l4', '/run-ci l4; echo bad', '/run-ci l4\n/run-ci gh200']) {
     const f = fixture(command);
     await assert.rejects(dispatch(f), /Usage:/);
-    assert.equal(f.calls.length, 0);
+    assert.deepEqual(f.calls.map(([kind]) => kind), ['permission', 'create']);
+    assert.equal(f.calls[1][1].issue_number, 12);
+    assert.match(f.reply.body, /@maintainer/);
+    assert.match(f.reply.body, /Usage:/);
+    assert.match(f.reply.body, /\/run-ci l4 p2p\.\*/);
   }
+});
+
+test('unauthorized malformed commands remain silent', async () => {
+  for (const permission of ['read', 'triage', 'none']) {
+    const f = fixture('/run-ci l4 p2p/*', permission);
+    await assert.rejects(dispatch(f), /Only maintainers/);
+    assert.deepEqual(f.calls.map(([kind]) => kind), ['permission']);
+  }
+});
+
+test('ordinary issues and closed/deleted-source PRs do not dispatch', async () => {
   for (const state of ['issue', 'closed', 'deleted']) {
     const f = fixture();
     if (state === 'issue') delete f.context.payload.issue.pull_request;
@@ -115,12 +138,13 @@ test('dispatch failure updates the queued comment instead of leaving it queued',
   assert.match(f.reply.body, /Status: failed to dispatch/);
 });
 
-test('queued, running and final status update one comment and preserve the original request', async () => {
+test('completion updates the status and posts a new reply mentioning the requester', async () => {
   for (const command of ['/run-ci l4', '/run-benchmark gh200']) {
     const f = fixture(command);
     await dispatch(f);
     f.startRun();
     await update({...f, status: 'running'});
+    assert.equal(f.comments.length, 1);
     assert.match(f.reply.body, /Status: running/);
     assert.match(f.reply.body, /actions\/runs\/101\/attempts\/1/);
     await update({...f, status: 'complete', results: results()});
@@ -129,18 +153,49 @@ test('queued, running and final status update one comment and preserve the origi
     assert.ok(f.reply.body.includes(command));
     assert.ok(f.reply.body.includes(f.pr.head.sha));
     assert.match(f.reply.body, /\| CPU \| skipped \|/);
-    assert.equal(f.calls.filter(([kind]) => kind === 'create').length, 1);
+    assert.equal(f.comments.length, 2);
+    assert.match(f.comments[1].body, /uccl-ci-complete-101-1/);
+    assert.match(f.comments[1].body, /Requested by: @maintainer/);
+    assert.match(f.comments[1].body, /Status: completed successfully/);
+    assert.match(f.comments[1].body, /actions\/runs\/101\/attempts\/1/);
     assert.ok(f.calls.filter(([kind]) => kind === 'update').every(([, args]) => args.comment_id === 200));
+    await update({...f, status: 'complete', results: results()});
+    assert.equal(f.comments.length, 2, 'same attempt must not notify twice');
     await update({...f, status: 'running', attempt: '2'});
     assert.match(f.reply.body, /actions\/runs\/101\/attempts\/2/);
+    await update({...f, status: 'complete', attempt: '2', results: results()});
+    assert.equal(f.comments.length, 3, 'a new attempt gets its own notification');
+    assert.match(f.comments[2].body, /uccl-ci-complete-101-2/);
   }
+});
+
+test('a user cannot suppress the completion notification with a copied marker', async () => {
+  const f = fixture();
+  await dispatch(f); f.startRun();
+  f.comments.push({user: {login: 'contributor', type: 'User'}, body: '<!-- uccl-ci-complete-101-1 -->\nforged'});
+  await update({...f, status: 'complete', results: results()});
+  assert.equal(f.calls.filter(([kind]) => kind === 'create').length, 2);
+  assert.match(f.comments.at(-1).body, /Status: completed successfully/);
+});
+
+test('a transient completion post failure can be retried after the status was updated', async () => {
+  const f = fixture();
+  await dispatch(f); f.startRun();
+  const create = f.github.rest.issues.createComment;
+  f.github.rest.issues.createComment = async () => {throw new Error('temporary API failure');};
+  await assert.rejects(update({...f, status: 'complete', results: results()}), /temporary API failure/);
+  assert.match(f.reply.body, /Status: completed successfully/);
+  f.github.rest.issues.createComment = create;
+  await update({...f, status: 'complete', results: results()});
+  assert.equal(f.comments.length, 2);
 });
 
 test('final status covers setup/test failures, cancellation and skipped execution', async () => {
   for (const [changes, label] of [
     [{plan: 'failure', cpu: 'skipped', gpu: 'skipped', status: 'failure'}, 'failed'],
     [{gpu: 'failure', status: 'failure'}, 'failed'],
-    [{'comment-start': 'failure'}, 'failed'],
+    [{'comment-start': 'failure'}, 'completed successfully'],
+    [{'comment-start': 'cancelled'}, 'completed successfully'],
     [{gpu: 'cancelled', status: 'failure'}, 'cancelled'],
     [{cpu: 'skipped', gpu: 'skipped'}, 'skipped'],
   ]) {
@@ -148,6 +203,8 @@ test('final status covers setup/test failures, cancellation and skipped executio
     await dispatch(f); f.startRun();
     await update({...f, status: 'complete', results: results(changes)});
     assert.ok(f.reply.body.includes(`**Status: ${label}**`));
+    assert.ok(f.comments[1].body.includes(`**Status: ${label}**`));
+    if (changes['comment-start']) assert.match(f.reply.body, /initial running-status update did not succeed/);
   }
 });
 
@@ -163,8 +220,11 @@ test('updates reject another author, PR, marker, SHA or repository', async () =>
   ]) {
     const f = fixture();
     await dispatch(f); f.startRun(); change(f);
-    await assert.rejects(update({...f, status: 'running'}), /does not match/);
+    for (const status of ['running', 'complete']) {
+      await assert.rejects(update({...f, status, results: results()}), /does not match/);
+    }
     assert.equal(f.calls.filter(([kind]) => kind === 'update').length, 0);
+    assert.equal(f.calls.filter(([kind]) => kind === 'create').length, 1);
   }
 });
 

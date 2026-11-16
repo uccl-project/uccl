@@ -1,6 +1,7 @@
 // Loaded only from the trusted workflow commit by jobs with comment permission.
 const STATUS_MARKER = '\n<!-- uccl-ci-status -->\n';
 const ALLOWED_PERMISSIONS = new Set(['write', 'maintain', 'admin']);
+const USAGE = 'Usage: /run-ci|/run-benchmark <all|cpu|l4|gb10|gh200> [test IDs/globs]';
 
 function runUrl(context, attempt) {
   const {owner, repo} = context.repo;
@@ -15,6 +16,9 @@ function bodyWithStatus(header, status, url, results) {
       lines.push(`| ${label} | ${results[id].result} |`);
     }
     lines.push('', 'Per-suite results, skips and timings are in the run summary and artifacts.');
+    if (['failure', 'cancelled'].includes(results['comment-start']?.result)) {
+      lines.push('', 'Note: the initial running-status update did not succeed. The CI result above reflects the test jobs, not that notification failure.');
+    }
   }
   return lines.join('\n');
 }
@@ -25,7 +29,7 @@ function completionStatus(results) {
     throw new Error('Missing or invalid CI job results');
   }
   if (states.includes('cancelled')) return 'cancelled';
-  if (states.includes('failure') || results['comment-start']?.result === 'failure') return 'failed';
+  if (states.includes('failure')) return 'failed';
   if (results.cpu.result === 'skipped' && results.gpu.result === 'skipped') return 'skipped';
   return 'completed successfully';
 }
@@ -34,12 +38,18 @@ async function dispatch({github, context, core, attempt = process.env.GITHUB_RUN
   const {owner, repo} = context.repo;
   if (!context.payload.issue?.pull_request) throw new Error('CI commands require a pull request');
   const command = context.payload.comment.body.trim();
-  const match = command.match(/^\/(run-ci|run-benchmark)\s+(all|cpu|l4|gb10|gh200)(?:\s+([a-z0-9_.*,-]+))?$/);
-  if (!match) throw new Error('Usage: /run-ci|/run-benchmark <all|cpu|l4|gb10|gh200> [test IDs/globs]');
   const requester = context.payload.comment.user.login;
   const {data: permission} = await github.rest.repos.getCollaboratorPermissionLevel({owner, repo, username: requester});
   if (!ALLOWED_PERMISSIONS.has(permission.permission)) {
     throw new Error('Only maintainers may authorize lab execution of a PR');
+  }
+  const match = command.match(/^\/(run-ci|run-benchmark)\s+(all|cpu|l4|gb10|gh200)(?:\s+([a-z0-9_.*,-]+))?$/);
+  if (!match) {
+    await github.rest.issues.createComment({
+      owner, repo, issue_number: context.payload.issue.number,
+      body: `@${requester} I could not parse that CI command.\n\n\`${USAGE}\`\n\nUse test IDs/globs such as \`p2p.*\`, not file paths. For example: \`/run-ci l4 p2p.*\` or \`/run-benchmark gh200 ep.bench.*\`.`,
+    });
+    throw new Error(USAGE);
   }
   const {data: pr} = await github.rest.pulls.get({owner, repo, pull_number: context.payload.issue.number});
   if (pr.state !== 'open' || !pr.head.repo) throw new Error('PR must be open with an accessible source repository');
@@ -104,10 +114,24 @@ async function update({github, context, status, results, attempt = process.env.G
   }
   if (status !== 'running' && status !== 'complete') throw new Error('Invalid CI comment status');
   const label = status === 'complete' ? completionStatus(results) : 'running';
+  const body = bodyWithStatus(parts[0] + STATUS_MARKER.trimEnd(), label, runUrl(context, attempt), status === 'complete' ? results : null);
   await github.rest.issues.updateComment({
-    owner, repo, comment_id,
-    body: bodyWithStatus(parts[0] + STATUS_MARKER.trimEnd(), label, runUrl(context, attempt), status === 'complete' ? results : null),
+    owner, repo, comment_id, body,
   });
+  if (status === 'complete') {
+    // Editing the original mention does not notify the requester. A new reply
+    // does; deduplicate retries of the same run attempt without trusting users.
+    const marker = `<!-- uccl-ci-complete-${context.runId}-${attempt} -->`;
+    const comments = await github.paginate(github.rest.issues.listComments, {
+      owner, repo, issue_number: Number(inputs.pr), per_page: 100,
+    });
+    if (!comments.some(comment => comment.user?.login === 'github-actions[bot]' &&
+        comment.user?.type === 'Bot' && comment.body?.startsWith(`${marker}\n`))) {
+      await github.rest.issues.createComment({
+        owner, repo, issue_number: Number(inputs.pr), body: `${marker}\n${body}`,
+      });
+    }
+  }
 }
 
 module.exports = {dispatch, update, completionStatus};
