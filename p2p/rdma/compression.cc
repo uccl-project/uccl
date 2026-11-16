@@ -6,6 +6,11 @@
 #include <cctype>
 #include <cstdlib>
 #include <string>
+#ifdef USE_NFH
+#include "dietgpu/utils/GreenContext.h"
+#include "nfh/nfh_codec.h"
+#include <cuda_runtime.h>
+#endif
 
 size_t get_min_compress_bytes_from_env() {
   char const* env = std::getenv("UCCL_P2P_MIN_COMPRESS_BYTES");
@@ -544,6 +549,238 @@ CompressStrategy DietGPUCompressorBackend::get_compress_strategy() {
 }
 #endif  // USE_DIETGPU
 
+#ifdef USE_NFH
+NFHCompressorBackend::NFHCompressorBackend()
+    : compress_strategy_(get_compress_strategy_from_env()) {
+  if (compress_strategy_ == CompressStrategy::kNone) return;
+  GPU_RT_CHECK(cudaGetDevice(&device_));
+  // Same SM limit as DietGPU (UCCL_DIETGPU_SM_USAGE); must precede streams
+  // and allocations so they belong to the green context.
+  dietgpu::initGreenContextIfNeeded(device_);
+  auto allocator = std::make_shared<MemoryAllocator>();
+  buffer_ = allocator->allocate(kCompressBufferSize, MemoryType::GPU, nullptr);
+  decompressBuffer_ =
+      allocator->allocate(kCompressBufferSize, MemoryType::GPU, nullptr);
+  // stream_ carries the split (it gates the first post) and the decode, so
+  // it gets the highest priority; the rest of the encoder hides behind the
+  // first post on encode_stream_.
+  int prio_lo = 0, prio_hi = 0;
+  GPU_RT_CHECK(cudaDeviceGetStreamPriorityRange(&prio_lo, &prio_hi));
+  GPU_RT_CHECK(
+      cudaStreamCreateWithPriority(&stream_, cudaStreamDefault, prio_hi));
+  GPU_RT_CHECK(gpuStreamCreate(&encode_stream_));
+  int r = nfh_encoder_create(&enc_);
+  if (r == NFH_OK) r = nfh_decoder_create(&dec_);
+  if (r != NFH_OK) {
+    UCCL_LOG(ERROR) << "NFHCompressorBackend: init failed: "
+                    << nfh_error_string(r) << "; compression disabled";
+    compress_strategy_ = CompressStrategy::kNone;
+    return;
+  }
+  GPU_RT_CHECK(
+      cudaHostAlloc(&decode_status_, sizeof(int), cudaHostAllocMapped));
+  *decode_status_ = NFH_OK;
+}
+
+NFHCompressorBackend::~NFHCompressorBackend() {
+  if (stream_) gpuStreamSynchronize(stream_);
+  if (encode_stream_) gpuStreamSynchronize(encode_stream_);
+  nfh_encoder_destroy(enc_);
+  nfh_decoder_destroy(dec_);
+  if (decode_status_) cudaFreeHost(decode_status_);
+  if (stream_) gpuStreamDestroy(stream_);
+  if (encode_stream_) gpuStreamDestroy(encode_stream_);
+}
+
+std::shared_ptr<RegMemBlock> NFHCompressorBackend::get_compress_buffer() const {
+  return buffer_;
+}
+
+std::shared_ptr<RegMemBlock> NFHCompressorBackend::get_decompress_buffer()
+    const {
+  return decompressBuffer_;
+}
+
+bool NFHCompressorBackend::supports_float_type(FloatType float_type) const {
+  return float_type == FloatType::kBFloat16;
+}
+
+bool NFHCompressorBackend::compress(std::shared_ptr<RDMASendRequest> req) {
+  if (unlikely(!req || !req->local_mem || !req->compress_ctx || !enc_ ||
+               !buffer_ ||
+               !supports_float_type(req->compress_ctx->get_float_type()) ||
+               req->local_mem->size % 16 != 0)) {
+    UCCL_LOG(WARN) << "NFHCompressorBackend::compress - Invalid parameters";
+    return false;
+  }
+  dietgpu::initGreenContextIfNeeded(device_);
+  size_t n = req->local_mem->size / 2;
+  size_t total = 0;
+  int r = nfh_split(enc_, req->local_mem->addr, n, buffer_->addr, stream_);
+  if (r == NFH_OK)
+    r = nfh_encode(enc_, req->local_mem->addr, n, buffer_->addr, stream_,
+                   &total);
+  if (r != NFH_OK) {
+    UCCL_LOG(ERROR) << "NFHCompressorBackend::compress: "
+                    << nfh_error_string(r);
+    return false;
+  }
+  req->local_mem = std::make_shared<RegMemBlock>(
+      buffer_->addr, total, buffer_->mr_array, buffer_->type);
+  return true;
+}
+
+void NFHCompressorBackend::report_decode_status(void* self) {
+  // Host callback: no GPU API calls; the flag lives in mapped host memory.
+  auto* b = static_cast<NFHCompressorBackend*>(self);
+  int st = *b->decode_status_;
+  if (unlikely(st != NFH_OK)) {
+    UCCL_LOG(ERROR) << "NFHCompressorBackend: decode failed: "
+                    << nfh_error_string(st);
+    *b->decode_status_ = NFH_OK;
+  }
+}
+
+bool NFHCompressorBackend::decompress(RemoteMemInfo const& input,
+                                      RegMemBlock& output,
+                                      FloatType float_type) {
+  if (unlikely(!dec_ || input.addr == 0 || input.length == 0 ||
+               output.addr == nullptr || output.size == 0 ||
+               !supports_float_type(float_type))) {
+    UCCL_LOG(WARN) << "NFHCompressorBackend::decompress - Invalid parameters";
+    return false;
+  }
+  dietgpu::initGreenContextIfNeeded(device_);
+  int r =
+      nfh_decode(dec_, reinterpret_cast<void const*>(input.addr), input.length,
+                 output.addr, output.size / 2, stream_, decode_status_);
+  GPU_RT_CHECK(gpuStreamSynchronize(stream_));
+  int st = *decode_status_;
+  *decode_status_ = NFH_OK;
+  if (unlikely(r != NFH_OK || st != NFH_OK)) {
+    UCCL_LOG(ERROR) << "NFHCompressorBackend: decompression failed: "
+                    << nfh_error_string(r != NFH_OK ? r : st);
+    return false;
+  }
+  return true;
+}
+
+void NFHCompressorBackend::decompress_async(RemoteMemInfo const& input,
+                                            RegMemBlock& output,
+                                            FloatType float_type,
+                                            gpuHostFn_t on_done,
+                                            void* user_data) {
+  if (unlikely(!dec_ || input.addr == 0 || input.length == 0 ||
+               output.addr == nullptr || output.size == 0 ||
+               !supports_float_type(float_type))) {
+    UCCL_LOG(WARN) << "NFH decompress_async - invalid params; firing on_done "
+                      "synchronously";
+    if (on_done) on_done(user_data);
+    return;
+  }
+  dietgpu::initGreenContextIfNeeded(device_);
+  int r =
+      nfh_decode(dec_, reinterpret_cast<void const*>(input.addr), input.length,
+                 output.addr, output.size / 2, stream_, decode_status_);
+  if (unlikely(r != NFH_OK)) {
+    UCCL_LOG(ERROR) << "NFH decompress_async: " << nfh_error_string(r);
+  }
+  GPU_RT_CHECK(gpuLaunchHostFunc(stream_, report_decode_status, this));
+  if (on_done) {
+    GPU_RT_CHECK(gpuLaunchHostFunc(stream_, on_done, user_data));
+  }
+}
+
+bool NFHCompressorBackend::should_compress(size_t size) {
+  if (compress_strategy_ == CompressStrategy::kNone) return false;
+  if (unlikely(size > buffer_->size)) {
+    UCCL_LOG(ERROR) << "NFHCompressorBackend::should_compress: data size ("
+                    << size << " bytes) exceeds compress buffer capacity ("
+                    << buffer_->size << " bytes), skipping compression";
+    return false;
+  }
+  return size >= kMinCompressBytes;
+}
+
+bool NFHCompressorBackend::should_compress_and_split_first(size_t size) {
+  // Whole 16-byte units keep every reservation in the peer's decompress
+  // arena 16-byte aligned, which the decoder requires.
+  return compress_strategy_ == CompressStrategy::kSplitOnly && size % 16 == 0 &&
+         should_compress(size);
+}
+
+void NFHCompressorBackend::prepare_split_context(void* /*addr*/,
+                                                 size_t /*size*/,
+                                                 CompressCtx /*ctx*/) {
+  // NFH keeps no per-registration state.
+}
+
+bool NFHCompressorBackend::compress_split_one_batch(
+    std::shared_ptr<RDMASendRequest> req) {
+  if (unlikely(!req || !req->local_mem || !enc_ || !buffer_)) {
+    UCCL_LOG(WARN) << "NFHCompressorBackend::compress_split_one_batch - "
+                      "Invalid parameters";
+    return false;
+  }
+  dietgpu::initGreenContextIfNeeded(device_);
+  split_in_ = req->local_mem->addr;
+  split_n_ = req->local_mem->size / 2;
+  // Split first: its blocks then take the SMs ahead of the encoder's. The
+  // exponent encoder does not read the split plane, so it runs on its own
+  // stream while the split is posted.
+  int r = nfh_split(enc_, split_in_, split_n_, buffer_->addr, stream_);
+  if (unlikely(r != NFH_OK)) {
+    UCCL_LOG(ERROR) << "NFH split: " << nfh_error_string(r);
+  }
+  r = nfh_encode_begin(enc_, split_in_, split_n_, buffer_->addr,
+                       encode_stream_);
+  encode_queued_ = r == NFH_OK;
+  if (unlikely(!encode_queued_)) {
+    UCCL_LOG(ERROR) << "NFH encode_begin: " << nfh_error_string(r)
+                    << "; sending the stored form";
+  }
+  GPU_RT_CHECK(gpuStreamSynchronize(stream_));
+  size_t first = split_n_ - split_n_ % ChunkSplitStrategy::kMessageChunkSizeKB;
+  req->local_mem = std::make_shared<RegMemBlock>(
+      buffer_->addr, first, buffer_->mr_array, buffer_->type);
+  return true;
+}
+
+uint32_t NFHCompressorBackend::compress_encode_one_batch(
+    std::shared_ptr<RDMASendRequest> req) {
+  if (unlikely(!req || !req->local_mem || !enc_ || !buffer_)) {
+    UCCL_LOG(WARN) << "NFHCompressorBackend::compress_encode_one_batch - "
+                      "Invalid parameters";
+    return 0;
+  }
+  dietgpu::initGreenContextIfNeeded(device_);
+  size_t total = 0;
+  int r = encode_queued_ ? nfh_encode_end(enc_, encode_stream_, &total)
+                         : NFH_ERR_ARG;
+  encode_queued_ = false;
+  if (unlikely(r != NFH_OK)) {
+    // The stored form is always valid: split plane + raw exponent plane.
+    r = nfh_store(enc_, split_in_, split_n_, buffer_->addr, stream_);
+    GPU_RT_CHECK(gpuStreamSynchronize(stream_));
+    total = 2 * split_n_;
+  }
+  UCCL_LOG(INFO, UCCL_RDMA)
+      << "NFHCompressorBackend: Encode done, " << 2 * split_n_ << " bytes -> "
+      << total << " bytes, ratio: "
+      << static_cast<float>(total) / static_cast<float>(2 * split_n_) << "x";
+  uint32_t first = req->local_mem->size;
+  req->local_mem = std::make_shared<RegMemBlock>(
+      static_cast<char*>(buffer_->addr) + first, total - first,
+      buffer_->mr_array, buffer_->type);
+  req->remote_mem->addr = req->remote_mem->addr + first;
+  return static_cast<uint32_t>(total);
+}
+
+CompressStrategy NFHCompressorBackend::get_compress_strategy() {
+  return compress_strategy_;
+}
+#endif  // USE_NFH
+
 Compressor& Compressor::get_instance() {
   static Compressor instance;
   return instance;
@@ -599,12 +836,39 @@ CompressStrategy Compressor::get_compress_strategy() {
   return backend_->get_compress_strategy();
 }
 
+bool Compressor::supports_float_type(FloatType float_type) const {
+  return backend_->supports_float_type(float_type);
+}
+
+// UCCL_P2P_COMPRESS_CODEC selects among the codecs built in: "dietgpu"
+// (default when built) or "nfh". Both peers must use the same codec.
 Compressor::Compressor() {
+  char const* env = std::getenv("UCCL_P2P_COMPRESS_CODEC");
+  std::string codec = env ? env : "";
+  std::transform(codec.begin(), codec.end(), codec.begin(),
+                 [](unsigned char c) { return std::tolower(c); });
+#ifdef USE_NFH
 #ifdef USE_DIETGPU
-  backend_ = std::make_unique<DietGPUCompressorBackend>();
+  bool use_nfh = codec == "nfh";
 #else
-  backend_ = std::make_unique<NullCompressorBackend>();
+  bool use_nfh = codec.empty() || codec == "nfh";
 #endif
+  if (use_nfh) {
+    backend_ = std::make_unique<NFHCompressorBackend>();
+    return;
+  }
+#endif
+#ifdef USE_DIETGPU
+  if (codec.empty() || codec == "dietgpu") {
+    backend_ = std::make_unique<DietGPUCompressorBackend>();
+    return;
+  }
+#endif
+  if (!codec.empty()) {
+    UCCL_LOG(ERROR) << "UCCL_P2P_COMPRESS_CODEC=" << codec
+                    << " is not built in; compression disabled";
+  }
+  backend_ = std::make_unique<NullCompressorBackend>();
 }
 
 Compressor::~Compressor() = default;

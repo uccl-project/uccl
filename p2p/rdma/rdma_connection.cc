@@ -192,8 +192,10 @@ bool SendConnection::will_compress_write(
   bool const c_ack = static_cast<bool>(ack_ring_);
   bool const c_rdb = remote_decompress_buf_.length > 0;
   bool const c_ctx = static_cast<bool>(compress_ctx);
-  bool const c_ft =
-      c_ctx && (compress_ctx->get_float_type() != FloatType::kUndefined);
+  bool const c_ft = c_ctx &&
+                    (compress_ctx->get_float_type() != FloatType::kUndefined) &&
+                    Compressor::get_instance().supports_float_type(
+                        compress_ctx->get_float_type());
   bool const c_fit =
       static_cast<uint64_t>(msg_size) <= remote_decompress_buf_.length;
   return c_ack && c_rdb && c_ctx && c_ft && c_fit &&

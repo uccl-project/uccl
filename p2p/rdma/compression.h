@@ -186,6 +186,13 @@ class ICompressorBackend {
    * @return The current compression strategy.
    */
   virtual CompressStrategy get_compress_strategy() = 0;
+
+  /**
+   * @brief Whether this backend can compress the given float type.
+   */
+  virtual bool supports_float_type(FloatType /*float_type*/) const {
+    return true;
+  }
 };
 
 /**
@@ -278,12 +285,77 @@ class DietGPUCompressorBackend : public ICompressorBackend {
 
 #endif  // USE_DIETGPU
 
+#ifdef USE_NFH
+struct nfh_encoder;
+struct nfh_decoder;
+
+/**
+ * @brief NFH compressor backend (BF16 only, selected with
+ * UCCL_P2P_COMPRESS_CODEC=nfh).
+ *
+ * The split phase writes the sign/mantissa byte plane, which is posted at
+ * once; the exponent encoder runs on a second stream concurrently with the
+ * split and its output is posted in phase 2. The compressed size never
+ * exceeds the input size. See rdma/nfh/nfh_codec.h for the format.
+ */
+class NFHCompressorBackend : public ICompressorBackend {
+ public:
+  NFHCompressorBackend();
+  ~NFHCompressorBackend() override;
+
+  std::shared_ptr<RegMemBlock> get_compress_buffer() const override;
+
+  std::shared_ptr<RegMemBlock> get_decompress_buffer() const override;
+
+  bool compress(std::shared_ptr<RDMASendRequest> req) override;
+
+  bool decompress(RemoteMemInfo const& input, RegMemBlock& output,
+                  FloatType float_type) override;
+
+  void decompress_async(RemoteMemInfo const& input, RegMemBlock& output,
+                        FloatType float_type, gpuHostFn_t on_done,
+                        void* user_data) override;
+
+  bool should_compress(size_t size) override;
+
+  bool should_compress_and_split_first(size_t size) override;
+
+  void prepare_split_context(void* addr, size_t size, CompressCtx ctx) override;
+
+  bool compress_split_one_batch(std::shared_ptr<RDMASendRequest> req) override;
+
+  uint32_t compress_encode_one_batch(
+      std::shared_ptr<RDMASendRequest> req) override;
+
+  CompressStrategy get_compress_strategy() override;
+
+  bool supports_float_type(FloatType float_type) const override;
+
+ private:
+  static void report_decode_status(void* self);
+
+  int device_ = 0;
+  std::shared_ptr<RegMemBlock> buffer_;            // Compression buffer
+  std::shared_ptr<RegMemBlock> decompressBuffer_;  // Decompression buffer
+  gpuStream_t stream_ = nullptr;                   // split and decode
+  gpuStream_t encode_stream_ = nullptr;  // exponent encoder, overlaps split
+  nfh_encoder* enc_ = nullptr;
+  nfh_decoder* dec_ = nullptr;
+  int* decode_status_ = nullptr;  // mapped host flag written by the decoder
+  // Split -> encode hand-off of the request being compressed.
+  void const* split_in_ = nullptr;
+  size_t split_n_ = 0;
+  bool encode_queued_ = false;
+  CompressStrategy compress_strategy_;
+};
+#endif  // USE_NFH
+
 /**
  * @brief Compressor class for handling GPU float compression and decompression.
  *
- * This class is a facade that delegates to the appropriate backend based on
- * compile-time configuration (USE_DIETGPU). It manages a singleton instance
- * and forwards all operations to the selected backend.
+ * This class is a facade that delegates to the backend selected by the build
+ * (USE_DIETGPU, USE_NFH) and UCCL_P2P_COMPRESS_CODEC. It manages a singleton
+ * instance and forwards all operations to the selected backend.
  */
 class Compressor {
  public:
@@ -369,6 +441,11 @@ class Compressor {
    * @return The current compression strategy.
    */
   CompressStrategy get_compress_strategy();
+
+  /**
+   * @brief Whether the selected backend can compress the given float type.
+   */
+  bool supports_float_type(FloatType float_type) const;
 
  private:
   Compressor();

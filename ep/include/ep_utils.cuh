@@ -902,6 +902,46 @@ __forceinline__ __device__ int atomic_exch_cta_release(int* addr, int x) {
   return ret;
 }
 
+// Barrier for links without native peer atomics (BARRIER_MODE_EPOCH).
+// Slot t on rank r holds the last barrier epoch that rank t has entered, and
+// only rank t writes it, so the barrier needs only peer stores. Slot r on rank
+// r is rank r's own epoch. Every rank must call it the same number of times,
+// from one block, like the atomic barrier.
+template <int kNumRanks>
+__forceinline__ __device__ void barrier_block_epoch(int** barrier_signal_ptrs,
+                                                    int rank) {
+  auto thread_id = static_cast<int>(threadIdx.x);
+  int const epoch = ld_volatile_global(barrier_signal_ptrs[rank] + rank) + 1;
+  // Every thread reads the old epoch before thread `rank` overwrites it
+  __syncthreads();
+
+  if (thread_id < kNumRanks)
+    st_release_sys_global(barrier_signal_ptrs[thread_id] + rank, epoch);
+  EP_DEVICE_ASSERT(kNumRanks <= blockDim.x);
+
+  // Check timeout
+  auto start_time = clock64();
+  while (true) {
+    auto value =
+        thread_id < kNumRanks
+            ? ld_acquire_sys_global(barrier_signal_ptrs[rank] + thread_id)
+            : epoch;
+    // `value >= epoch`, safe across int wrap-around
+    auto ahead = static_cast<int>(static_cast<unsigned>(value) -
+                                  static_cast<unsigned>(epoch));
+    if (__all_sync(WARP_MASK, ahead >= 0)) break;
+
+    if (clock64() - start_time > NUM_TIMEOUT_CYCLES and thread_id < kNumRanks) {
+      printf(
+          "DeepEP timeout check failed: rank = %d, thread = %d, epoch = %d, "
+          "value = %d)\n",
+          rank, thread_id, epoch, value);
+      trap();
+    }
+  }
+  __syncthreads();
+}
+
 template <int kNumRanks, bool kSyncOnly = false>
 __forceinline__ __device__ void barrier_block(int** barrier_signal_ptrs,
                                               int rank) {
@@ -912,6 +952,12 @@ __forceinline__ __device__ void barrier_block(int** barrier_signal_ptrs,
   if constexpr (not kSyncOnly) {
     memory_fence();
     __syncthreads();
+  }
+
+  // Set by Buffer::sync() before any kernel runs
+  if (barrier_signal_ptrs[rank][BARRIER_MODE_SLOT] == BARRIER_MODE_EPOCH) {
+    barrier_block_epoch<kNumRanks>(barrier_signal_ptrs, rank);
+    return;
   }
 
   // Add self-ranks, sub other ranks

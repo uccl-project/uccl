@@ -567,7 +567,7 @@
       "nodes": 1,
       "gpus": 0,
       "timeout": 180,
-      "command": "g++ -std=c++17 -O2 -pthread -Ip2p -Ip2p/util -Iinclude p2p/tests/test_epoll_client.cc p2p/util/epoll_client.cc -o \"$CI_ARTIFACTS/epoll_client\" && \"$CI_ARTIFACTS/epoll_client\""
+      "command": "g++ -std=c++17 -O2 -pthread -Ip2p -Ip2p/util -Iinclude p2p/tests/test_epoll_client.cc p2p/util/epoll_client.cc -Wl,--wrap=epoll_wait -o \"$CI_ARTIFACTS/epoll_client\" && \"$CI_ARTIFACTS/epoll_client\""
     },
     {
       "id": "p2p.cpu.epoll_server",
@@ -1696,7 +1696,7 @@
       "setup": [
         "gin-local"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "gin.local.capabilities",
@@ -1722,7 +1722,7 @@
       "setup": [
         "gin-local"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "gin.local.queue_smoke",
@@ -1748,7 +1748,7 @@
       "setup": [
         "gin-local"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "gin.local.coop_flush",
@@ -1774,7 +1774,7 @@
       "setup": [
         "gin-local"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "gin.local.adapter_signal",
@@ -1800,7 +1800,7 @@
       "setup": [
         "gin-local"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "gin.local.ht_single_rank",
@@ -1826,7 +1826,7 @@
       "setup": [
         "gin-local"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "gin.local.model",
@@ -1853,7 +1853,7 @@
       "setup": [
         "gin-local"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "gin.network.context",
@@ -1872,7 +1872,7 @@
       "nodes": 1,
       "gpus": 1,
       "timeout": 180,
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run. The NVIDIA GIN network implementation requires EFA; none of the available CI servers has an EFA NIC."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run. The NVIDIA GIN network implementation requires EFA; none of the available CI servers has an EFA NIC."
     },
     {
       "id": "gin.network.primitives",
@@ -1891,7 +1891,7 @@
       "nodes": 1,
       "gpus": 1,
       "timeout": 180,
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run. The NVIDIA GIN network implementation requires EFA; none of the available CI servers has an EFA NIC."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run. The NVIDIA GIN network implementation requires EFA; none of the available CI servers has an EFA NIC."
     },
     {
       "id": "gin.network.microbench",
@@ -1910,7 +1910,7 @@
       "nodes": 1,
       "gpus": 1,
       "timeout": 180,
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run. The NVIDIA GIN network implementation requires EFA; none of the available CI servers has an EFA NIC."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run. The NVIDIA GIN network implementation requires EFA; none of the available CI servers has an EFA NIC."
     },
     {
       "id": "gin.network.binaries",
@@ -1930,7 +1930,7 @@
       "nodes": 1,
       "gpus": 1,
       "timeout": 180,
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run. NVIDIA GIN network transport requires EFA; no EFA CI target is available."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run. NVIDIA GIN network transport requires EFA; no EFA CI target is available."
     },
     {
       "id": "ukernel.transport.unit",
@@ -1961,7 +1961,7 @@
       "gpus": 1,
       "timeout": 600,
       "command": "make -C experimental/ukernel/src/transport -j\"$CI_JOBS\" SM=\"$SM\" CUDA_HOME=\"$CUDA_HOME\" CUDA_PATH=\"$CUDA_HOME\" test-unit",
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "ukernel.transport.integration",
@@ -1986,7 +1986,7 @@
       "gpus": 1,
       "timeout": 600,
       "command": "make -C experimental/ukernel/src/transport -j\"$CI_JOBS\" SM=\"$SM\" CUDA_HOME=\"$CUDA_HOME\" CUDA_PATH=\"$CUDA_HOME\" test-integration",
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "ukernel.device.unit",
@@ -2007,7 +2007,7 @@
       "gpus": 1,
       "timeout": 600,
       "command": "make -C experimental/ukernel/src/device -j\"$CI_JOBS\" SM=\"$SM\" CUDA_HOME=\"$CUDA_HOME\" CUDA_PATH=\"$CUDA_HOME\" test-unit",
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run. Requires the GDRCopy kernel driver (/dev/gdrdrv), absent on the current CI servers. GH200 has the userspace library only; enable after driver provisioning."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run. Requires the GDRCopy kernel driver (/dev/gdrdrv), absent on the current CI servers. GH200 has the userspace library only; enable after driver provisioning."
     },
     {
       "id": "ukernel.device.integration",
@@ -2028,7 +2028,7 @@
       "gpus": 1,
       "timeout": 600,
       "command": "make -C experimental/ukernel/src/device -j\"$CI_JOBS\" SM=\"$SM\" CUDA_HOME=\"$CUDA_HOME\" CUDA_PATH=\"$CUDA_HOME\" test-integration",
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run. Requires the GDRCopy kernel driver (/dev/gdrdrv), absent on the current CI servers. GH200 has the userspace library only; enable after driver provisioning."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run. Requires the GDRCopy kernel driver (/dev/gdrdrv), absent on the current CI servers. GH200 has the userspace library only; enable after driver provisioning."
     },
     {
       "id": "ukernel.ccl.unit",
@@ -2058,7 +2058,7 @@
         "\\bFAIL\\b",
         "data: empty"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "ukernel.ccl.test_put_signal_e2e",
@@ -2088,7 +2088,7 @@
       "setup": [
         "gdrcopy-lib"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "ukernel.ccl.test_spray_executor_e2e",
@@ -2118,7 +2118,7 @@
       "setup": [
         "gdrcopy-lib"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "ukernel.ccl.test_device_backend_e2e",
@@ -2138,7 +2138,7 @@
       "gpus": 1,
       "timeout": 600,
       "command": "bash ci/suites.sh ukernel-ccl test_device_backend_e2e",
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run. Requires same-host GPU IPC and the GDRCopy kernel driver. The available multi-GPU L4 pool has no /dev/gdrdrv.",
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run. Requires same-host GPU IPC and the GDRCopy kernel driver. The available multi-GPU L4 pool has no /dev/gdrdrv.",
       "failure_patterns": [
         "\\bFAIL\\b",
         "data: empty"
@@ -2175,7 +2175,7 @@
       "setup": [
         "gdrcopy-lib"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "ukernel.ccl.test_transport_backend_e2e",
@@ -2205,7 +2205,7 @@
       "setup": [
         "gdrcopy-lib"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "ukernel.ccl.test_perf_p2p_copy",
@@ -2232,7 +2232,7 @@
       "setup": [
         "gdrcopy-lib"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run. Includes device-backend benchmarks requiring the GDRCopy kernel driver, absent on the current CI pool."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run. Includes device-backend benchmarks requiring the GDRCopy kernel driver, absent on the current CI pool."
     },
     {
       "id": "ukernel.ccl.test_perf_spray_allreduce",
@@ -2259,7 +2259,7 @@
       "setup": [
         "gdrcopy-lib"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run. Includes device-backend benchmarks requiring the GDRCopy kernel driver, absent on the current CI pool."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run. Includes device-backend benchmarks requiring the GDRCopy kernel driver, absent on the current CI pool."
     },
     {
       "id": "ukernel.ccl.test_rdma_l2_flush",
@@ -2289,7 +2289,7 @@
       "setup": [
         "gdrcopy-lib"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "ukernel.python.bidirectional_p2p",
@@ -2315,7 +2315,7 @@
       "setup": [
         "ukernel-python"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "ukernel.python.collective",
@@ -2338,7 +2338,7 @@
       "setup": [
         "ukernel-python"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run. Requires GDRCopy kernel device /dev/gdrdrv, absent on the current CI pool. The Python extensions build, but collective runtime initialization fails without it."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run. Requires GDRCopy kernel device /dev/gdrdrv, absent on the current CI pool. The Python extensions build, but collective runtime initialization fails without it."
     },
     {
       "id": "ukernel.python.p2p",
@@ -2364,7 +2364,7 @@
       "setup": [
         "ukernel-python"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "ukernel.python.tile_signal",
@@ -2390,7 +2390,7 @@
       "setup": [
         "ukernel-python"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "ukernel.python.transport_paths",
@@ -2416,7 +2416,7 @@
       "setup": [
         "ukernel-python"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "lite.ep.ep",
@@ -2441,7 +2441,7 @@
       "setup": [
         "lite-ep"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "lite.ep.agrs",
@@ -2466,7 +2466,7 @@
       "setup": [
         "lite-ep"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "lite.ep.barrier",
@@ -2491,7 +2491,7 @@
       "setup": [
         "lite-ep"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "lite.ep.engram",
@@ -2516,7 +2516,7 @@
       "setup": [
         "lite-ep"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "lite.ep.pp",
@@ -2541,7 +2541,7 @@
       "setup": [
         "lite-ep"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "lite.ep.gate",
@@ -2566,7 +2566,7 @@
       "setup": [
         "lite-ep"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "lite.ep.full_path",
@@ -2591,7 +2591,7 @@
       "setup": [
         "lite-ep"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "disabled.collective.afxdp.ebpf-afxdp-test.c",
@@ -3261,7 +3261,7 @@
     {
       "id": "collective.multi_process_groups",
       "sources": [
-        "examples/multi_pg_test.py"
+        "collective/examples/multi_pg_test.py"
       ],
       "tier": "integration",
       "enabled": false,
@@ -3270,7 +3270,7 @@
         "gb10"
       ],
       "paths": [
-        "examples/**"
+        "collective/examples/**"
       ],
       "requires": [
         "cuda"
@@ -3278,11 +3278,11 @@
       "nodes": 2,
       "gpus": 1,
       "timeout": 300,
-      "command": "NCCL_NET_PLUGIN=uccl NCCL_NET=RDMA_Plugin bash ci/torchrun.sh examples/multi_pg_test.py --iters=2 --tensor_size=1024",
+      "command": "NCCL_NET_PLUGIN=uccl NCCL_NET=RDMA_Plugin bash ci/torchrun.sh collective/examples/multi_pg_test.py --iters=2 --tensor_size=1024",
       "setup": [
         "collective-plugin"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "lite.ep.batched_gpu_to_cpu_bench",
@@ -3305,7 +3305,7 @@
       "timeout": 300,
       "command": "make -C experimental/lite/lite-ep/tests batched_gpu_to_cpu_bench CUDAFLAGS=\"-arch=sm_$SM\" && experimental/lite/lite-ep/tests/batched_gpu_to_cpu_bench",
       "setup": [],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "lite.ep.bench_decode_latency",
@@ -3330,7 +3330,7 @@
       "setup": [
         "lite-ep"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "lite.ep.bench_nccl_a2a",
@@ -3355,7 +3355,7 @@
       "setup": [
         "lite-ep"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "lite.ep.gpu_to_cpu_bench",
@@ -3378,7 +3378,7 @@
       "timeout": 300,
       "command": "make -C experimental/lite/lite-ep/tests gpu_to_cpu_bench CUDAFLAGS=\"-arch=sm_$SM\" && experimental/lite/lite-ep/tests/gpu_to_cpu_bench",
       "setup": [],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "lite.ep.pcie_bench",
@@ -3401,7 +3401,7 @@
       "timeout": 300,
       "command": "make -C experimental/lite/lite-ep/tests pcie_bench CUDAFLAGS=\"-arch=sm_$SM\" && experimental/lite/lite-ep/tests/pcie_bench",
       "setup": [],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "disabled.experimental.misc.run-nccl-test.sh",
@@ -3420,7 +3420,7 @@
       "nodes": 1,
       "gpus": 1,
       "timeout": 180,
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run. Legacy site-specific launcher contains fixed host/user paths; portable collective coverage is registered as collective.multi_process_groups."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run. Legacy site-specific launcher contains fixed host/user paths; portable collective coverage is registered as collective.multi_process_groups."
     },
     {
       "id": "disabled.experimental.misc.run-nccl-test-nsys.sh",
@@ -3439,7 +3439,7 @@
       "nodes": 1,
       "gpus": 1,
       "timeout": 180,
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run. Profiling wrapper requires Nsight Systems and profiling permissions; use the registered correctness/benchmark suites in CI."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run. Profiling wrapper requires Nsight Systems and profiling permissions; use the registered correctness/benchmark suites in CI."
     },
     {
       "id": "p2p.compression_unit",
@@ -3466,6 +3466,29 @@
       "setup": [
         "compression"
       ]
+    },
+    {
+      "id": "p2p.nfh_codec",
+      "sources": [
+        "p2p/rdma/nfh/test_nfh_codec.cu"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gh200",
+        "gb10"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 300,
+      "command": "make -C p2p/rdma/nfh test GPU_ARCH=\"sm_$SM\""
     },
     {
       "id": "p2p.compression_arena",
@@ -3798,7 +3821,7 @@
         "experimental/uccl_gin/**",
         "thirdparty/nccl-ep/**"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "gin.local.probability_order",
@@ -3825,7 +3848,7 @@
         "experimental/uccl_gin/**",
         "thirdparty/nccl-ep/**"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "lite.collective.staged",
@@ -3851,7 +3874,7 @@
         "experimental/lite/lite-collective/**",
         "p2p/**"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "lite.collective.staged_multiconn",
@@ -3877,7 +3900,7 @@
         "experimental/lite/lite-collective/**",
         "p2p/**"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "lite.collective.staged_kernelcopy",
@@ -3903,7 +3926,7 @@
         "experimental/lite/lite-collective/**",
         "p2p/**"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "lite.collective.staged_dualnuma",
@@ -3929,7 +3952,7 @@
         "experimental/lite/lite-collective/**",
         "p2p/**"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "lite.collective.staged_singlegpu_dualnuma",
@@ -3955,7 +3978,7 @@
         "experimental/lite/lite-collective/**",
         "p2p/**"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "lite.collective.build",
@@ -3981,7 +4004,7 @@
       "paths": [
         "experimental/lite/lite-collective/**"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "lite.collective.sendrecv",
@@ -4007,7 +4030,7 @@
       "paths": [
         "experimental/lite/lite-collective/scripts/**"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "p2p.bench.nccl",
@@ -4159,7 +4182,7 @@
       "paths": [
         "experimental/misc/**"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "misc.numa",
@@ -4182,7 +4205,7 @@
       "paths": [
         "experimental/misc/**"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "misc.peer_copy",
@@ -4205,7 +4228,7 @@
       "paths": [
         "experimental/misc/**"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "ukernel.python.bench_p2p",
@@ -4232,7 +4255,7 @@
       "paths": [
         "experimental/ukernel/py/benchmarks/**"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "ukernel.python.bench_collective",
@@ -4256,7 +4279,7 @@
       "paths": [
         "experimental/ukernel/py/benchmarks/**"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run. Requires GDRCopy kernel device /dev/gdrdrv, absent on the current CI pool. The Python extensions build, but collective runtime initialization fails without it."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run. Requires GDRCopy kernel device /dev/gdrdrv, absent on the current CI pool. The Python extensions build, but collective runtime initialization fails without it."
     },
     {
       "id": "ukernel.bench.gdrcopy",
@@ -4269,7 +4292,7 @@
       ],
       "enabled": false,
       "tier": "performance",
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run. GDRCopy kernel driver /dev/gdrdrv is absent from the current pool.",
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run. GDRCopy kernel driver /dev/gdrdrv is absent from the current pool.",
       "targets": [],
       "requires": []
     },
@@ -4297,7 +4320,7 @@
       "paths": [
         "experimental/ukernel/benchmarks/**"
       ],
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "ep.bench.nvshmem",
@@ -4443,7 +4466,7 @@
       "env": {
         "TRANSPORT": "ipc"
       },
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "ukernel.python.transport_paths.tcp",
@@ -4472,7 +4495,7 @@
       "env": {
         "TRANSPORT": "tcp"
       },
-      "reason": "Excluded from CI scope: examples/ and experimental/ tests are not run."
+      "reason": "Excluded from CI scope: collective/examples/ and experimental/ tests are not run."
     },
     {
       "id": "p2p.nccl.host_memory",

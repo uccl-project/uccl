@@ -364,7 +364,7 @@ std::pair<uint64_t, uint32_t> TXTracking::ack_rc_transmitted_chunks(
 
   subflow->pcb.swift_cc.adjust_wnd(to_usec(newrtt_tsc, freq_ghz), acked_bytes);
 
-  return std::make_pair(tx_timestamp, qpidx);
+  return std::make_pair(newrtt_tsc, qpidx);
 }
 
 uint64_t TXTracking::ack_transmitted_chunks(void* subflow_context,
