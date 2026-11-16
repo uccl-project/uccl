@@ -124,9 +124,9 @@ workload from Testbed 1's SGLang serving and DDP/FSDP training.
 <table>
   <tr><th>AllReduce</th><th>AllGather</th><th>ReduceScatter</th></tr>
   <tr>
-    <td width="33%"><img src="docs/assets/collectives-2x4l4-allreduce-nccl-tuned.svg" alt="Two-node FP32 AllReduce: 1 KiB–1 MiB latency and 1 MiB–1 GiB throughput, UCCL Lite, NCCL SM (tuned), NCCL CE (tuned), prior NCCL" width="100%"></td>
-    <td width="33%"><img src="docs/assets/collectives-2x4l4-allgather-nccl-tuned.svg" alt="Two-node FP32 AllGather: 1–8 MiB latency and 1 MiB–1 GiB throughput, UCCL Lite, NCCL SM (tuned), NCCL CE (tuned), prior NCCL" width="100%"></td>
-    <td width="33%"><img src="docs/assets/collectives-2x4l4-reducescatter-nccl-tuned.svg" alt="Two-node ReduceScatter latency and throughput, UCCL Lite, NCCL SM (tuned), NCCL CE (tuned), prior NCCL" width="100%"></td>
+    <td width="33%"><img src="docs/assets/collectives-2x4l4-allreduce-nccl-tuned.svg" alt="Two-node FP32 AllReduce: 1 KiB–1 MiB latency and 1 MiB–1 GiB throughput, UCCL Lite, NCCL SM (tuned), NCCL CE (tuned), NCCL (default)" width="100%"></td>
+    <td width="33%"><img src="docs/assets/collectives-2x4l4-allgather-nccl-tuned.svg" alt="Two-node FP32 AllGather: 1–8 MiB latency and 1 MiB–1 GiB throughput, UCCL Lite, NCCL SM (tuned), NCCL CE (tuned), NCCL (default)" width="100%"></td>
+    <td width="33%"><img src="docs/assets/collectives-2x4l4-reducescatter-nccl-tuned.svg" alt="Two-node ReduceScatter latency and throughput, UCCL Lite, NCCL SM (tuned), NCCL CE (tuned), NCCL (default)" width="100%"></td>
   </tr>
 </table>
 

@@ -25,7 +25,7 @@ SOURCES = {
 }
 STYLES = (
     ('uccl', 'UCCL Lite', '#0068B5', 'o', '-'),
-    ('prior', 'NCCL (prior)', '#D8A17A', 's', (0, (5, 2.5))),
+    ('prior', 'NCCL (default)', '#D8A17A', 's', (0, (5, 2.5))),
     ('sm', 'NCCL SM (tuned)', '#82B4A3', 'D', (0, (2, 1.5))),
     ('ce', 'NCCL CE (tuned)', '#B899C8', '^', (0, (6, 2, 1, 2))),
 )
