@@ -157,6 +157,15 @@ $(BUILD)/uccl_lite_pcieccl_original_latency: benchmarks/data/pro6000_original_cp
 pcieccl-original-latency-summary:
 	$(PYTHON) -B benchmarks/data/pro6000_original_cpp_latency_20261116/summarize.py
 
+.PHONY: nccl-sm-cpp-latency
+nccl-sm-cpp-latency: $(BUILD)/uccl_lite_nccl_sm_cpp_latency
+$(BUILD)/uccl_lite_nccl_sm_cpp_latency: benchmarks/data/pro6000_nccl_sm_cpp_latency_20261116/nccl_sm_latency.cu | $(BUILD)
+	$(NVCC) -O3 -std=c++20 -arch=$(CUDA_ARCH) -I$(MSCCLPP_HOME)/include -I$(NCCL_HOME)/include $< -o $@ -L$(MSCCLPP_HOME)/lib -lmscclpp -L$(NCCL_HOME)/lib -l:libnccl.so.2 -lcudart -lpthread -Xlinker -rpath=$(MSCCLPP_HOME)/lib -Xlinker -rpath=$(NCCL_HOME)/lib
+
+.PHONY: nccl-sm-cpp-latency-summary
+nccl-sm-cpp-latency-summary:
+	$(PYTHON) -B benchmarks/data/pro6000_nccl_sm_cpp_latency_20261116/summarize.py
+
 # Host-only Python binding to the same out-of-place NCCL AllReduce API.
 PYBIND11_INC ?= $(shell $(PYTHON) -c 'import torch; print(torch.__path__[0] + "/include")')
 PYTHON_INC = $(shell $(PYTHON) -c 'import sysconfig; print(sysconfig.get_path("include"))')

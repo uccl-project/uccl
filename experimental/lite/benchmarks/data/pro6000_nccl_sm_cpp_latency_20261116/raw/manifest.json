@@ -1,0 +1,1279 @@
+{
+  "started_utc": "2026-11-16T07:36:50.055560+00:00",
+  "arguments": {
+    "experiment": "/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910",
+    "original_root": "/home/wxzheng/uccl-lite-original-cpp-latency-20261116"
+  },
+  "configs": {
+    "default": {},
+    "p2p": {
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1"
+    },
+    "p2p-128": {
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_NTHREADS": "128",
+      "NCCL_BUFFSIZE": "1048576"
+    },
+    "ring-ll": {
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_ALGO": "Ring",
+      "NCCL_PROTO": "LL"
+    },
+    "tree-ll": {
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_ALGO": "Tree",
+      "NCCL_PROTO": "LL"
+    },
+    "ring-ll128": {
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_ALGO": "Ring",
+      "NCCL_PROTO": "LL128"
+    },
+    "tree-ll128": {
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_ALGO": "Tree",
+      "NCCL_PROTO": "LL128"
+    },
+    "ring-simple": {
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_ALGO": "Ring",
+      "NCCL_PROTO": "Simple"
+    },
+    "tree-simple": {
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_ALGO": "Tree",
+      "NCCL_PROTO": "Simple"
+    },
+    "ring-ll-ch2": {
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_ALGO": "Ring",
+      "NCCL_PROTO": "LL",
+      "NCCL_MIN_NCHANNELS": "2",
+      "NCCL_MAX_NCHANNELS": "2"
+    },
+    "ring-simple-ch2": {
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_ALGO": "Ring",
+      "NCCL_PROTO": "Simple",
+      "NCCL_MIN_NCHANNELS": "2",
+      "NCCL_MAX_NCHANNELS": "2"
+    },
+    "ring-simple-ch8": {
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_ALGO": "Ring",
+      "NCCL_PROTO": "Simple",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8",
+      "NCCL_BUFFSIZE": "1048576"
+    }
+  },
+  "common_environment": {
+    "CUDA_VISIBLE_DEVICES": "0,1,2,3,4,5,6,7",
+    "NCCL_IB_DISABLE": "1",
+    "NCCL_NET": "Socket",
+    "NCCL_P2P_USE_CUDA_MEMCPY": "0",
+    "LD_LIBRARY_PATH": "/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/deps/cuda133-packages/nvidia/cu13/lib:/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/deps/cuda133-packages/nvidia/cu13/lib64"
+  },
+  "source_sha256": "2533819482b6700c24b1bcf43e507ff9880e03a9d53afd3f351148325ce02698",
+  "runner_sha256": "eb01da2a5a1e65c2c06c16432d547bc4ffcedb6a8f4afe321ec7ea16e7f3db3f",
+  "binary_sha256": "66877edf41a7bd2ddfd32e9cfe9786bb53f0f93be3bb91991246a5281fb820ea",
+  "original_binary_sha256": "ede7a8c11d2cd31f5ceb889df40d09443b74cfeb76f9212cc5c911fcdaae47b8",
+  "original_source_sha256": "80d7cb3d121121468744d872e7cc149ffcf83b7856a19b8059f3370bda0db3bb",
+  "nccl_library_sha256": "1c8618b866734cbdd5401715d6178be763ece283b7f808ecf86dedab211162c1",
+  "runs": [
+    {
+      "label": "calibration-1-ring-simple-ch2",
+      "config": "ring-simple-ch2",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:36:51.301046+00:00",
+      "returncode": 0,
+      "sha256": "db8f557360efb072f2fc91a06cb60213202363db1edeea895bc5ed854deea4e3",
+      "status": "pass"
+    },
+    {
+      "label": "calibration-1-ring-simple",
+      "config": "ring-simple",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:36:55.132273+00:00",
+      "returncode": 0,
+      "sha256": "5dffc454b2c385bfc5413c389e30dfac0718f639de28828258de071ddb434ff4",
+      "status": "pass"
+    },
+    {
+      "label": "calibration-1-p2p-128",
+      "config": "p2p-128",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:36:58.512286+00:00",
+      "returncode": 0,
+      "sha256": "126c78bc27659013603505c21ea3f074857ab81c20d2d4b957036803262b3d7a",
+      "status": "pass"
+    },
+    {
+      "label": "calibration-1-p2p",
+      "config": "p2p",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:37:01.792759+00:00",
+      "returncode": 0,
+      "sha256": "33d2c1ee6bd9f51b411d979a9a87109952fdbb0052df8417da7698733c950d5b",
+      "status": "pass"
+    },
+    {
+      "label": "calibration-1-ring-ll-ch2",
+      "config": "ring-ll-ch2",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:37:05.123780+00:00",
+      "returncode": 0,
+      "sha256": "ae359039be0e9fcfe814b10d54570cf51356109110e65f1fd24dfe002fda933d",
+      "status": "pass"
+    },
+    {
+      "label": "calibration-1-default",
+      "config": "default",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:37:08.453644+00:00",
+      "returncode": 0,
+      "sha256": "ebf36b888fc3f02f6365ea76d0ec9332fcbfb7a7eb54587963a0b167e9e58b24",
+      "status": "pass"
+    },
+    {
+      "label": "calibration-1-tree-ll",
+      "config": "tree-ll",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:37:11.733837+00:00",
+      "returncode": 0,
+      "sha256": "e0fbdab848e88ea4d6c83886f6115914f4da47ee44f8eb31405550a6850f3251",
+      "status": "pass"
+    },
+    {
+      "label": "calibration-1-tree-simple",
+      "config": "tree-simple",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:37:15.164481+00:00",
+      "returncode": 0,
+      "sha256": "fd4da8100a8b2707d9200c8befec71bccd07630e33be0667dfb35f7576484c21",
+      "status": "pass"
+    },
+    {
+      "label": "calibration-1-ring-ll128",
+      "config": "ring-ll128",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:37:18.445510+00:00",
+      "returncode": 0,
+      "sha256": "4f8f814ad7ca7ce93886b420a27988645e6f5c02871f61bda5c3d57bb5c938ec",
+      "status": "pass"
+    },
+    {
+      "label": "calibration-1-tree-ll128",
+      "config": "tree-ll128",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:37:21.775915+00:00",
+      "returncode": 0,
+      "sha256": "3dfd6802ded1f7c6d74b14c86060792f4eef37aacbc788fecc7b2e4250488fe3",
+      "status": "pass"
+    },
+    {
+      "label": "calibration-1-ring-simple-ch8",
+      "config": "ring-simple-ch8",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:37:25.205857+00:00",
+      "returncode": 0,
+      "sha256": "a279a9a297671b67f3a2c4240123e6a37d4114bf8a77000c369e91edc05e9db9",
+      "status": "pass"
+    },
+    {
+      "label": "calibration-1-ring-ll",
+      "config": "ring-ll",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:37:28.936448+00:00",
+      "returncode": 0,
+      "sha256": "e86ca448a2516d5e418fedcc740a2fa6cddba2ddbaf34c7e2898ed179ebb1eb7",
+      "status": "pass"
+    },
+    {
+      "label": "calibration-2-default",
+      "config": "default",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:37:32.216258+00:00",
+      "returncode": 0,
+      "sha256": "6fd0e7300df2f92b06f9e904c453d4b5ae5524453e4a95e5303eb3f78f8c5685",
+      "status": "pass"
+    },
+    {
+      "label": "calibration-2-p2p",
+      "config": "p2p",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:37:35.446477+00:00",
+      "returncode": 0,
+      "sha256": "d6c523c2f8db41d6e8798c4ba7172f0ec551e7502f067bef646b411a7b8702f0",
+      "status": "pass"
+    },
+    {
+      "label": "calibration-2-ring-simple-ch2",
+      "config": "ring-simple-ch2",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:37:38.676403+00:00",
+      "returncode": 0,
+      "sha256": "71d77016cd90a090d166f83b62f6d4e2c79c1ec38b3e9413f4b45b2e45ad865d",
+      "status": "pass"
+    },
+    {
+      "label": "calibration-2-p2p-128",
+      "config": "p2p-128",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:37:42.007120+00:00",
+      "returncode": 0,
+      "sha256": "e6e11d6aec472369ccabaa1c167f75e0d12364095989aa04fea60ec3e80ea845",
+      "status": "pass"
+    },
+    {
+      "label": "calibration-2-ring-simple",
+      "config": "ring-simple",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:37:45.287008+00:00",
+      "returncode": 0,
+      "sha256": "880b946a0ccca504f8db9b6e29001463d7d532969f5561281773e356896a2ae2",
+      "status": "pass"
+    },
+    {
+      "label": "calibration-2-tree-ll128",
+      "config": "tree-ll128",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:37:48.516811+00:00",
+      "returncode": 0,
+      "sha256": "e7c9baf1a8d0753d511e97f6920a112583fcb6a9c0e15abf7cc75350376a00c4",
+      "status": "pass"
+    },
+    {
+      "label": "calibration-2-tree-ll",
+      "config": "tree-ll",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:37:51.897023+00:00",
+      "returncode": 0,
+      "sha256": "23c5082c04e7ff72a45ff93fa906da576634a5a25e0c68755f8a648034880d46",
+      "status": "pass"
+    },
+    {
+      "label": "calibration-2-ring-ll",
+      "config": "ring-ll",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:37:55.277947+00:00",
+      "returncode": 0,
+      "sha256": "7955dbe84d2aef5726b0d0ed6d2c0c65338f57e6b85e374888b621d974f1c167",
+      "status": "pass"
+    },
+    {
+      "label": "calibration-2-ring-ll128",
+      "config": "ring-ll128",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:37:58.507922+00:00",
+      "returncode": 0,
+      "sha256": "26c64f7379d2e1b805f83bfbedca9c29df601d128ee038ab5683cf6cb05fa8c5",
+      "status": "pass"
+    },
+    {
+      "label": "calibration-2-ring-ll-ch2",
+      "config": "ring-ll-ch2",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:38:01.838683+00:00",
+      "returncode": 0,
+      "sha256": "46b30888c5d76b321054ef3d876ba2d360e51dcc8169529991ec061354d895e0",
+      "status": "pass"
+    },
+    {
+      "label": "calibration-2-ring-simple-ch8",
+      "config": "ring-simple-ch8",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:38:05.218968+00:00",
+      "returncode": 0,
+      "sha256": "be015e268b5a84a21c7c97e2920d209c4b5674c9beedc6a431020a3895458e00",
+      "status": "pass"
+    },
+    {
+      "label": "calibration-2-tree-simple",
+      "config": "tree-simple",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:38:08.799121+00:00",
+      "returncode": 0,
+      "sha256": "459be6ee15aca1dc08d356441af0293f39b5340decb597a54221d68681148358",
+      "status": "pass"
+    },
+    {
+      "label": "calibration-3-p2p",
+      "config": "p2p",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:38:12.228925+00:00",
+      "returncode": 0,
+      "sha256": "9405111d7b29178a7b9d0ccec2baff7de1968683e5b49ff7e0ffa0134f382e9b",
+      "status": "pass"
+    },
+    {
+      "label": "calibration-3-p2p-128",
+      "config": "p2p-128",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:38:15.458604+00:00",
+      "returncode": 0,
+      "sha256": "60377c4793c721200004b123298fe42fc1cead75d125c007bf36c08c3c60295f",
+      "status": "pass"
+    },
+    {
+      "label": "calibration-3-tree-ll",
+      "config": "tree-ll",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:38:18.738754+00:00",
+      "returncode": 0,
+      "sha256": "2158ea8b3366455808137b5c7f4831f39aad1eca2b60745fd351f73586443f57",
+      "status": "pass"
+    },
+    {
+      "label": "calibration-3-ring-simple",
+      "config": "ring-simple",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:38:22.168771+00:00",
+      "returncode": 0,
+      "sha256": "50e14014cc97eb929ce9914f56dc799e050f00e9e2082b3e78ad15550691e40c",
+      "status": "pass"
+    },
+    {
+      "label": "calibration-3-ring-simple-ch2",
+      "config": "ring-simple-ch2",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:38:25.398438+00:00",
+      "returncode": 0,
+      "sha256": "55a826072d48161a6100f617412714bb56ac6300993ef3289af23fd477d9ec24",
+      "status": "pass"
+    },
+    {
+      "label": "calibration-3-ring-ll128",
+      "config": "ring-ll128",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:38:28.628115+00:00",
+      "returncode": 0,
+      "sha256": "e7949020e993bd24e4c1bd3aa5450972923b56e69e744c7b9cad95270c0bbb5c",
+      "status": "pass"
+    },
+    {
+      "label": "calibration-3-ring-ll-ch2",
+      "config": "ring-ll-ch2",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:38:32.008312+00:00",
+      "returncode": 0,
+      "sha256": "bc1a256fd98db0d2ad3d24405e2a1d861034f6cc702575ebb621ea2df97cc518",
+      "status": "pass"
+    },
+    {
+      "label": "calibration-3-tree-simple",
+      "config": "tree-simple",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:38:35.291932+00:00",
+      "returncode": 0,
+      "sha256": "67a836f7293a1084622c0db02e30689d5fceb2689f00a3deebb12003ea192b97",
+      "status": "pass"
+    },
+    {
+      "label": "calibration-3-tree-ll128",
+      "config": "tree-ll128",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:38:38.672532+00:00",
+      "returncode": 0,
+      "sha256": "f709c9d8f715be34cc87e1b8b0adb19a6a7cd315ba50aa9def581560697c4ab6",
+      "status": "pass"
+    },
+    {
+      "label": "calibration-3-ring-ll",
+      "config": "ring-ll",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:38:42.202860+00:00",
+      "returncode": 0,
+      "sha256": "030107d4ae9ded45e53b53491c74335a96076fd46447ed7c3c4c1ba51cd6839c",
+      "status": "pass"
+    },
+    {
+      "label": "calibration-3-default",
+      "config": "default",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:38:45.382389+00:00",
+      "returncode": 0,
+      "sha256": "aa3f5e1ba4e66c203b9b6792415b838cd3698ee9deece491f0e903d35322283a",
+      "status": "pass"
+    },
+    {
+      "label": "calibration-3-ring-simple-ch8",
+      "config": "ring-simple-ch8",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:38:48.612395+00:00",
+      "returncode": 0,
+      "sha256": "82f084fb217d76096a824e8969ad85908aae0aa4adb19c77faab65d0869fa8bb",
+      "status": "pass"
+    },
+    {
+      "label": "validation-1-original",
+      "config": "original",
+      "command": [
+        "/home/wxzheng/uccl-lite-original-cpp-latency-20261116/build/uccl_lite_pcieccl_original_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20",
+        "-m",
+        "all",
+        "-c",
+        "1"
+      ],
+      "started_utc": "2026-11-16T07:38:52.243555+00:00",
+      "returncode": 0,
+      "sha256": "865b15eda4df2c591b7f74e3d333b6a6c307c4469a702016eb828c675f93c7c6",
+      "status": "pass"
+    },
+    {
+      "label": "validation-1-default",
+      "config": "default",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:38:54.722048+00:00",
+      "returncode": 0,
+      "sha256": "88f043d490b6a5f42a84dbf6ed1e2afea7c559de06bb2756b79d8cb4151bc79e",
+      "status": "pass"
+    },
+    {
+      "label": "validation-1-ring-ll",
+      "config": "ring-ll",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:38:58.051962+00:00",
+      "returncode": 0,
+      "sha256": "06b9aa3c195cb5e99ff95637db91502a37743ed6de1c89384ce1fb1c19f7fe02",
+      "status": "pass"
+    },
+    {
+      "label": "validation-1-ring-ll-ch2",
+      "config": "ring-ll-ch2",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:39:01.381674+00:00",
+      "returncode": 0,
+      "sha256": "6f868c4bf29ee4cd67c6373576f8ace52f7ea26a7a4d2fd906a55a2c1157598b",
+      "status": "pass"
+    },
+    {
+      "label": "validation-1-ring-simple-ch8",
+      "config": "ring-simple-ch8",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:39:04.611553+00:00",
+      "returncode": 0,
+      "sha256": "219c5b07de576c18d99ef7e5e09367ba1990b3ff62d3b847c62345ac0cf2e0ee",
+      "status": "pass"
+    },
+    {
+      "label": "validation-2-ring-simple-ch8",
+      "config": "ring-simple-ch8",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:39:08.242118+00:00",
+      "returncode": 0,
+      "sha256": "f77e258caa9cc15ae32a988e9ff01817719fe14b79e456cd576a6c1ed2f2ac87",
+      "status": "pass"
+    },
+    {
+      "label": "validation-2-ring-ll-ch2",
+      "config": "ring-ll-ch2",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:39:11.872514+00:00",
+      "returncode": 0,
+      "sha256": "bfdccae6dfd021e704dab19c59628ce5866d5629db13984f809b2fcadf0f8cee",
+      "status": "pass"
+    },
+    {
+      "label": "validation-2-ring-ll",
+      "config": "ring-ll",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:39:15.352686+00:00",
+      "returncode": 0,
+      "sha256": "713ddb353b9b248a1a2516359b323bb9747eb67ddc9332d792a7236ab199ca62",
+      "status": "pass"
+    },
+    {
+      "label": "validation-2-default",
+      "config": "default",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:39:18.582280+00:00",
+      "returncode": 0,
+      "sha256": "6e3686df16308ef8940d09f0b4e432763ed371ce87ed2bdb46f09ccc407c3722",
+      "status": "pass"
+    },
+    {
+      "label": "validation-2-original",
+      "config": "original",
+      "command": [
+        "/home/wxzheng/uccl-lite-original-cpp-latency-20261116/build/uccl_lite_pcieccl_original_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20",
+        "-m",
+        "all",
+        "-c",
+        "1"
+      ],
+      "started_utc": "2026-11-16T07:39:21.912658+00:00",
+      "returncode": 0,
+      "sha256": "96bd6c9d0667817f8052dd4850cb1f6ff741c400de773080e56bd1066c46e14c",
+      "status": "pass"
+    },
+    {
+      "label": "validation-3-original",
+      "config": "original",
+      "command": [
+        "/home/wxzheng/uccl-lite-original-cpp-latency-20261116/build/uccl_lite_pcieccl_original_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20",
+        "-m",
+        "all",
+        "-c",
+        "1"
+      ],
+      "started_utc": "2026-11-16T07:39:24.391156+00:00",
+      "returncode": 0,
+      "sha256": "661bc33535ba9246c0396268a3749b303519e96c06b1b985cad230088f29fe8b",
+      "status": "pass"
+    },
+    {
+      "label": "validation-3-default",
+      "config": "default",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:39:26.819574+00:00",
+      "returncode": 0,
+      "sha256": "e62a1a366619d04c7f0eee000ff9f4843a5de00be22d919d52f41bc55f21c8b3",
+      "status": "pass"
+    },
+    {
+      "label": "validation-3-ring-ll",
+      "config": "ring-ll",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:39:30.150603+00:00",
+      "returncode": 0,
+      "sha256": "b35eac36f56b66ecd902ef245ab294e91bfce764474333d8aec3229f612865ae",
+      "status": "pass"
+    },
+    {
+      "label": "validation-3-ring-ll-ch2",
+      "config": "ring-ll-ch2",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:39:33.480712+00:00",
+      "returncode": 0,
+      "sha256": "d8547c9e6146af51759977963192a5259c4fe0b436e2ad6146c2a6e79fe7a91e",
+      "status": "pass"
+    },
+    {
+      "label": "validation-3-ring-simple-ch8",
+      "config": "ring-simple-ch8",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:39:36.760543+00:00",
+      "returncode": 0,
+      "sha256": "8f0d48655569ff72e6ca6cf0e1038c747932b5377d2c68fc159847d656d74606",
+      "status": "pass"
+    },
+    {
+      "label": "validation-4-ring-simple-ch8",
+      "config": "ring-simple-ch8",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:39:40.444486+00:00",
+      "returncode": 0,
+      "sha256": "dd7982bda94c30494fb880f11f26cd825fde119832a1052873ddbbdee56b1aaa",
+      "status": "pass"
+    },
+    {
+      "label": "validation-4-ring-ll-ch2",
+      "config": "ring-ll-ch2",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:39:44.025579+00:00",
+      "returncode": 0,
+      "sha256": "116f00e4bc78fa4bc2d952911880584bccc6df500e7393b1645c0aa9f27c2248",
+      "status": "pass"
+    },
+    {
+      "label": "validation-4-ring-ll",
+      "config": "ring-ll",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:39:47.305737+00:00",
+      "returncode": 0,
+      "sha256": "1255620c4d90175595aa35a9edc1d392eb55699e9f318c6bdd201a28bdc26750",
+      "status": "pass"
+    },
+    {
+      "label": "validation-4-default",
+      "config": "default",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:39:50.535665+00:00",
+      "returncode": 0,
+      "sha256": "805d2b7477ae7924a670b35440f7da89187f2ad8b0910ac73e0d061b67822fb1",
+      "status": "pass"
+    },
+    {
+      "label": "validation-4-original",
+      "config": "original",
+      "command": [
+        "/home/wxzheng/uccl-lite-original-cpp-latency-20261116/build/uccl_lite_pcieccl_original_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20",
+        "-m",
+        "all",
+        "-c",
+        "1"
+      ],
+      "started_utc": "2026-11-16T07:39:53.816294+00:00",
+      "returncode": 0,
+      "sha256": "7ed10e0378da5afddfa502997108f1234e6ffdded5e1b4906582b01740dc51b3",
+      "status": "pass"
+    },
+    {
+      "label": "validation-5-original",
+      "config": "original",
+      "command": [
+        "/home/wxzheng/uccl-lite-original-cpp-latency-20261116/build/uccl_lite_pcieccl_original_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20",
+        "-m",
+        "all",
+        "-c",
+        "1"
+      ],
+      "started_utc": "2026-11-16T07:39:56.399290+00:00",
+      "returncode": 0,
+      "sha256": "dde5500149c738d317aa5738cc86b08ec85c727c776fe215238777873d14a958",
+      "status": "pass"
+    },
+    {
+      "label": "validation-5-default",
+      "config": "default",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:39:58.829096+00:00",
+      "returncode": 0,
+      "sha256": "7764f526d62950da91155d7a03ef888abff7d034368d63166b92b927e3c5cfbb",
+      "status": "pass"
+    },
+    {
+      "label": "validation-5-ring-ll",
+      "config": "ring-ll",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:40:02.159364+00:00",
+      "returncode": 0,
+      "sha256": "c7eb4b04ac377e69b88de91da72636b98fc1bb5ae52f1b8347837c9bba5cbc8e",
+      "status": "pass"
+    },
+    {
+      "label": "validation-5-ring-ll-ch2",
+      "config": "ring-ll-ch2",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:40:05.489319+00:00",
+      "returncode": 0,
+      "sha256": "daf2a2c0d4534f25004c1f2c65e64713604ce04032d4a8708f440fd3506b8880",
+      "status": "pass"
+    },
+    {
+      "label": "validation-5-ring-simple-ch8",
+      "config": "ring-simple-ch8",
+      "command": [
+        "/home/wxzheng/uccl-lite-nccl-sm-cpp-20261116/build/uccl_lite_nccl_sm_cpp_latency",
+        "-b",
+        "1024",
+        "-e",
+        "1048576",
+        "-w",
+        "10",
+        "-n",
+        "20"
+      ],
+      "started_utc": "2026-11-16T07:40:08.768963+00:00",
+      "returncode": 0,
+      "sha256": "15b0a5c3129a2cdfad95eafc5de9c575660bbcd3f9a26f3e2303212d6ce9b317",
+      "status": "pass"
+    }
+  ],
+  "frozen_selection_sha256": "764b8cba3f243f9183ba1808308b44df0721acd860df07c550e2b61e7f270dab",
+  "validation_started_utc": "2026-11-16T07:38:52.182428+00:00",
+  "status": "complete",
+  "finished_utc": "2026-11-16T07:40:12.488920+00:00"
+}
