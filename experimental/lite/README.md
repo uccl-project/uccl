@@ -7,6 +7,24 @@
 
 </div>
 
+## Key insights
+
+- **Balance traffic.** Simultaneous transfers can congest shared PCIe and
+  cross-NUMA links. Spread traffic across paths and phases to reduce contention
+  and sustain throughput.
+- **Specialize by size.** Cut launches and handshakes for small messages, where
+  fixed overhead dominates. Pipeline large transfers to sustain bandwidth and
+  amortize coordination costs.
+- **Put CPUs to work.** When P2P is limited, our CPU router uses spare cores and
+  NUMA-local memory to combine contributions before forwarding and serve
+  multiple destinations from one staged copy, reducing redundant transfers.
+- **Overlap communication and compute.** Start GEMM on arriving inputs and
+  communication on ready outputs. Choose chunk sizes that expose overlap
+  without fragmenting GEMM into inefficient small operations.
+
+Backend choices need [local measurements](docs/cpu-router.md#selection-policy)
+for the exact dtype, size, placement, and hardware/software configuration.
+
 ## Testbeds
 
 <div align="center">
