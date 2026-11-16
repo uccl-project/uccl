@@ -1,0 +1,70 @@
+{
+  "status": "PASS",
+  "atol": 0.002,
+  "rtol": 0.02,
+  "comparisons": [
+    {
+      "reference": "final_2x4l4_abba_00_nccl_training_node0_16_32_parameters.pt",
+      "candidate": "final_2x4l4_abba_01_peer_training_node0_16_32_parameters.pt",
+      "elements": 708387840,
+      "max_abs_diff": 0.00048828125,
+      "relative_l2": 1.8977830817392575e-06
+    },
+    {
+      "reference": "final_2x4l4_abba_00_nccl_training_node0_16_32_parameters.pt",
+      "candidate": "final_2x4l4_abba_02_peer_training_node0_16_32_parameters.pt",
+      "elements": 708387840,
+      "max_abs_diff": 0.00048828125,
+      "relative_l2": 1.8977830817392575e-06
+    },
+    {
+      "reference": "final_2x4l4_abba_00_nccl_training_node0_16_32_parameters.pt",
+      "candidate": "final_2x4l4_abba_03_nccl_training_node0_16_32_parameters.pt",
+      "elements": 708387840,
+      "max_abs_diff": 0.0,
+      "relative_l2": 0.0
+    },
+    {
+      "reference": "final_2x4l4_abba_00_nccl_training_node0_16_64_parameters.pt",
+      "candidate": "final_2x4l4_abba_01_peer_training_node0_16_64_parameters.pt",
+      "elements": 708387840,
+      "max_abs_diff": 0.000518798828125,
+      "relative_l2": 1.567884500016712e-06
+    },
+    {
+      "reference": "final_2x4l4_abba_00_nccl_training_node0_16_64_parameters.pt",
+      "candidate": "final_2x4l4_abba_02_peer_training_node0_16_64_parameters.pt",
+      "elements": 708387840,
+      "max_abs_diff": 0.000518798828125,
+      "relative_l2": 1.567884500016712e-06
+    },
+    {
+      "reference": "final_2x4l4_abba_00_nccl_training_node0_16_64_parameters.pt",
+      "candidate": "final_2x4l4_abba_03_nccl_training_node0_16_64_parameters.pt",
+      "elements": 708387840,
+      "max_abs_diff": 0.0,
+      "relative_l2": 0.0
+    },
+    {
+      "reference": "final_2x4l4_abba_00_nccl_training_node0_32_128_parameters.pt",
+      "candidate": "final_2x4l4_abba_01_peer_training_node0_32_128_parameters.pt",
+      "elements": 708387840,
+      "max_abs_diff": 0.00048828125,
+      "relative_l2": 1.1939220311175191e-06
+    },
+    {
+      "reference": "final_2x4l4_abba_00_nccl_training_node0_32_128_parameters.pt",
+      "candidate": "final_2x4l4_abba_02_peer_training_node0_32_128_parameters.pt",
+      "elements": 708387840,
+      "max_abs_diff": 0.00048828125,
+      "relative_l2": 1.1939220311175191e-06
+    },
+    {
+      "reference": "final_2x4l4_abba_00_nccl_training_node0_32_128_parameters.pt",
+      "candidate": "final_2x4l4_abba_03_nccl_training_node0_32_128_parameters.pt",
+      "elements": 708387840,
+      "max_abs_diff": 0.0,
+      "relative_l2": 0.0
+    }
+  ]
+}

@@ -1,0 +1,105 @@
+{
+  "date_utc": "2026-11-16",
+  "repository_head": "833e4ac6c07e80deaae60d09dcc60225887a509e",
+  "checkpoint": "openai-community/gpt2-xl@15ea56dee5df4983c59b2538573817e1667135e2",
+  "checkpoint_sha256": "0f8b28eb05a8075f48b61b6f35332978c74fc7763fa9fb4051a1c30511736a6a",
+  "selected_backend": "fixed GPU-progress packet AG + existing peer RS; NCCL DP synchronization on two hosts",
+  "dtype": "BF16 parameters and computation; FP32 cross entropy",
+  "complete_block_bytes": 61481600,
+  "trainable_parameters": 1475558400,
+  "checkpoint_blocks": true,
+  "ag_rs_calls_per_training_step": [
+    96,
+    48
+  ],
+  "ag_calls_per_serving_batch": 384,
+  "node_layouts": {
+    "4l4": "DP1 x shard4",
+    "2x4l4": "DP2 x shard4; global batch doubled"
+  },
+  "formal_protocol": {
+    "order": [
+      "nccl",
+      "packet",
+      "packet",
+      "nccl"
+    ],
+    "warmups": 5,
+    "repeats_per_job": 10,
+    "aggregation": "median of two job medians; all cases and both job ranges retained"
+  },
+  "packet_configuration": {
+    "maxTensorBytes": 67108864,
+    "packetBytes": 4194304,
+    "slots": 2,
+    "transportBlocks": 248,
+    "transportThreads": 256,
+    "workersPerNode_cap": 8,
+    "actual_cpu_routing_workers": 0,
+    "gpuProgress": true,
+    "agPerSourceProgress": true,
+    "reduction": "GPU (AG copies only)"
+  },
+  "policy": "explicit application opt-in; automatic dispatch profiles and kernel sources unchanged; NCCL fallback constructs no packet executor or workers",
+  "cpu_affinity": "48 allowed CPUs per process; OMPI singleton binding disabled; Torch/OMP/MKL one thread",
+  "source_and_binary_sha256": {
+    "integration/l4_e2e/benchmark.py": "0de2df1d6c37393aa9404946b7e436e35ca4fd7df7d5920650aee4bdf0a81b38",
+    "integration/l4_e2e/collectives.cc": "b3c88ac5042e7ca0fcc802bc9af958f30839c5fb2148b063acb53667e569037e",
+    "integration/l4_e2e/Makefile": "0f7c006110464b62bf359760fc98c4b50f0058c5a4e3b0edeaf0270627bf0574",
+    "integration/l4_e2e/run.sh": "5685691c3120b89d49e6b2d608295fc7a99ec4f940ec514bc8f1624afbc6f6d4",
+    "src/collectives/peer_collectives.cu": "2b0c880d8c817ed4b077a1faf5607cad0177f879947ef0cfd2d4760e21a5423d",
+    "include/uccl_lite/cpu_router/packet_pipeline.hpp": "7a83c8a9cb09768ca6ac873e2541480dcec118faae7e359681f4550832a0113c",
+    "build/cpu_router/libuccl_lite_cpu_router.a": "5368d5262da11810905c55c59f7e757ea58a34704184b49d227483308823460a",
+    "build/l4_e2e/libuccl_lite_peer_e2e.so": "03f0f812c90e686e4d77d77d365c149ba17d7ae10d3039ce07f1dc59cb098aa6",
+    "integration/l4_e2e/summarize.py": "05402a328c6cf4af6f3e7526c8e6409701de0d4d402ca53ca62b7cdb0ceab251",
+    "integration/l4_e2e/plot.py": "6e3a7fe52c57b064749619ba4a64b186f7a077d4c74b9834dbc5489495ab430d",
+    "integration/l4_e2e/validate_parameters.py": "cf8094691e3abde701188d8b297522c809addc693e7235a170f90937e0679efa",
+    "integration/l4_e2e/check_rematerialization.py": "9134f559ab3ea5527ab5e94c21e76dbf7b9f53b009a09642c63f91a7ddcb083c",
+    "integration/l4_e2e/profile_communication.py": "fb280a2cb4c0759eb56b54e6d16ef6cdd449c043603f1f1f10ad99ee9a7f724c",
+    "src/cpu_router/packet_pipeline.cu": "95a925efa2f453fce2312df713b39e089386ac551517bd2bcff1e5c5d2b6c2d2",
+    "src/cpu_router/channel.cu": "779983075c56173b3f4104083aee55663c091263fd5b3a9e190e3ffa47806e24"
+  },
+  "controls": "controls/prepared_peer/ retains the complete earlier unbound BF16 GPT-2-large ABBA cohort; pilots/ retains rejected work, including CPU-bound and FP32 experiments",
+  "source_snapshot": "sources_packet/",
+  "completed_utc": "2026-11-16T05:31:24.972517+00:00",
+  "all_accepted_parameter_checks": "PASS",
+  "all_independent_candidate_jobs_beat_all_controls": true,
+  "adapter_graph_support": false,
+  "figure_sha256": {
+    "docs/assets/training-e2e-1x4l4.svg": "55277ae80ee5041462159051f58a08a4520b8eb16aa2ac9753a53ac36b3d78ae",
+    "docs/assets/serving-e2e-2x4l4.svg": "620fd6ec05525125b472ac54151bf5cb7a1c29c3884bbc367f6369b3243f2565",
+    "docs/assets/serving-e2e-1x4l4.svg": "a581f31164bae302751af4854cc88ecedf2b9497498345d8e424436fd84eaa06",
+    "docs/assets/training-e2e-2x4l4.svg": "57ce75cf222e96283827a49d59e1a4d68f136b9dd7b4827208fe509956cac41b"
+  },
+  "numerical_validation": {
+    "4l4": {
+      "max_loss_abs_diff": 0.007724761962890625,
+      "record_count": 8,
+      "collective_oracle": "PASS",
+      "generated_tokens_equal": true,
+      "dp_replicas_synchronized": true,
+      "reference_max_logit_abs_diff": 0.0,
+      "full_parameters": "PASS",
+      "parameter_reports": [
+        "parameters_4l4_node0.json"
+      ],
+      "parameter_max_abs_diff": 0.0009765625,
+      "parameter_max_relative_l2": 1.5843394453496512e-06
+    },
+    "2x4l4": {
+      "max_loss_abs_diff": 0.008802413940429688,
+      "record_count": 16,
+      "collective_oracle": "PASS",
+      "generated_tokens_equal": true,
+      "dp_replicas_synchronized": true,
+      "reference_max_logit_abs_diff": 0.0,
+      "full_parameters": "PASS",
+      "parameter_reports": [
+        "parameters_2x4l4_node0.json",
+        "parameters_2x4l4_node1.json"
+      ],
+      "parameter_max_abs_diff": 0.00048828125,
+      "parameter_max_relative_l2": 1.3259853434267362e-06
+    }
+  }
+}

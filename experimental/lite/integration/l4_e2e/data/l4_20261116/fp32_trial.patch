@@ -1,0 +1,343 @@
+--- a/integration/l4_e2e/benchmark.py
++++ b/integration/l4_e2e/benchmark.py
+@@ -25,6 +25,7 @@
+ NODES = 1
+ WORLD = 4
+ REPLICAS = False
++PARAM_DTYPE = torch.bfloat16
+ 
+ ROOT = Path(__file__).resolve().parents[2]
+ 
+@@ -37,7 +38,8 @@
+ class Collectives:
+     def __init__(self, backend, replicas=False):
+         self.backend = backend
+-        self.lib = ctypes.CDLL(str(ROOT / "build/l4_e2e/libuccl_lite_peer_e2e.so"))
++        library = "libuccl_lite_fp32_e2e.so" if PARAM_DTYPE == torch.float32 else "libuccl_lite_peer_e2e.so"
++        self.lib = ctypes.CDLL(str(ROOT / "build/l4_e2e" / library))
+         pointer_array = ctypes.POINTER(ctypes.c_void_p)
+         self.lib.uccl_lite_e2e_create.argtypes = [ctypes.c_int]
+         self.lib.uccl_lite_e2e_create.restype = ctypes.c_void_p
+@@ -60,6 +62,7 @@
+         WORLD = 4 if replicas else NODES * 4
+         self.lib.uccl_lite_e2e_max.argtypes = [ctypes.c_double]
+         self.lib.uccl_lite_e2e_max.restype = ctypes.c_double
++        self.element_bytes = torch.empty((), dtype=PARAM_DTYPE).element_size()
+         self.histogram = {}
+ 
+     def pointers(self, values):
+@@ -73,24 +76,24 @@
+             raise RuntimeError(self.lib.uccl_lite_e2e_error().decode())
+ 
+     def prepare(self, count):
+-        inputs = [torch.empty(count * WORLD, dtype=torch.bfloat16, device=r) for r in range(4)]
+-        outputs = [torch.empty(count, dtype=torch.bfloat16, device=r) for r in range(4)]
++        inputs = [torch.empty(count * WORLD, dtype=PARAM_DTYPE, device=r) for r in range(4)]
++        outputs = [torch.empty(count, dtype=PARAM_DTYPE, device=r) for r in range(4)]
+         synchronize()
+         self.check(self.lib.uccl_lite_e2e_prepare(
+             self.context, count, self.pointers(inputs), self.pointers(outputs), self.streams()))
+ 
+     def call(self, operation, inputs):
+-        if len(inputs) != 4 or any(x.dtype != torch.bfloat16 or not x.is_contiguous()
++        if len(inputs) != 4 or any(x.dtype != PARAM_DTYPE or not x.is_contiguous()
+                                     or x.device.index != r for r, x in enumerate(inputs)):
+-            raise ValueError("requires four contiguous BF16 inputs on GPUs 0..3")
++            raise ValueError("requires four contiguous inputs of the configured parameter dtype on GPUs 0..3")
+         if inputs[0].numel() != inputs[1].numel():
+             raise ValueError("rank extents differ")
+         count = inputs[0].numel() if operation == 1 else inputs[0].numel() // WORLD
+         outputs = [torch.empty(count * (WORLD if operation == 1 else 1),
+-                               device=r, dtype=torch.bfloat16) for r in range(4)]
++                               device=r, dtype=PARAM_DTYPE) for r in range(4)]
+         self.check(self.lib.uccl_lite_e2e_enqueue(
+             self.context, operation, count, self.pointers(inputs), self.pointers(outputs), self.streams()))
+-        key = f"{'AG' if operation == 1 else 'RS'}:{count * WORLD * 2}"
++        key = f"{'AG' if operation == 1 else 'RS'}:{count * WORLD * self.element_bytes}"
+         self.histogram[key] = self.histogram.get(key, 0) + 1
+         return outputs
+ 
+@@ -137,7 +140,7 @@
+             # GPT-2's safetensors uses transformer keys without 'transformer.'.
+             if not keys:
+                 raise ValueError(f"missing {prefix}: {list(state)[:5]}")
+-            values = [state[k].to(torch.bfloat16) for k in keys]
++            values = [state[k].to(PARAM_DTYPE) for k in keys]
+             self.names.append([k[len(prefix):] for k in keys])
+             self.shapes.append([v.shape for v in values])
+             flat = torch.cat([v.flatten() for v in values])
+@@ -155,11 +158,12 @@
+             torch._inductor.config.emulate_precision_casts = True
+             self.block = torch.compile(self.block, fullgraph=True)
+         self.parameters = [p for block in self.blocks for p in block]
+-        self.complete_block_bytes = [sum(p.numel() * 2 for p in block) * (WORLD // 4) for block in self.blocks]
++        self.complete_block_bytes = [sum(p.numel() * p.element_size() for p in block) * (WORLD // 4) for block in self.blocks]
+         for count in sorted({p.numel() for p in self.parameters}):
+             collectives.prepare(count)
+ 
+     def unpack(self, layer, flat):
++        flat = flat.to(torch.bfloat16)
+         sizes = [shape.numel() for shape in self.shapes[layer]]
+         return {name: value.view(shape) for name, value, shape in
+                 zip(self.names[layer], flat.split(sizes), self.shapes[layer])}
+@@ -234,15 +238,15 @@
+ def correctness(collectives, count):
+     """Full-tensor AG and destination-dependent signed RS oracle."""
+     collectives.prepare(count)
+-    shards = [(torch.arange(count, device=r) % 29 - 14 + (0 if REPLICAS else NODE)*4+r).bfloat16() for r in range(4)]
++    shards = [(torch.arange(count, device=r) % 29 - 14 + (0 if REPLICAS else NODE)*4+r).to(PARAM_DTYPE) for r in range(4)]
+     full = collectives.call(1, shards)
+     synchronize()
+-    expected = torch.cat([(torch.arange(count) % 29 - 14 + r).bfloat16() for r in range(WORLD)])
++    expected = torch.cat([(torch.arange(count) % 29 - 14 + r).to(PARAM_DTYPE) for r in range(WORLD)])
+     assert all(torch.equal(x.cpu(), expected) for x in full), "AG oracle failed"
+-    inputs = [(torch.arange(count * WORLD, device=r) % 31 - 15 + (NODE*4+r)*2).bfloat16() for r in range(4)]
++    inputs = [(torch.arange(count * WORLD, device=r) % 31 - 15 + (NODE*4+r)*2).to(PARAM_DTYPE) for r in range(4)]
+     reduced = collectives.call(2, inputs)
+     synchronize()
+-    expected = sum((torch.arange(count*WORLD)%31-15+r*2).float() for r in range(NODES*4)).bfloat16()
++    expected = sum((torch.arange(count*WORLD)%31-15+r*2).float() for r in range(NODES*4)).to(PARAM_DTYPE)
+     assert all(torch.equal(x.cpu(), part) for x,part in zip(reduced,expected.chunk(WORLD)[(0 if REPLICAS else NODE)*4:((0 if REPLICAS else NODE)+1)*4])), "RS oracle failed"
+ 
+ 
+@@ -385,6 +389,7 @@
+ def main():
+     parser = argparse.ArgumentParser(description=__doc__)
+     parser.add_argument("--checkpoint", type=Path, required=True)
++    parser.add_argument("--parameter-dtype", choices=["bfloat16", "float32"], default="bfloat16")
+     parser.add_argument("--replica-nodes", action="store_true")
+     parser.add_argument("--backend", choices=["nccl", "peer"], required=True)
+     parser.add_argument("--kind", choices=["serving", "training", "check"], required=True)
+@@ -398,6 +403,8 @@
+     parser.add_argument("--parameter-dir", type=Path, default=Path("/dev/shm/uccl-lite-e2e-validation"))
+     parser.add_argument("--seed", type=int, default=12345)
+     args = parser.parse_args()
++    global PARAM_DTYPE
++    PARAM_DTYPE = torch.float32 if args.parameter_dtype == "float32" else torch.bfloat16
+     args.cases = [tuple(map(int, x.split(":"))) for x in args.cases]
+     args.train_cases = [tuple(map(int, x.split(":"))) for x in args.train_cases]
+     if args.repeats < 1 or args.warmup < 1 or any(b % 4 or min(b, s, o) < 1 or s + o > 1024
+@@ -415,7 +422,7 @@
+     model = Model(args.checkpoint, collective, args.compile_blocks)
+     synchronize()
+     # Full checks are outside all timing intervals.
+-    for count in sorted({p.numel() for p in model.parameters} | {(m << 20) // (WORLD * 2) for m in (4, 8, 16, 32, 64)}):
++    for count in sorted({p.numel() for p in model.parameters} | {(m << 20) // (WORLD * torch.empty((), dtype=PARAM_DTYPE).element_size()) for m in (4, 8, 16, 32, 64)}):
+         correctness(collective, count)
+     reference = reference_check(args, model)
+     collective.histogram.clear()
+--- a/integration/l4_e2e/collectives.cc
++++ b/integration/l4_e2e/collectives.cc
+@@ -1,6 +1,8 @@
+ // Explicit benchmark adapter: four local GPUs, optionally two MPI processes.
+ #include "uccl_lite/collective_dispatch.hpp"
++#include "uccl_lite/collectives/device_primitives.cuh"
+ #include "uccl_lite/collectives/peer_collectives.hpp"
++#include <algorithm>
+ #include <array>
+ #include <cstdio>
+ #include <memory>
+@@ -10,6 +12,23 @@
+ #include <mpi.h>
+ #include <nccl.h>
+ namespace {
++#ifdef UCCL_LITE_E2E_FP32
++constexpr ncclDataType_t kDataType = ncclFloat;
++__global__ void sumFloatShards(float const* scratch, float const* own,
++                               float* output, size_t count, int destination) {
++  for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x; i < count;
++       i += size_t(gridDim.x) * blockDim.x) {
++    uccl_lite::collective::PeerInputs<float, 4> inputs{};
++    for (int r = 0; r < 4; ++r)
++      inputs.values[r] = r == destination ? own + size_t(destination) * count
++                                          : scratch + size_t(r) * count;
++    output[i] = uccl_lite::collective::orderedSum(inputs, i, 4);
++  }
++}
++#else
++constexpr ncclDataType_t kDataType = ncclBfloat16;
++#endif
++
+ void ck(cudaError_t x) {
+   if (x != cudaSuccess) throw std::runtime_error(cudaGetErrorString(x));
+ }
+@@ -25,6 +44,52 @@
+   std::array<ncclComm_t, 4> comm{}, cross{};
+   std::array<void*, 4> temporary{}, local{};
+   size_t capacity = 0;
++#ifdef UCCL_LITE_E2E_FP32
++  std::array<cudaStream_t, 4> fpStream{};
++  std::array<cudaEvent_t, 4> fpReady{}, fpTransferred{}, fpDone{};
++  std::array<float*, 4> fpScratch{};
++  void prepareFloat(size_t n) {
++    if (n <= capacity) return;
++    for (int r = 0; r < 4; ++r) {
++      ck(cudaSetDevice(r));
++      ck(cudaFree(fpScratch[r]));
++      ck(cudaMalloc(&fpScratch[r], n * 4 * sizeof(float)));
++    }
++    capacity = n;
++  }
++  void reduceFloat(size_t n, void** in, void** out, void** streams) {
++    for (int r = 0; r < 4; ++r) {
++      ck(cudaSetDevice(r));
++      ck(cudaEventRecord(fpReady[r], (cudaStream_t)streams[r]));
++    }
++    for (int r = 0; r < 4; ++r) {
++      ck(cudaSetDevice(r));
++      for (int s = 0; s < 4; ++s)
++        ck(cudaStreamWaitEvent(fpStream[r], fpReady[s], 0));
++      for (int phase = 1; phase < 4; ++phase) {
++        int d = (r + phase) % 4;
++        ck(cudaMemcpyPeerAsync(fpScratch[d] + size_t(r) * n, d,
++                               (float const*)in[r] + size_t(d) * n, r,
++                               n * sizeof(float), fpStream[r]));
++      }
++      ck(cudaEventRecord(fpTransferred[r], fpStream[r]));
++    }
++    for (int r = 0; r < 4; ++r) {
++      ck(cudaSetDevice(r));
++      for (int s = 0; s < 4; ++s)
++        ck(cudaStreamWaitEvent(fpStream[r], fpTransferred[s], 0));
++      int blocks = int(std::min<size_t>(256, (n + 255) / 256));
++      sumFloatShards<<<blocks, 256, 0, fpStream[r]>>>(
++          fpScratch[r], (float const*)in[r], (float*)out[r], n, r);
++      ck(cudaGetLastError());
++      ck(cudaEventRecord(fpDone[r], fpStream[r]));
++    }
++    for (int r = 0; r < 4; ++r) {
++      ck(cudaSetDevice(r));
++      ck(cudaStreamWaitEvent((cudaStream_t)streams[r], fpDone[r], 0));
++    }
++  }
++#endif
+   std::set<size_t> prepared;
+   Context(int flags) : usePeer(flags & 1), replicas(flags & 2) {
+     bool p = usePeer;
+@@ -40,6 +105,11 @@
+     MPI_Comm_size(MPI_COMM_WORLD, &nodes);
+     if (nodes != 1 && nodes != 2)
+       throw std::runtime_error("one or two four-GPU nodes required");
++#ifdef UCCL_LITE_E2E_FP32
++    if (nodes == 2 && !replicas)
++      throw std::runtime_error(
++          "FP32 adapter supports local sharding and DP replicas only");
++#endif
+     if (p) {
+       uccl_lite::Topology t;
+       t.devices = {0, 1, 2, 3};
+@@ -52,6 +122,15 @@
+       if (!uccl_lite::PeerCollectives::supported(t))
+         throw std::runtime_error("full four-GPU P2P required");
+       peer = std::make_unique<uccl_lite::PeerCollectives>(t);
++#ifdef UCCL_LITE_E2E_FP32
++      for (int r = 0; r < 4; ++r) {
++        ck(cudaSetDevice(r));
++        ck(cudaStreamCreateWithFlags(&fpStream[r], cudaStreamNonBlocking));
++        ck(cudaEventCreateWithFlags(&fpReady[r], cudaEventDisableTiming));
++        ck(cudaEventCreateWithFlags(&fpTransferred[r], cudaEventDisableTiming));
++        ck(cudaEventCreateWithFlags(&fpDone[r], cudaEventDisableTiming));
++      }
++#endif
+     }
+     if (!p || nodes == 2) {
+       std::array<ncclUniqueId, 4> ids;
+@@ -86,7 +165,7 @@
+     nk(ncclGroupStart());
+     for (int r = 0; r < 4; ++r) {
+       ck(cudaSetDevice(r));
+-      nk(ncclAllReduce(out[r], out[r], n, ncclBfloat16, ncclSum,
++      nk(ncclAllReduce(out[r], out[r], n, kDataType, ncclSum,
+                        usePeer ? comm[r] : cross[r], (cudaStream_t)streams[r]));
+     }
+     nk(ncclGroupEnd());
+@@ -121,6 +200,13 @@
+       if (cross[r]) ncclCommDestroy(cross[r]);
+       cudaFree(temporary[r]);
+       cudaFree(local[r]);
++#ifdef UCCL_LITE_E2E_FP32
++      if (fpStream[r]) cudaStreamDestroy(fpStream[r]);
++      if (fpReady[r]) cudaEventDestroy(fpReady[r]);
++      if (fpTransferred[r]) cudaEventDestroy(fpTransferred[r]);
++      if (fpDone[r]) cudaEventDestroy(fpDone[r]);
++      cudaFree(fpScratch[r]);
++#endif
+     }
+   }
+ };
+@@ -169,6 +255,10 @@
+     }
+     auto call = c.call(2, n, in, out, streams);
+     if (c.usePeer) {
++#ifdef UCCL_LITE_E2E_FP32
++      c.prepareFloat(n);
++      c.peer->prepare(c.call(1, n * 2, in, out, streams));
++#else
+       if (c.nodes == 2 && !c.replicas) {
+         if (n > c.capacity) {
+           for (int r = 0; r < 4; ++r) {
+@@ -183,6 +273,7 @@
+         call = c.call(2, n * 2, c.temporary.data(), c.local.data(), streams);
+       }
+       c.peer->prepare(call);
++#endif
+     }
+     c.prepared.insert(n);
+   });
+@@ -199,16 +290,24 @@
+       for (int r = 0; r < 4; ++r) {
+         ck(cudaSetDevice(r));
+         if (op == 1)
+-          nk(ncclAllGather(in[r], out[r], n, ncclBfloat16, c.comm[r],
++          nk(ncclAllGather(in[r], out[r], n, kDataType, c.comm[r],
+                            call.ports[r].stream));
+         else
+-          nk(ncclReduceScatter(in[r], out[r], n, ncclBfloat16, ncclSum,
+-                               c.comm[r], call.ports[r].stream));
++          nk(ncclReduceScatter(in[r], out[r], n, kDataType, ncclSum, c.comm[r],
++                               call.ports[r].stream));
+       }
+       nk(ncclGroupEnd());
+       if (op == 2) c.replicaReduce(n, out, streams);
+       return;
+     }
++#ifdef UCCL_LITE_E2E_FP32
++    if (op == 1)
++      c.peer->enqueue(c.call(1, n * 2, in, out, streams));
++    else
++      c.reduceFloat(n, in, out, streams);
++    if (op == 2) c.replicaReduce(n, out, streams);
++    return;
++#endif
+     if (c.nodes == 1 || c.replicas) {
+       c.peer->enqueue(call);
+       if (op == 2) c.replicaReduce(n, out, streams);
+@@ -219,7 +318,7 @@
+       nk(ncclGroupStart());
+       for (int r = 0; r < 4; ++r) {
+         ck(cudaSetDevice(r));
+-        nk(ncclAllGather(in[r], c.local[r], n, ncclBfloat16, c.comm[r],
++        nk(ncclAllGather(in[r], c.local[r], n, kDataType, c.comm[r],
+                          call.ports[r].stream));
+       }
+       nk(ncclGroupEnd());
+@@ -248,7 +347,7 @@
+       nk(ncclGroupStart());
+       for (int r = 0; r < 4; ++r) {
+         ck(cudaSetDevice(r));
+-        nk(ncclReduceScatter(c.local[r], out[r], n, ncclBfloat16, ncclSum,
++        nk(ncclReduceScatter(c.local[r], out[r], n, kDataType, ncclSum,
+                              c.comm[r], call.ports[r].stream));
+       }
+       nk(ncclGroupEnd());
+--- a/integration/l4_e2e/Makefile
++++ b/integration/l4_e2e/Makefile
+@@ -21,3 +21,8 @@
+ $(BUILD)/libuccl_lite_peer_e2e.so: $(BUILD)/bridge.o $(BUILD)/peer.o $(LITE)/build/cpu_router/libuccl_lite_cpu_router.a
+ 	$(NVCC) -shared -L$(MPI_HOME)/lib -lmpi -Xlinker=-rpath,$(MPI_HOME)/lib -arch=$(CUDA_ARCH) $^ -L$(NCCL_HOME)/lib -l:libnccl.so.2 -L$(CUDA_LIB) -lcudart -Xcompiler=-pthread -ldl -Xlinker=-rpath,$(NCCL_HOME)/lib -Xlinker=-rpath,$(CUDA_LIB) -o $@
+ -include $(BUILD)/*.d
++
++$(BUILD)/fp32_bridge.o: collectives.cc | $(BUILD)
++	$(NVCC) $(FLAGS) -DUCCL_LITE_E2E_FP32 -x cu -c $< -o $@
++$(BUILD)/libuccl_lite_fp32_e2e.so: $(BUILD)/fp32_bridge.o $(BUILD)/peer.o $(LITE)/build/cpu_router/libuccl_lite_cpu_router.a
++	$(NVCC) -shared -L$(MPI_HOME)/lib -lmpi -Xlinker=-rpath,$(MPI_HOME)/lib -arch=$(CUDA_ARCH) $^ -L$(NCCL_HOME)/lib -l:libnccl.so.2 -L$(CUDA_LIB) -lcudart -Xcompiler=-pthread -ldl -Xlinker=-rpath,$(NCCL_HOME)/lib -Xlinker=-rpath,$(CUDA_LIB) -o $@

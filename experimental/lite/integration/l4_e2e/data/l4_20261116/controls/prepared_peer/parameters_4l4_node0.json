@@ -1,0 +1,70 @@
+{
+  "status": "PASS",
+  "atol": 0.002,
+  "rtol": 0.02,
+  "comparisons": [
+    {
+      "reference": "final_4l4_unbound_00_nccl_training_node0_16_128_parameters.pt",
+      "candidate": "final_4l4_unbound_01_peer_training_node0_16_128_parameters.pt",
+      "elements": 708387840,
+      "max_abs_diff": 0.000457763671875,
+      "relative_l2": 1.2924246932671836e-06
+    },
+    {
+      "reference": "final_4l4_unbound_00_nccl_training_node0_16_128_parameters.pt",
+      "candidate": "final_4l4_unbound_02_peer_training_node0_16_128_parameters.pt",
+      "elements": 708387840,
+      "max_abs_diff": 0.000457763671875,
+      "relative_l2": 1.2924246932671836e-06
+    },
+    {
+      "reference": "final_4l4_unbound_00_nccl_training_node0_16_128_parameters.pt",
+      "candidate": "final_4l4_unbound_03_nccl_training_node0_16_128_parameters.pt",
+      "elements": 708387840,
+      "max_abs_diff": 0.0,
+      "relative_l2": 0.0
+    },
+    {
+      "reference": "final_4l4_unbound_00_nccl_training_node0_8_32_parameters.pt",
+      "candidate": "final_4l4_unbound_01_peer_training_node0_8_32_parameters.pt",
+      "elements": 708387840,
+      "max_abs_diff": 0.00048828125,
+      "relative_l2": 2.2190953602628125e-06
+    },
+    {
+      "reference": "final_4l4_unbound_00_nccl_training_node0_8_32_parameters.pt",
+      "candidate": "final_4l4_unbound_02_peer_training_node0_8_32_parameters.pt",
+      "elements": 708387840,
+      "max_abs_diff": 0.00048828125,
+      "relative_l2": 2.2190953602628125e-06
+    },
+    {
+      "reference": "final_4l4_unbound_00_nccl_training_node0_8_32_parameters.pt",
+      "candidate": "final_4l4_unbound_03_nccl_training_node0_8_32_parameters.pt",
+      "elements": 708387840,
+      "max_abs_diff": 0.0,
+      "relative_l2": 0.0
+    },
+    {
+      "reference": "final_4l4_unbound_00_nccl_training_node0_8_64_parameters.pt",
+      "candidate": "final_4l4_unbound_01_peer_training_node0_8_64_parameters.pt",
+      "elements": 708387840,
+      "max_abs_diff": 0.000518798828125,
+      "relative_l2": 1.8322838134549137e-06
+    },
+    {
+      "reference": "final_4l4_unbound_00_nccl_training_node0_8_64_parameters.pt",
+      "candidate": "final_4l4_unbound_02_peer_training_node0_8_64_parameters.pt",
+      "elements": 708387840,
+      "max_abs_diff": 0.000518798828125,
+      "relative_l2": 1.8322838134549137e-06
+    },
+    {
+      "reference": "final_4l4_unbound_00_nccl_training_node0_8_64_parameters.pt",
+      "candidate": "final_4l4_unbound_03_nccl_training_node0_8_64_parameters.pt",
+      "elements": 708387840,
+      "max_abs_diff": 0.0,
+      "relative_l2": 0.0
+    }
+  ]
+}

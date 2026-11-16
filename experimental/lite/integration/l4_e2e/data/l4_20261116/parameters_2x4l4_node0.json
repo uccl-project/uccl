@@ -1,0 +1,71 @@
+{
+  "status": "PASS",
+  "comparison_device": "cuda",
+  "atol": 0.002,
+  "rtol": 0.02,
+  "comparisons": [
+    {
+      "reference": "packet_final_2x4l4_00_nccl_training_node0_16_32_parameters.pt",
+      "candidate": "packet_final_2x4l4_01_packet_training_node0_16_32_parameters.pt",
+      "elements": 1475558400,
+      "max_abs_diff": 0.000244140625,
+      "relative_l2": 1.3259853434267362e-06
+    },
+    {
+      "reference": "packet_final_2x4l4_00_nccl_training_node0_16_32_parameters.pt",
+      "candidate": "packet_final_2x4l4_02_packet_training_node0_16_32_parameters.pt",
+      "elements": 1475558400,
+      "max_abs_diff": 0.000244140625,
+      "relative_l2": 1.3259853434267362e-06
+    },
+    {
+      "reference": "packet_final_2x4l4_00_nccl_training_node0_16_32_parameters.pt",
+      "candidate": "packet_final_2x4l4_03_nccl_training_node0_16_32_parameters.pt",
+      "elements": 1475558400,
+      "max_abs_diff": 0.0,
+      "relative_l2": 0.0
+    },
+    {
+      "reference": "packet_final_2x4l4_00_nccl_training_node0_16_64_parameters.pt",
+      "candidate": "packet_final_2x4l4_01_packet_training_node0_16_64_parameters.pt",
+      "elements": 1475558400,
+      "max_abs_diff": 0.000244140625,
+      "relative_l2": 1.1326248009637017e-06
+    },
+    {
+      "reference": "packet_final_2x4l4_00_nccl_training_node0_16_64_parameters.pt",
+      "candidate": "packet_final_2x4l4_02_packet_training_node0_16_64_parameters.pt",
+      "elements": 1475558400,
+      "max_abs_diff": 0.000244140625,
+      "relative_l2": 1.1326248009637017e-06
+    },
+    {
+      "reference": "packet_final_2x4l4_00_nccl_training_node0_16_64_parameters.pt",
+      "candidate": "packet_final_2x4l4_03_nccl_training_node0_16_64_parameters.pt",
+      "elements": 1475558400,
+      "max_abs_diff": 0.0,
+      "relative_l2": 0.0
+    },
+    {
+      "reference": "packet_final_2x4l4_00_nccl_training_node0_32_128_parameters.pt",
+      "candidate": "packet_final_2x4l4_01_packet_training_node0_32_128_parameters.pt",
+      "elements": 1475558400,
+      "max_abs_diff": 0.00048828125,
+      "relative_l2": 8.530419839958396e-07
+    },
+    {
+      "reference": "packet_final_2x4l4_00_nccl_training_node0_32_128_parameters.pt",
+      "candidate": "packet_final_2x4l4_02_packet_training_node0_32_128_parameters.pt",
+      "elements": 1475558400,
+      "max_abs_diff": 0.00048828125,
+      "relative_l2": 8.530419839958396e-07
+    },
+    {
+      "reference": "packet_final_2x4l4_00_nccl_training_node0_32_128_parameters.pt",
+      "candidate": "packet_final_2x4l4_03_nccl_training_node0_32_128_parameters.pt",
+      "elements": 1475558400,
+      "max_abs_diff": 0.0,
+      "relative_l2": 0.0
+    }
+  ]
+}

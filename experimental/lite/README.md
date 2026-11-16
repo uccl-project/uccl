@@ -54,6 +54,56 @@ figures.
   </tr>
 </table>
 
+#### Testbed 3: four L4 GPUs
+
+Fresh **GPT-2-XL BF16** measurements use an explicit parameter-sharded adapter
+and one fixed **GPU-progress packet AllGather + peer ReduceScatter** backend.
+Each block has **58.63 MiB** complete AG output / RS input. Training uses the
+same block checkpointing on both backends (96 AG + 48 RS calls/full SGD step).
+Serving measures complete HTTP batches with eight generated tokens.
+
+Whole HTTP-batch latency is **18.1–18.9% lower**; full training-step latency is
+**5.9–6.5% lower** than fresh default NCCL. Both independent UCCL jobs
+beat both NCCL controls in every shown case.
+
+<table>
+  <tr><th>Serving</th><th>Training</th></tr>
+  <tr>
+    <td width="50%" valign="top"><img src="docs/assets/serving-e2e-1x4l4.svg" alt="Four L4 GPT-2-XL BF16 parameter-sharded whole HTTP batch latency, packet AG plus peer RS versus default NCCL" width="100%"></td>
+    <td width="50%" valign="top"><img src="docs/assets/training-e2e-1x4l4.svg" alt="Four L4 GPT-2-XL BF16 checkpointed full SGD step latency, packet AG plus peer RS versus default NCCL" width="100%"></td>
+  </tr>
+</table>
+
+#### Testbed 3 × 2 nodes: two four-rank sharded replicas
+
+This configuration is **DP2 × shard4**. Serving completes both replicas' HTTP
+batches; training includes NCCL synchronization of owned gradient shards
+between nodes. Both backends use the same groups and network path. Global
+batch doubles relative to one host, keeping per-GPU work constant (**weak
+scaling**, not a strong-scaling speedup). The changed component is local AG/RS.
+
+Whole HTTP-batch latency is **18.8–19.6% lower**; full training-step latency is
+**8.6–9.5% lower** than fresh default NCCL. Both independent UCCL jobs
+beat both NCCL controls in every shown case.
+
+<table>
+  <tr><th>Serving</th><th>Training</th></tr>
+  <tr>
+    <td width="50%" valign="top"><img src="docs/assets/serving-e2e-2x4l4.svg" alt="Two four-L4 replicas GPT-2-XL BF16 whole distributed HTTP batch latency versus NCCL, DP2 and shard4" width="100%"></td>
+    <td width="50%" valign="top"><img src="docs/assets/training-e2e-2x4l4.svg" alt="Two four-L4 replicas GPT-2-XL BF16 checkpointed full synchronized SGD step latency versus NCCL, DP2 and shard4" width="100%"></td>
+  </tr>
+</table>
+
+The [four-L4 / two-node experiment](integration/l4_e2e/README.md) records all
+samples, full-parameter numerical checks, CPU binding, packet settings and
+hardware. These are experimental adapters, not stock FSDP/SGLang or evidence
+of the model's best deployment (GPT-2-XL fits one L4). No kernel or automatic
+routing policy changes. Each point uses two independent jobs/backend, five
+warmups and ten measurements/job; whiskers span job medians. All cases are
+shown, with no per-size best variant. The earlier peer-only cohort, CPU-binding
+confound, slower packet RS and separate GPT-2-large global-eight-shard pilot
+are retained as controls, not mixed into these figures.
+
 #### Testbed 4
 
 Both workloads below use an explicit parameter-sharded application adapter,

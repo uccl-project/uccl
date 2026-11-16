@@ -1,0 +1,214 @@
+{
+  "arguments": {
+    "checkpoint": "/home/zhongjie/.cache/uccl-lite-gpt2-large",
+    "parameter_dtype": "float32",
+    "replica_nodes": true,
+    "backend": "peer",
+    "kind": "serving",
+    "out": "build/l4_e2e/fp32_two_screen/01_peer_serving_node1.json",
+    "cases": [
+      [
+        16,
+        32,
+        4
+      ]
+    ],
+    "train_cases": [
+      [
+        16,
+        32
+      ]
+    ],
+    "warmup": 1,
+    "repeats": 3,
+    "compile_blocks": false,
+    "save_parameters": false,
+    "parameter_dir": "/dev/shm/uccl-lite-e2e-validation",
+    "seed": 12345
+  },
+  "node": 1,
+  "nodes": 2,
+  "world": 8,
+  "shard_world": 4,
+  "replica_nodes": true,
+  "torch": "2.7.1+cu128",
+  "runtime_nccl_version": 22807,
+  "gpu": [
+    "NVIDIA L4",
+    "NVIDIA L4",
+    "NVIDIA L4",
+    "NVIDIA L4"
+  ],
+  "checkpoint_config": {
+    "activation_function": "gelu_new",
+    "architectures": [
+      "GPT2LMHeadModel"
+    ],
+    "attn_pdrop": 0.1,
+    "bos_token_id": 50256,
+    "embd_pdrop": 0.1,
+    "eos_token_id": 50256,
+    "initializer_range": 0.02,
+    "layer_norm_epsilon": 1e-05,
+    "model_type": "gpt2",
+    "n_ctx": 1024,
+    "n_embd": 1280,
+    "n_head": 20,
+    "n_layer": 36,
+    "n_positions": 1024,
+    "resid_pdrop": 0.1,
+    "summary_activation": null,
+    "summary_first_dropout": 0.1,
+    "summary_proj_to_labels": true,
+    "summary_type": "cls_index",
+    "summary_use_proj": true,
+    "task_specific_params": {
+      "text-generation": {
+        "do_sample": true,
+        "max_length": 50
+      }
+    },
+    "vocab_size": 50257
+  },
+  "trainable_parameters": 708387840,
+  "complete_block_bytes": [
+    78709760,
+    78709760,
+    78709760,
+    78709760,
+    78709760,
+    78709760,
+    78709760,
+    78709760,
+    78709760,
+    78709760,
+    78709760,
+    78709760,
+    78709760,
+    78709760,
+    78709760,
+    78709760,
+    78709760,
+    78709760,
+    78709760,
+    78709760,
+    78709760,
+    78709760,
+    78709760,
+    78709760,
+    78709760,
+    78709760,
+    78709760,
+    78709760,
+    78709760,
+    78709760,
+    78709760,
+    78709760,
+    78709760,
+    78709760,
+    78709760,
+    78709760
+  ],
+  "compute": "eager",
+  "histogram_including_warmups": {
+    "AG:78709760": 576
+  },
+  "collective_oracle": "PASS",
+  "reference_check": {
+    "max_logit_abs_diff": 0.0,
+    "mean_logit_abs_diff": 0.0,
+    "greedy_tokens_equal": true,
+    "four_token_kv_decode_equal": true,
+    "logit_atol": 0.25,
+    "logit_rtol": 0.02
+  },
+  "nccl_environment": {
+    "NCCL_SOCKET_IFNAME": "ibp55s0f0",
+    "NCCL_IB_HCA": "mlx5_0,mlx5_1"
+  },
+  "mapped_nccl": [
+    "/home/zhongjie/third_party/nccl/build/lib/libnccl.so.2.28.7"
+  ],
+  "peak_allocated_bytes": [
+    1045833728,
+    1044851712,
+    1044851712,
+    1044852224
+  ],
+  "rows": [
+    {
+      "kind": "serving",
+      "case": "16:32:4",
+      "samples_s": [
+        0.5832749232649803,
+        0.5830353610217571,
+        0.5832568965852261
+      ],
+      "median_s": 0.5832568965852261,
+      "prompt_sha256": "a6bd6a178f8e26ce9c51d02bc698ba33ddf2396175d909cdd2a8805880a9640e",
+      "response_sha256": [
+        "3f8fda21067a169d97d4a78efd3899de2351f446e88a9392a7bfb9b95adcd35a",
+        "3f8fda21067a169d97d4a78efd3899de2351f446e88a9392a7bfb9b95adcd35a",
+        "3f8fda21067a169d97d4a78efd3899de2351f446e88a9392a7bfb9b95adcd35a"
+      ],
+      "generated_tokens": [
+        [
+          [
+            257,
+            4996,
+            286,
+            4237
+          ],
+          [
+            257,
+            4996,
+            286,
+            4237
+          ]
+        ],
+        [
+          [
+            257,
+            4996,
+            286,
+            4237
+          ],
+          [
+            257,
+            4996,
+            286,
+            4237
+          ]
+        ],
+        [
+          [
+            257,
+            4996,
+            286,
+            4237
+          ],
+          [
+            257,
+            4996,
+            286,
+            4237
+          ]
+        ],
+        [
+          [
+            257,
+            4996,
+            286,
+            4237
+          ],
+          [
+            257,
+            4996,
+            286,
+            4237
+          ]
+        ]
+      ]
+    }
+  ]
+}

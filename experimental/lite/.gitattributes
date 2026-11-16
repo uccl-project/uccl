@@ -17,3 +17,7 @@ benchmarks/data/optimization_4l4_20261113/** -text -whitespace
 benchmarks/data/small_medium_4l4_20261113/** -text -whitespace
 # Matplotlib emits trailing spaces in generated SVG path data.
 docs/assets/collectives-4l4-*.svg -whitespace
+
+# Preserve L4 application measurements and generated figures byte-for-byte.
+integration/l4_e2e/data/** -text -whitespace
+docs/assets/*-e2e-*x4l4.svg -whitespace

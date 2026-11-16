@@ -1,0 +1,118 @@
+{
+  "model_label": "GPT-2-XL",
+  "parameter_dtype": "bfloat16",
+  "warmups": 5,
+  "repeats_per_job": 10,
+  "nodes": 1,
+  "world": 4,
+  "shard_world": 4,
+  "replica_nodes": false,
+  "cases": [
+    {
+      "kind": "serving",
+      "case": "8:32:8",
+      "nccl_ms": 1209.1501886025071,
+      "peer_ms": 980.5308543145657,
+      "latency_reduction_pct": 18.907438996653635,
+      "throughput_ratio": 1.2331587356807414,
+      "phase_medians_ms": [
+        1213.4411130100489,
+        980.4916940629482,
+        980.5700145661831,
+        1204.8592641949654
+      ],
+      "all_peer_jobs_faster": true
+    },
+    {
+      "kind": "serving",
+      "case": "8:128:8",
+      "nccl_ms": 1223.1738613918424,
+      "peer_ms": 993.1388823315501,
+      "latency_reduction_pct": 18.80640081685009,
+      "throughput_ratio": 1.2316241798128464,
+      "phase_medians_ms": [
+        1227.1439563483,
+        993.1489806622267,
+        993.1287840008736,
+        1219.2037664353848
+      ],
+      "all_peer_jobs_faster": true
+    },
+    {
+      "kind": "serving",
+      "case": "16:256:8",
+      "nccl_ms": 1298.922917805612,
+      "peer_ms": 1063.8259751722217,
+      "latency_reduction_pct": 18.09937598380056,
+      "throughput_ratio": 1.220991917964149,
+      "phase_medians_ms": [
+        1302.3849558085203,
+        1063.85282240808,
+        1063.7991279363632,
+        1295.4608798027039
+      ],
+      "all_peer_jobs_faster": true
+    },
+    {
+      "kind": "training",
+      "case": "8:32",
+      "nccl_ms": 495.26828341186047,
+      "peer_ms": 463.13941664993763,
+      "latency_reduction_pct": 6.487164197268969,
+      "throughput_ratio": 1.0693719117977976,
+      "phase_medians_ms": [
+        494.91595663130283,
+        462.70844899117947,
+        463.5703843086958,
+        495.6206101924181
+      ],
+      "all_peer_jobs_faster": true
+    },
+    {
+      "kind": "training",
+      "case": "8:64",
+      "nccl_ms": 504.35773376375437,
+      "peer_ms": 472.2290486097336,
+      "latency_reduction_pct": 6.3702176061149025,
+      "throughput_ratio": 1.068036232096711,
+      "phase_medians_ms": [
+        503.80229391157627,
+        471.86268866062164,
+        472.5954085588455,
+        504.91317361593246
+      ],
+      "all_peer_jobs_faster": true
+    },
+    {
+      "kind": "training",
+      "case": "16:128",
+      "nccl_ms": 577.898365445435,
+      "peer_ms": 544.08064391464,
+      "latency_reduction_pct": 5.851845852640358,
+      "throughput_ratio": 1.0621557151665566,
+      "phase_medians_ms": [
+        577.3932561278343,
+        543.8261609524488,
+        544.335126876831,
+        578.4034747630358
+      ],
+      "all_peer_jobs_faster": true
+    }
+  ],
+  "validation": {
+    "max_loss_abs_diff": 0.007724761962890625,
+    "record_count": 8,
+    "collective_oracle": "PASS",
+    "generated_tokens_equal": true,
+    "dp_replicas_synchronized": true,
+    "reference_max_logit_abs_diff": 0.0,
+    "full_parameters": "PASS",
+    "parameter_reports": [
+      "parameters_4l4_node0.json"
+    ],
+    "parameter_max_abs_diff": 0.0009765625,
+    "parameter_max_relative_l2": 1.5843394453496512e-06
+  },
+  "uccl_backend": "packet",
+  "checkpoint_blocks": true
+}
