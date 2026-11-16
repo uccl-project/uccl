@@ -62,6 +62,7 @@ LEGEND = (
     "✅ Pass · ❌ Failure · 🟡 Also failing on main · ⏱ Timeout · "
     "⚠️ Infrastructure / unreachable · ⏸ GPU busy · ❔ No results · — Not run"
 )
+JOBS = {"plan": "Plan", "cpu": "CPU", "gpu": "GPU"}
 
 ERROR_PATTERNS = [
     re.compile(r"^(?:E\s+)?[A-Za-z_][\w.]*(?:Error|Exception|Interrupt)\b(?::|\(|$)"),
@@ -510,16 +511,30 @@ def render(args):
         sum(len(details[k]) for k in ("New", "Old", "Not compared")) + perf_failed
     )
     infra = bool(details["Infra"]) or any(s in (INFRA, MISSING) for _, s, _ in not_run)
+    # CI status gates on the job results, and a job can fail after its suites pass
+    # (for example in ci/performance.py), so passing artifacts alone are not success.
+    bad_jobs = [
+        (name, jobs[job]["result"])
+        for job, name in JOBS.items()
+        if isinstance(jobs.get(job), dict)
+        and jobs[job].get("result") in ("failure", "cancelled")
+    ]
     word = (
         "FAILED"
         if failures
-        else ("INFRA ERROR" if infra else ("INCOMPLETE" if not_run else "SUCCESS"))
+        else (
+            "INFRA ERROR"
+            if infra
+            else ("FAILED" if bad_jobs else ("INCOMPLETE" if not_run else "SUCCESS"))
+        )
     )
     head = f"**[{word}]** UCCL CI [run]({run_url}) — {passed}/{executed} executed suites passed"
     if not planned_total:
         head = f"**[{word}]** UCCL CI [run]({run_url}) — no suites were selected"
     if not_run:
         head += f"; {len(not_run)} of {planned_total} planned suites did not run"
+    for name, result in bad_jobs:
+        head += f"; {name} job {'cancelled' if result == 'cancelled' else 'failed'}"
     lines = [head, ""]
     meta = []
     if args.sha and re.fullmatch(r"[0-9a-f]{7,40}", args.sha):

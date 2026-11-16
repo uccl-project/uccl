@@ -399,6 +399,53 @@ class RunReportTests(unittest.TestCase):
             self.f.render(current, jobs=jobs).startswith("**[INFRA ERROR]**")
         )
 
+    def test_failed_job_with_passing_suites_is_not_success(self):
+        # For example ci/performance.py raised before writing performance.json.
+        current = self.f.run("current", {"l4": ["p2p.e"]}, {"l4": [result("p2p.e")]})
+        jobs = {
+            "plan": {"result": "success"},
+            "cpu": {"result": "skipped"},
+            "gpu": {"result": "failure"},
+        }
+        body = self.f.render(current, jobs=jobs)
+        self.assertTrue(body.startswith("**[FAILED]**"))
+        self.assertIn("1/1 executed suites passed; GPU job failed", body)
+        self.assertNotIn("no main baseline", body)
+
+    def test_cancelled_job_is_not_success(self):
+        current = self.f.run(
+            "current", {"cpu": ["ci.selftest"]}, {"cpu": [result("ci.selftest")]}
+        )
+        body = self.f.render(current, jobs={"cpu": {"result": "cancelled"}})
+        self.assertTrue(body.startswith("**[FAILED]**"))
+        self.assertIn("1/1 executed suites passed; CPU job cancelled", body)
+
+    def test_failed_job_without_artifact_is_named(self):
+        current = self.f.run("current", {"cpu": ["ci.selftest"]})
+        body = self.f.render(current, jobs={"cpu": {"result": "failure"}})
+        self.assertTrue(body.startswith("**[INFRA ERROR]**"))
+        self.assertIn("1 of 1 planned suites did not run; CPU job failed", body)
+        self.assertIn("**No results uploaded:** 1 suite not run", body)
+
+    def test_successful_jobs_leave_the_report_unchanged(self):
+        current = self.f.run(
+            "current",
+            {"cpu": ["ci.selftest"], "l4": ["p2p.e"]},
+            {"cpu": [result("ci.selftest")], "l4": [result("p2p.e")]},
+            perf={
+                "l4": {
+                    "measurements": [
+                        {"key": "l4/p2p.e/read", "value": 40.1, "status": "pass"}
+                    ],
+                    "failures": [],
+                }
+            },
+        )
+        jobs = {name: {"result": "success"} for name in ("plan", "cpu", "gpu")}
+        body = self.f.render(current, jobs=jobs)
+        self.assertTrue(body.startswith("**[SUCCESS]**"))
+        self.assertEqual(body, self.f.render(current))
+
     def test_run_without_selected_suites(self):
         current = self.f.run("current", {})
         body = self.f.render(current)
