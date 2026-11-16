@@ -49,22 +49,18 @@ Raw samples, ranges, hashes and reproduction commands remain in the record.
 
 ![Two-node FP32 AllGather: CPU-router latency and throughput with prior and tuned NCCL](assets/collectives-2x4l4-allgather-nccl-tuned.svg)
 
-The UCCL Lite AllGather curve uses the
-[November 15 checked host-router sweep](../benchmarks/data/ag_host_router_2x4l4_20261115/README.md).
-It covers **1 MiB–1 GiB complete output per GPU** on eight FP32 L4 GPUs;
-the latency panel shows 1–8 MiB. Both UCCL Lite and NCCL 2.28.7 Ring+Simple
-use four MPI processes, each controlling one two-GPU NUMA group. Timing is
-slowest-process host enqueue-to-completion, with ten warmups and ten timed calls
-in each of three rounds, full output checks, and checked NCCL priming before
-comparison. Points are medians of round means; ranges remain in the CSV.
+The **1 KiB–1 MiB latency panel** uses the [fresh checked sweep](../benchmarks/data/ag_latency_2x4l4_20261116/README.md)
+from current source: FP32, two four-L4 hosts, four MPI processes/two GPUs each,
+slowest-process host enqueue-to-completion timing. Three independent rounds use
+20 warmups and 50 measured calls per size, checking every output. The fixed
+shared-ready host router uses 256-KiB chunks; NCCL default and fixed SM/CE
+presets are freshly measured over the same sizes. Points are medians of round
+means, not a best-variant-per-size selection.
 
-One fixed 256 KiB per-GPU input chunk configuration uses shared local host
-packets, early consumption and readiness-driven progress. It reaches
-12.1/16.0/18.6/20.1 GB/s at 1/2/4/8 MiB and 21.9 GB/s at 1 GiB. Bus throughput
-is `7N/(8t)` for complete output N. There is no best-variant-per-size selection
-and no splice with older sub-MiB data. The path remains an explicit eager
-experiment; automatic dispatch is unchanged. Regenerate this SVG with
-`python3 scripts/plot_multinode_host_router.py`.
+The **1 MiB–1 GiB throughput panel** retains the [November 15 host-router sweep](../benchmarks/data/ag_host_router_2x4l4_20261115/README.md)
+and previously recorded tuned NCCL curves. These historical values do not
+validate the refreshed source. Regenerate the combined figure with
+`python3 benchmarks/data/ag_latency_2x4l4_20261116/plot.py`.
 
 ## Current ReduceScatter: direct medium-message ring
 

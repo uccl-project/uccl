@@ -1,0 +1,2 @@
+# Preserve measured console output and source snapshots exactly.
+* -text -whitespace

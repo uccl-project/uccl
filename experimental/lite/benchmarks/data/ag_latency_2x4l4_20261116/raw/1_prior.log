@@ -1,0 +1,1032 @@
+mibura-sky-test-02:2491977:2491977 [1] NCCL INFO ENV/Plugin: Could not find: libnccl-env.so
+mibura-sky-test-02:2491977:2491977 [1] NCCL INFO NCCL_SOCKET_IFNAME set by environment to ibp55s0f0
+mibura-sky-test-02:2491977:2491977 [1] NCCL INFO Bootstrap: Using ibp55s0f0:10.10.55.2<0>
+mibura-sky-test-02:2491977:2491977 [0] NCCL INFO cudaDriverVersion 13020
+mibura-sky-test-02:2491977:2491977 [0] NCCL INFO NCCL version 2.28.7+cuda12.9
+mibura-sky-test-01:1902848:1902848 [3] NCCL INFO ENV/Plugin: Could not find: libnccl-env.so
+mibura-sky-test-01:1902848:1902848 [2] NCCL INFO cudaDriverVersion 13000
+mibura-sky-test-01:1902848:1902848 [2] NCCL INFO NCCL_SOCKET_IFNAME set by environment to ibp55s0f0
+mibura-sky-test-01:1902847:1902847 [1] NCCL INFO ENV/Plugin: Could not find: libnccl-env.so
+mibura-sky-test-01:1902847:1902847 [0] NCCL INFO cudaDriverVersion 13000
+mibura-sky-test-01:1902848:1902848 [2] NCCL INFO Bootstrap: Using ibp55s0f0:10.10.55.1<0>
+mibura-sky-test-01:1902848:1902848 [2] NCCL INFO NCCL version 2.28.7+cuda12.9
+mibura-sky-test-01:1902847:1902847 [0] NCCL INFO NCCL_SOCKET_IFNAME set by environment to ibp55s0f0
+mibura-sky-test-01:1902847:1902847 [0] NCCL INFO Bootstrap: Using ibp55s0f0:10.10.55.1<0>
+mibura-sky-test-01:1902847:1902847 [0] NCCL INFO NCCL version 2.28.7+cuda12.9
+mibura-sky-test-02:2491978:2491978 [3] NCCL INFO ENV/Plugin: Could not find: libnccl-env.so
+mibura-sky-test-02:2491978:2491978 [2] NCCL INFO cudaDriverVersion 13020
+mibura-sky-test-02:2491978:2491978 [2] NCCL INFO NCCL_SOCKET_IFNAME set by environment to ibp55s0f0
+mibura-sky-test-02:2491978:2491978 [2] NCCL INFO Bootstrap: Using ibp55s0f0:10.10.55.2<0>
+mibura-sky-test-02:2491978:2491978 [2] NCCL INFO NCCL version 2.28.7+cuda12.9
+mibura-sky-test-01:1902848:1902875 [3] NCCL INFO NET/Plugin: Could not find: libnccl-net.so
+mibura-sky-test-01:1902848:1902875 [3] NCCL INFO NCCL_SOCKET_IFNAME set by environment to ibp55s0f0
+mibura-sky-test-01:1902848:1902875 [3] NCCL INFO NCCL_IB_HCA set to mlx5_0,mlx5_1
+mibura-sky-test-01:1902847:1902877 [1] NCCL INFO NET/Plugin: Could not find: libnccl-net.so
+mibura-sky-test-01:1902847:1902877 [1] NCCL INFO NCCL_SOCKET_IFNAME set by environment to ibp55s0f0
+mibura-sky-test-01:1902847:1902877 [1] NCCL INFO NCCL_IB_HCA set to mlx5_0,mlx5_1
+mibura-sky-test-02:2491977:2492008 [1] NCCL INFO NET/Plugin: Could not find: libnccl-net.so
+mibura-sky-test-02:2491977:2492008 [1] NCCL INFO NCCL_SOCKET_IFNAME set by environment to ibp55s0f0
+mibura-sky-test-02:2491977:2492008 [1] NCCL INFO NCCL_IB_HCA set to mlx5_0,mlx5_1
+mibura-sky-test-02:2491977:2492008 [1] NCCL INFO NET/IB : Using [0]mlx5_0:1/IB [1]mlx5_1:1/IB [RO]; OOB ibp55s0f0:10.10.55.2<0>
+mibura-sky-test-02:2491977:2492008 [1] NCCL INFO Initialized NET plugin IB
+mibura-sky-test-02:2491977:2492008 [1] NCCL INFO Assigned NET plugin IB to comm
+mibura-sky-test-02:2491977:2492008 [1] NCCL INFO Assigned GIN plugin GIN_IB_GDAKI to comm
+mibura-sky-test-02:2491977:2492008 [1] NCCL INFO Using network IB
+mibura-sky-test-02:2491977:2492007 [0] NCCL INFO Initialized NET plugin IB
+mibura-sky-test-02:2491977:2492007 [0] NCCL INFO Assigned NET plugin IB to comm
+mibura-sky-test-02:2491977:2492007 [0] NCCL INFO Assigned GIN plugin GIN_IB_GDAKI to comm
+mibura-sky-test-02:2491977:2492007 [0] NCCL INFO Using network IB
+mibura-sky-test-01:1902848:1902875 [3] NCCL INFO NET/IB : Using [0]mlx5_0:1/IB [1]mlx5_1:1/IB [RO]; OOB ibp55s0f0:10.10.55.1<0>
+mibura-sky-test-01:1902848:1902875 [3] NCCL INFO Initialized NET plugin IB
+mibura-sky-test-01:1902847:1902877 [1] NCCL INFO NET/IB : Using [0]mlx5_0:1/IB [1]mlx5_1:1/IB [RO]; OOB ibp55s0f0:10.10.55.1<0>
+mibura-sky-test-01:1902847:1902877 [1] NCCL INFO Initialized NET plugin IB
+mibura-sky-test-01:1902848:1902875 [3] NCCL INFO Assigned NET plugin IB to comm
+mibura-sky-test-01:1902848:1902875 [3] NCCL INFO Assigned GIN plugin GIN_IB_GDAKI to comm
+mibura-sky-test-01:1902848:1902875 [3] NCCL INFO Using network IB
+mibura-sky-test-01:1902848:1902874 [2] NCCL INFO Initialized NET plugin IB
+mibura-sky-test-01:1902848:1902874 [2] NCCL INFO Assigned NET plugin IB to comm
+mibura-sky-test-01:1902848:1902874 [2] NCCL INFO Assigned GIN plugin GIN_IB_GDAKI to comm
+mibura-sky-test-01:1902848:1902874 [2] NCCL INFO Using network IB
+mibura-sky-test-01:1902847:1902877 [1] NCCL INFO Assigned NET plugin IB to comm
+mibura-sky-test-01:1902847:1902877 [1] NCCL INFO Assigned GIN plugin GIN_IB_GDAKI to comm
+mibura-sky-test-01:1902847:1902877 [1] NCCL INFO Using network IB
+mibura-sky-test-01:1902847:1902876 [0] NCCL INFO Initialized NET plugin IB
+mibura-sky-test-01:1902847:1902876 [0] NCCL INFO Assigned NET plugin IB to comm
+mibura-sky-test-01:1902847:1902876 [0] NCCL INFO Assigned GIN plugin GIN_IB_GDAKI to comm
+mibura-sky-test-01:1902847:1902876 [0] NCCL INFO Using network IB
+mibura-sky-test-02:2491978:2492009 [2] NCCL INFO NET/Plugin: Could not find: libnccl-net.so
+mibura-sky-test-02:2491978:2492009 [2] NCCL INFO NCCL_SOCKET_IFNAME set by environment to ibp55s0f0
+mibura-sky-test-02:2491978:2492009 [2] NCCL INFO NCCL_IB_HCA set to mlx5_0,mlx5_1
+mibura-sky-test-02:2491978:2492009 [2] NCCL INFO NET/IB : Using [0]mlx5_0:1/IB [1]mlx5_1:1/IB [RO]; OOB ibp55s0f0:10.10.55.2<0>
+mibura-sky-test-02:2491978:2492009 [2] NCCL INFO Initialized NET plugin IB
+mibura-sky-test-02:2491978:2492009 [2] NCCL INFO Assigned NET plugin IB to comm
+mibura-sky-test-02:2491978:2492009 [2] NCCL INFO Assigned GIN plugin GIN_IB_GDAKI to comm
+mibura-sky-test-02:2491978:2492009 [2] NCCL INFO Using network IB
+mibura-sky-test-02:2491978:2492010 [3] NCCL INFO Initialized NET plugin IB
+mibura-sky-test-02:2491978:2492010 [3] NCCL INFO Assigned NET plugin IB to comm
+mibura-sky-test-02:2491978:2492010 [3] NCCL INFO Assigned GIN plugin GIN_IB_GDAKI to comm
+mibura-sky-test-02:2491978:2492010 [3] NCCL INFO Using network IB
+mibura-sky-test-02:2491977:2492008 [1] NCCL INFO DMA-BUF is available on GPU device 1
+mibura-sky-test-02:2491977:2492007 [0] NCCL INFO DMA-BUF is available on GPU device 0
+mibura-sky-test-02:2491977:2492007 [0] NCCL INFO ncclCommInitRank comm 0x60368ecc67d0 rank 0 nranks 8 cudaDev 0 nvmlDev 0 busId 4a000 commId 0xfd761ac01e99339f - Init START
+mibura-sky-test-02:2491977:2492008 [1] NCCL INFO ncclCommInitRank comm 0x60368edd7a80 rank 1 nranks 8 cudaDev 1 nvmlDev 1 busId 61000 commId 0xfd761ac01e99339f - Init START
+mibura-sky-test-01:1902847:1902876 [0] NCCL INFO ncclCommInitRank comm 0x5eaa1d813a50 rank 4 nranks 8 cudaDev 0 nvmlDev 0 busId 4a000 commId 0xfd761ac01e99339f - Init START
+mibura-sky-test-01:1902847:1902877 [1] NCCL INFO ncclCommInitRank comm 0x5eaa1d924c50 rank 5 nranks 8 cudaDev 1 nvmlDev 1 busId 61000 commId 0xfd761ac01e99339f - Init START
+mibura-sky-test-01:1902848:1902874 [2] NCCL INFO ncclCommInitRank comm 0x646558588c20 rank 6 nranks 8 cudaDev 2 nvmlDev 2 busId ca000 commId 0xfd761ac01e99339f - Init START
+mibura-sky-test-01:1902848:1902875 [3] NCCL INFO ncclCommInitRank comm 0x646558699e20 rank 7 nranks 8 cudaDev 3 nvmlDev 3 busId e1000 commId 0xfd761ac01e99339f - Init START
+mibura-sky-test-02:2491977:2492007 [0] NCCL INFO RAS client listening socket at 127.0.0.1<28028>
+mibura-sky-test-01:1902847:1902877 [1] NCCL INFO RAS client listening socket at 127.0.0.1<28028>
+mibura-sky-test-01:1902848:1902875 [3] NCCL INFO RAS client listening socket at 127.0.0.1<28028>
+mibura-sky-test-02:2491978:2492009 [2] NCCL INFO DMA-BUF is available on GPU device 2
+mibura-sky-test-02:2491978:2492010 [3] NCCL INFO DMA-BUF is available on GPU device 3
+mibura-sky-test-02:2491978:2492010 [3] NCCL INFO ncclCommInitRank comm 0x5efabd7225e0 rank 3 nranks 8 cudaDev 3 nvmlDev 3 busId e1000 commId 0xfd761ac01e99339f - Init START
+mibura-sky-test-02:2491978:2492009 [2] NCCL INFO ncclCommInitRank comm 0x5efabd611330 rank 2 nranks 8 cudaDev 2 nvmlDev 2 busId ca000 commId 0xfd761ac01e99339f - Init START
+mibura-sky-test-02:2491978:2492009 [2] NCCL INFO RAS client listening socket at 127.0.0.1<28028>
+mibura-sky-test-02:2491977:2492007 [0] NCCL INFO Bootstrap timings total 0.029531 (create 0.000053, send 0.000176, recv 0.000276, ring 0.022043, delay 0.000001)
+mibura-sky-test-02:2491977:2492008 [1] NCCL INFO Bootstrap timings total 0.029522 (create 0.000033, send 0.000140, recv 0.028551, ring 0.000639, delay 0.000001)
+mibura-sky-test-02:2491978:2492009 [2] NCCL INFO Bootstrap timings total 0.001316 (create 0.000033, send 0.000127, recv 0.000477, ring 0.000295, delay 0.000000)
+mibura-sky-test-02:2491978:2492010 [3] NCCL INFO Bootstrap timings total 0.001355 (create 0.000041, send 0.000114, recv 0.000171, ring 0.000292, delay 0.000000)
+mibura-sky-test-01:1902848:1902875 [3] NCCL INFO Bootstrap timings total 0.023067 (create 0.000029, send 0.000212, recv 0.000219, ring 0.021878, delay 0.000000)
+mibura-sky-test-01:1902847:1902877 [1] NCCL INFO Bootstrap timings total 0.023901 (create 0.000033, send 0.000284, recv 0.001141, ring 0.022068, delay 0.000000)
+mibura-sky-test-01:1902848:1902874 [2] NCCL INFO Bootstrap timings total 0.023131 (create 0.000047, send 0.000285, recv 0.000521, ring 0.021892, delay 0.000000)
+mibura-sky-test-01:1902847:1902876 [0] NCCL INFO Bootstrap timings total 0.023945 (create 0.000050, send 0.000339, recv 0.000375, ring 0.000753, delay 0.000000)
+mibura-sky-test-02:2491978:2492010 [3] NCCL INFO ncclTopoGetCpuAffinity: Affinity for GPU 3 is 1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31,33,35,37,39,41,43,45,47. (GPU affinity = 1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31,33,35,37,39,41,43,45,47 ; CPU affinity = 0-47).
+mibura-sky-test-02:2491977:2492008 [1] NCCL INFO ncclTopoGetCpuAffinity: Affinity for GPU 1 is 0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46. (GPU affinity = 0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46 ; CPU affinity = 0-47).
+mibura-sky-test-02:2491977:2492008 [1] NCCL INFO NVLS multicast support is not available on dev 1 (NVLS_NCHANNELS 0)
+mibura-sky-test-02:2491978:2492010 [3] NCCL INFO NVLS multicast support is not available on dev 3 (NVLS_NCHANNELS 0)
+mibura-sky-test-02:2491978:2492009 [2] NCCL INFO ncclTopoGetCpuAffinity: Affinity for GPU 2 is 1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31,33,35,37,39,41,43,45,47. (GPU affinity = 1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31,33,35,37,39,41,43,45,47 ; CPU affinity = 0-47).
+mibura-sky-test-02:2491978:2492009 [2] NCCL INFO NVLS multicast support is not available on dev 2 (NVLS_NCHANNELS 0)
+mibura-sky-test-02:2491977:2492007 [0] NCCL INFO ncclTopoGetCpuAffinity: Affinity for GPU 0 is 0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46. (GPU affinity = 0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46 ; CPU affinity = 0-47).
+mibura-sky-test-02:2491977:2492007 [0] NCCL INFO NVLS multicast support is not available on dev 0 (NVLS_NCHANNELS 0)
+mibura-sky-test-01:1902848:1902875 [3] NCCL INFO ncclTopoGetCpuAffinity: Affinity for GPU 3 is 1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31,33,35,37,39,41,43,45,47. (GPU affinity = 1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31,33,35,37,39,41,43,45,47 ; CPU affinity = 0-47).
+mibura-sky-test-01:1902847:1902877 [1] NCCL INFO ncclTopoGetCpuAffinity: Affinity for GPU 1 is 0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46. (GPU affinity = 0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46 ; CPU affinity = 0-47).
+mibura-sky-test-01:1902848:1902875 [3] NCCL INFO NVLS multicast support is not available on dev 3 (NVLS_NCHANNELS 0)
+mibura-sky-test-01:1902847:1902877 [1] NCCL INFO NVLS multicast support is not available on dev 1 (NVLS_NCHANNELS 0)
+mibura-sky-test-01:1902847:1902876 [0] NCCL INFO ncclTopoGetCpuAffinity: Affinity for GPU 0 is 0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46. (GPU affinity = 0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46 ; CPU affinity = 0-47).
+mibura-sky-test-01:1902848:1902874 [2] NCCL INFO ncclTopoGetCpuAffinity: Affinity for GPU 2 is 1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31,33,35,37,39,41,43,45,47. (GPU affinity = 1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31,33,35,37,39,41,43,45,47 ; CPU affinity = 0-47).
+mibura-sky-test-01:1902848:1902874 [2] NCCL INFO NVLS multicast support is not available on dev 2 (NVLS_NCHANNELS 0)
+mibura-sky-test-01:1902847:1902876 [0] NCCL INFO NVLS multicast support is not available on dev 0 (NVLS_NCHANNELS 0)
+mibura-sky-test-02:2491978:2492010 [3] NCCL INFO comm 0x5efabd7225e0 rank 3 nRanks 8 nNodes 2 localRanks 4 localRank 3 MNNVL 0
+mibura-sky-test-02:2491978:2492010 [3] NCCL INFO Trees [0] 1/-1/-1->3->2 [1] 1/-1/-1->3->2
+mibura-sky-test-02:2491978:2492010 [3] NCCL INFO P2P Chunksize set to 131072
+mibura-sky-test-02:2491978:2492009 [2] NCCL INFO comm 0x5efabd611330 rank 2 nRanks 8 nNodes 2 localRanks 4 localRank 2 MNNVL 0
+mibura-sky-test-02:2491978:2492009 [2] NCCL INFO Trees [0] 3/-1/-1->2->0 [1] 3/-1/-1->2->0
+mibura-sky-test-02:2491978:2492009 [2] NCCL INFO P2P Chunksize set to 131072
+mibura-sky-test-02:2491977:2492008 [1] NCCL INFO comm 0x60368edd7a80 rank 1 nRanks 8 nNodes 2 localRanks 4 localRank 1 MNNVL 0
+mibura-sky-test-02:2491977:2492007 [0] NCCL INFO comm 0x60368ecc67d0 rank 0 nRanks 8 nNodes 2 localRanks 4 localRank 0 MNNVL 0
+mibura-sky-test-02:2491977:2492008 [1] NCCL INFO Trees [0] -1/-1/-1->1->3 [1] -1/-1/-1->1->3
+mibura-sky-test-02:2491978:2492010 [3] NCCL INFO PROFILER/Plugin: Could not find: libnccl-profiler.so
+mibura-sky-test-02:2491978:2492010 [3] NCCL INFO Check P2P Type isAllDirectP2p 0 directMode 1 isAllCudaP2p 1
+mibura-sky-test-02:2491977:2492008 [1] NCCL INFO P2P Chunksize set to 131072
+mibura-sky-test-02:2491977:2492007 [0] NCCL INFO Channel 00/02 : 0 1 2 3 4 5 6 7
+mibura-sky-test-02:2491977:2492007 [0] NCCL INFO Channel 01/02 : 0 1 2 3 4 5 6 7
+mibura-sky-test-02:2491977:2492007 [0] NCCL INFO Trees [0] 2/4/-1->0->-1 [1] 2/-1/-1->0->4
+mibura-sky-test-02:2491977:2492007 [0] NCCL INFO P2P Chunksize set to 131072
+mibura-sky-test-02:2491978:2492009 [2] NCCL INFO PROFILER/Plugin: Could not find: libnccl-profiler.so
+mibura-sky-test-02:2491978:2492009 [2] NCCL INFO Check P2P Type isAllDirectP2p 0 directMode 1 isAllCudaP2p 1
+mibura-sky-test-01:1902848:1902875 [3] NCCL INFO comm 0x646558699e20 rank 7 nRanks 8 nNodes 2 localRanks 4 localRank 3 MNNVL 0
+mibura-sky-test-01:1902848:1902874 [2] NCCL INFO comm 0x646558588c20 rank 6 nRanks 8 nNodes 2 localRanks 4 localRank 2 MNNVL 0
+mibura-sky-test-02:2491977:2492008 [1] NCCL INFO PROFILER/Plugin: Could not find: libnccl-profiler.so
+mibura-sky-test-02:2491977:2492008 [1] NCCL INFO Check P2P Type isAllDirectP2p 0 directMode 1 isAllCudaP2p 1
+mibura-sky-test-01:1902847:1902877 [1] NCCL INFO comm 0x5eaa1d924c50 rank 5 nRanks 8 nNodes 2 localRanks 4 localRank 1 MNNVL 0
+mibura-sky-test-01:1902847:1902876 [0] NCCL INFO comm 0x5eaa1d813a50 rank 4 nRanks 8 nNodes 2 localRanks 4 localRank 0 MNNVL 0
+mibura-sky-test-01:1902848:1902875 [3] NCCL INFO Trees [0] 5/-1/-1->7->6 [1] 5/-1/-1->7->6
+mibura-sky-test-01:1902848:1902875 [3] NCCL INFO P2P Chunksize set to 131072
+mibura-sky-test-01:1902848:1902874 [2] NCCL INFO Trees [0] 7/-1/-1->6->4 [1] 7/-1/-1->6->4
+mibura-sky-test-01:1902848:1902874 [2] NCCL INFO P2P Chunksize set to 131072
+mibura-sky-test-02:2491977:2492018 [0] NCCL INFO [Proxy Service] Device 1 CPU core 30
+mibura-sky-test-02:2491977:2492007 [0] NCCL INFO PROFILER/Plugin: Could not find: libnccl-profiler.so
+mibura-sky-test-02:2491978:2492017 [0] NCCL INFO [Proxy Service] Device 3 CPU core 1
+mibura-sky-test-02:2491978:2492019 [0] NCCL INFO [Proxy Service] Device 2 CPU core 9
+mibura-sky-test-01:1902847:1902877 [1] NCCL INFO Trees [0] -1/-1/-1->5->7 [1] -1/-1/-1->5->7
+mibura-sky-test-01:1902847:1902877 [1] NCCL INFO P2P Chunksize set to 131072
+mibura-sky-test-01:1902847:1902876 [0] NCCL INFO Trees [0] 6/-1/-1->4->0 [1] 6/0/-1->4->-1
+mibura-sky-test-01:1902847:1902876 [0] NCCL INFO P2P Chunksize set to 131072
+mibura-sky-test-02:2491977:2492022 [0] NCCL INFO [Proxy Service UDS] Device 1 CPU core 32
+mibura-sky-test-02:2491977:2492007 [0] NCCL INFO Check P2P Type isAllDirectP2p 0 directMode 1 isAllCudaP2p 1
+mibura-sky-test-01:1902848:1902875 [3] NCCL INFO PROFILER/Plugin: Could not find: libnccl-profiler.so
+mibura-sky-test-01:1902848:1902875 [3] NCCL INFO Check P2P Type isAllDirectP2p 0 directMode 1 isAllCudaP2p 1
+mibura-sky-test-01:1902847:1902877 [1] NCCL INFO PROFILER/Plugin: Could not find: libnccl-profiler.so
+mibura-sky-test-01:1902847:1902877 [1] NCCL INFO Check P2P Type isAllDirectP2p 0 directMode 1 isAllCudaP2p 1
+mibura-sky-test-01:1902847:1902876 [0] NCCL INFO PROFILER/Plugin: Could not find: libnccl-profiler.so
+mibura-sky-test-01:1902847:1902876 [0] NCCL INFO Check P2P Type isAllDirectP2p 0 directMode 1 isAllCudaP2p 1
+mibura-sky-test-02:2491978:2492020 [0] NCCL INFO [Proxy Service UDS] Device 3 CPU core 11
+mibura-sky-test-01:1902848:1902874 [2] NCCL INFO PROFILER/Plugin: Could not find: libnccl-profiler.so
+mibura-sky-test-01:1902848:1902874 [2] NCCL INFO Check P2P Type isAllDirectP2p 0 directMode 1 isAllCudaP2p 1
+mibura-sky-test-02:2491978:2492021 [0] NCCL INFO [Proxy Service UDS] Device 2 CPU core 37
+mibura-sky-test-01:1902847:1902884 [0] NCCL INFO [Proxy Service] Device 1 CPU core 38
+mibura-sky-test-02:2491977:2492023 [0] NCCL INFO [Proxy Service] Device 0 CPU core 42
+mibura-sky-test-01:1902848:1902886 [0] NCCL INFO [Proxy Service] Device 3 CPU core 31
+mibura-sky-test-01:1902848:1902890 [0] NCCL INFO [Proxy Service UDS] Device 3 CPU core 33
+mibura-sky-test-01:1902847:1902885 [0] NCCL INFO [Proxy Service] Device 0 CPU core 40
+mibura-sky-test-01:1902847:1902888 [0] NCCL INFO [Proxy Service UDS] Device 0 CPU core 44
+mibura-sky-test-02:2491977:2492024 [0] NCCL INFO [Proxy Service UDS] Device 0 CPU core 36
+mibura-sky-test-01:1902847:1902887 [0] NCCL INFO [Proxy Service UDS] Device 1 CPU core 42
+mibura-sky-test-01:1902848:1902889 [0] NCCL INFO [Proxy Service] Device 2 CPU core 33
+mibura-sky-test-01:1902848:1902891 [0] NCCL INFO [Proxy Service UDS] Device 2 CPU core 11
+mibura-sky-test-02:2491978:2492010 [3] NCCL INFO TUNER/Plugin: Could not find: libnccl-tuner.so
+mibura-sky-test-02:2491978:2492010 [3] NCCL INFO threadThresholds 8/8/64 | 64/8/64 | 512 | 512
+mibura-sky-test-02:2491978:2492010 [3] NCCL INFO 2 coll channels, 2 collnet channels, 0 nvls channels, 2 p2p channels, 1 p2p channels per peer
+mibura-sky-test-02:2491978:2492009 [2] NCCL INFO threadThresholds 8/8/64 | 64/8/64 | 512 | 512
+mibura-sky-test-02:2491978:2492009 [2] NCCL INFO 2 coll channels, 2 collnet channels, 0 nvls channels, 2 p2p channels, 1 p2p channels per peer
+mibura-sky-test-02:2491977:2492008 [1] NCCL INFO TUNER/Plugin: Could not find: libnccl-tuner.so
+mibura-sky-test-02:2491977:2492008 [1] NCCL INFO threadThresholds 8/8/64 | 64/8/64 | 512 | 512
+mibura-sky-test-02:2491977:2492008 [1] NCCL INFO 2 coll channels, 2 collnet channels, 0 nvls channels, 2 p2p channels, 1 p2p channels per peer
+mibura-sky-test-01:1902847:1902876 [0] NCCL INFO TUNER/Plugin: Could not find: libnccl-tuner.so
+mibura-sky-test-01:1902847:1902876 [0] NCCL INFO threadThresholds 8/8/64 | 64/8/64 | 512 | 512
+mibura-sky-test-01:1902847:1902876 [0] NCCL INFO 2 coll channels, 2 collnet channels, 0 nvls channels, 2 p2p channels, 1 p2p channels per peer
+mibura-sky-test-01:1902848:1902875 [3] NCCL INFO TUNER/Plugin: Could not find: libnccl-tuner.so
+mibura-sky-test-01:1902848:1902875 [3] NCCL INFO threadThresholds 8/8/64 | 64/8/64 | 512 | 512
+mibura-sky-test-01:1902848:1902875 [3] NCCL INFO 2 coll channels, 2 collnet channels, 0 nvls channels, 2 p2p channels, 1 p2p channels per peer
+mibura-sky-test-01:1902847:1902877 [1] NCCL INFO threadThresholds 8/8/64 | 64/8/64 | 512 | 512
+mibura-sky-test-01:1902847:1902877 [1] NCCL INFO 2 coll channels, 2 collnet channels, 0 nvls channels, 2 p2p channels, 1 p2p channels per peer
+mibura-sky-test-02:2491977:2492007 [0] NCCL INFO threadThresholds 8/8/64 | 64/8/64 | 512 | 512
+mibura-sky-test-02:2491977:2492007 [0] NCCL INFO 2 coll channels, 2 collnet channels, 0 nvls channels, 2 p2p channels, 1 p2p channels per peer
+mibura-sky-test-01:1902848:1902874 [2] NCCL INFO threadThresholds 8/8/64 | 64/8/64 | 512 | 512
+mibura-sky-test-01:1902848:1902874 [2] NCCL INFO 2 coll channels, 2 collnet channels, 0 nvls channels, 2 p2p channels, 1 p2p channels per peer
+mibura-sky-test-02:2491977:2492007 [0] NCCL INFO CC Off, workFifoBytes 1048576
+mibura-sky-test-02:2491978:2492010 [3] NCCL INFO ncclCommInitRank comm 0x5efabd7225e0 rank 3 nranks 8 cudaDev 3 nvmlDev 3 busId e1000 commId 0xfd761ac01e99339f - Init COMPLETE
+mibura-sky-test-02:2491978:2492010 [3] NCCL INFO Init timings - ncclCommInitRank: rank 3 nranks 8 total 0.26 (kernels 0.19, alloc 0.04, bootstrap 0.00, allgathers 0.01, topo 0.02, graphs 0.00, connections 0.00, rest 0.00)
+mibura-sky-test-02:2491978:2492009 [2] NCCL INFO ncclCommInitRank comm 0x5efabd611330 rank 2 nranks 8 cudaDev 2 nvmlDev 2 busId ca000 commId 0xfd761ac01e99339f - Init COMPLETE
+mibura-sky-test-02:2491977:2492008 [1] NCCL INFO ncclCommInitRank comm 0x60368edd7a80 rank 1 nranks 8 cudaDev 1 nvmlDev 1 busId 61000 commId 0xfd761ac01e99339f - Init COMPLETE
+mibura-sky-test-02:2491977:2492008 [1] NCCL INFO Init timings - ncclCommInitRank: rank 1 nranks 8 total 0.29 (kernels 0.19, alloc 0.04, bootstrap 0.03, allgathers 0.01, topo 0.02, graphs 0.00, connections 0.00, rest 0.00)
+mibura-sky-test-02:2491977:2492007 [0] NCCL INFO ncclCommInitRank comm 0x60368ecc67d0 rank 0 nranks 8 cudaDev 0 nvmlDev 0 busId 4a000 commId 0xfd761ac01e99339f - Init COMPLETE
+mibura-sky-test-02:2491977:2492007 [0] NCCL INFO Init timings - ncclCommInitRank: rank 0 nranks 8 total 0.29 (kernels 0.19, alloc 0.04, bootstrap 0.03, allgathers 0.01, topo 0.02, graphs 0.00, connections 0.00, rest 0.00)
+mibura-sky-test-02:2491978:2492009 [2] NCCL INFO Init timings - ncclCommInitRank: rank 2 nranks 8 total 0.26 (kernels 0.19, alloc 0.04, bootstrap 0.00, allgathers 0.00, topo 0.02, graphs 0.00, connections 0.00, rest 0.00)
+mibura-sky-test-01:1902847:1902877 [1] NCCL INFO ncclCommInitRank comm 0x5eaa1d924c50 rank 5 nranks 8 cudaDev 1 nvmlDev 1 busId 61000 commId 0xfd761ac01e99339f - Init COMPLETE
+mibura-sky-test-01:1902847:1902877 [1] NCCL INFO Init timings - ncclCommInitRank: rank 5 nranks 8 total 0.29 (kernels 0.18, alloc 0.05, bootstrap 0.02, allgathers 0.00, topo 0.02, graphs 0.00, connections 0.00, rest 0.00)
+# two nodes x four L4; NCCL 22807; float32; AllGather; out-of-place; host enqueue+completion
+# warmups=20 iterations=50; every invocation fully checked
+# MPI ranks=4 GPUs/process=2; bytes=complete tensor/GPU
+backend,phase,iteration,bytes,time_us,wrong
+mibura-sky-test-01:1902848:1902875 [3] NCCL INFO ncclCommInitRank comm 0x646558699e20 rank 7 nranks 8 cudaDev 3 nvmlDev 3 busId e1000 commId 0xfd761ac01e99339f - Init COMPLETE
+mibura-sky-test-01:1902848:1902875 [3] NCCL INFO Init timings - ncclCommInitRank: rank 7 nranks 8 total 0.29 (kernels 0.18, alloc 0.05, bootstrap 0.02, allgathers 0.00, topo 0.02, graphs 0.00, connections 0.00, rest 0.00)
+mibura-sky-test-01:1902847:1902876 [0] NCCL INFO ncclCommInitRank comm 0x5eaa1d813a50 rank 4 nranks 8 cudaDev 0 nvmlDev 0 busId 4a000 commId 0xfd761ac01e99339f - Init COMPLETE
+mibura-sky-test-01:1902847:1902876 [0] NCCL INFO Init timings - ncclCommInitRank: rank 4 nranks 8 total 0.29 (kernels 0.18, alloc 0.05, bootstrap 0.02, allgathers 0.00, topo 0.02, graphs 0.00, connections 0.00, rest 0.00)
+mibura-sky-test-01:1902848:1902874 [2] NCCL INFO ncclCommInitRank comm 0x646558588c20 rank 6 nranks 8 cudaDev 2 nvmlDev 2 busId ca000 commId 0xfd761ac01e99339f - Init COMPLETE
+mibura-sky-test-01:1902848:1902874 [2] NCCL INFO Init timings - ncclCommInitRank: rank 6 nranks 8 total 0.29 (kernels 0.18, alloc 0.05, bootstrap 0.02, allgathers 0.00, topo 0.02, graphs 0.00, connections 0.00, rest 0.00)
+mibura-sky-test-02:2491978:2492026 [2] NCCL INFO Channel 00 : 2[2] -> 3[3] via SHM/direct/direct
+mibura-sky-test-02:2491978:2492026 [2] NCCL INFO Channel 01 : 2[2] -> 3[3] via SHM/direct/direct
+mibura-sky-test-01:1902848:1902895 [2] NCCL INFO Channel 00 : 6[2] -> 7[3] via SHM/direct/direct
+mibura-sky-test-01:1902848:1902895 [2] NCCL INFO Channel 01 : 6[2] -> 7[3] via SHM/direct/direct
+mibura-sky-test-02:2491977:2492027 [1] NCCL INFO Channel 00 : 1[1] -> 2[2] via SHM/direct/direct
+mibura-sky-test-02:2491977:2492027 [1] NCCL INFO Channel 01 : 1[1] -> 2[2] via SHM/direct/direct
+mibura-sky-test-01:1902847:1902892 [1] NCCL INFO Channel 00 : 5[1] -> 6[2] via SHM/direct/direct
+mibura-sky-test-01:1902847:1902892 [1] NCCL INFO Channel 01 : 5[1] -> 6[2] via SHM/direct/direct
+mibura-sky-test-01:1902847:1902896 [0] NCCL INFO [Proxy Progress] Device 0 CPU core 2
+mibura-sky-test-02:2491977:2492029 [0] NCCL INFO [Proxy Progress] Device 0 CPU core 46
+mibura-sky-test-01:1902847:1902894 [0] NCCL INFO Channel 00/0 : 3[3] -> 4[0] [receive] via NET/IB/0
+mibura-sky-test-02:2491977:2492028 [0] NCCL INFO Channel 00/0 : 7[3] -> 0[0] [receive] via NET/IB/0
+mibura-sky-test-02:2491977:2492028 [0] NCCL INFO Channel 01/0 : 7[3] -> 0[0] [receive] via NET/IB/0
+mibura-sky-test-01:1902847:1902894 [0] NCCL INFO Channel 01/0 : 3[3] -> 4[0] [receive] via NET/IB/0
+mibura-sky-test-02:2491977:2492028 [0] NCCL INFO Channel 00 : 0[0] -> 1[1] via SHM/direct/direct
+mibura-sky-test-01:1902847:1902894 [0] NCCL INFO Channel 00 : 4[0] -> 5[1] via SHM/direct/direct
+mibura-sky-test-02:2491977:2492028 [0] NCCL INFO Channel 01 : 0[0] -> 1[1] via SHM/direct/direct
+mibura-sky-test-01:1902847:1902894 [0] NCCL INFO Channel 01 : 4[0] -> 5[1] via SHM/direct/direct
+mibura-sky-test-02:2491978:2492030 [0] NCCL INFO [Proxy Progress] Device 3 CPU core 39
+mibura-sky-test-02:2491978:2492025 [3] NCCL INFO Channel 00/0 : 3[3] -> 4[0] [send] via NET/IB/0
+mibura-sky-test-02:2491978:2492025 [3] NCCL INFO Channel 01/0 : 3[3] -> 4[0] [send] via NET/IB/0
+mibura-sky-test-01:1902848:1902897 [0] NCCL INFO [Proxy Progress] Device 3 CPU core 41
+mibura-sky-test-01:1902848:1902893 [3] NCCL INFO Channel 00/0 : 7[3] -> 0[0] [send] via NET/IB/0
+mibura-sky-test-01:1902848:1902893 [3] NCCL INFO Channel 01/0 : 7[3] -> 0[0] [send] via NET/IB/0
+mibura-sky-test-02:2491978:2492025 [3] NCCL INFO Connected all rings, use ring PXN 0 GDR 0
+mibura-sky-test-02:2491978:2492026 [2] NCCL INFO Connected all rings, use ring PXN 0 GDR 0
+mibura-sky-test-02:2491977:2492028 [0] NCCL INFO Connected all rings, use ring PXN 0 GDR 0
+mibura-sky-test-02:2491977:2492027 [1] NCCL INFO Connected all rings, use ring PXN 0 GDR 0
+mibura-sky-test-01:1902848:1902893 [3] NCCL INFO Connected all rings, use ring PXN 0 GDR 0
+mibura-sky-test-01:1902847:1902892 [1] NCCL INFO Connected all rings, use ring PXN 0 GDR 0
+mibura-sky-test-01:1902847:1902894 [0] NCCL INFO Connected all rings, use ring PXN 0 GDR 0
+mibura-sky-test-01:1902848:1902895 [2] NCCL INFO Connected all rings, use ring PXN 0 GDR 0
+nccl,warmup,1,1024,74307.636,0
+nccl,warmup,2,1024,74.420,0
+nccl,warmup,3,1024,43.468,0
+nccl,warmup,4,1024,42.712,0
+nccl,warmup,5,1024,39.643,0
+nccl,warmup,6,1024,42.170,0
+nccl,warmup,7,1024,47.493,0
+nccl,warmup,8,1024,42.368,0
+nccl,warmup,9,1024,41.939,0
+nccl,warmup,10,1024,43.359,0
+nccl,warmup,11,1024,41.254,0
+nccl,warmup,12,1024,45.162,0
+nccl,warmup,13,1024,43.344,0
+nccl,warmup,14,1024,42.533,0
+nccl,warmup,15,1024,41.208,0
+nccl,warmup,16,1024,40.076,0
+nccl,warmup,17,1024,39.484,0
+nccl,warmup,18,1024,41.807,0
+nccl,warmup,19,1024,40.241,0
+nccl,warmup,20,1024,39.300,0
+nccl,timed,1,1024,42.485,0
+nccl,timed,2,1024,42.730,0
+nccl,timed,3,1024,41.161,0
+nccl,timed,4,1024,40.988,0
+nccl,timed,5,1024,39.194,0
+nccl,timed,6,1024,42.632,0
+nccl,timed,7,1024,40.905,0
+nccl,timed,8,1024,44.245,0
+nccl,timed,9,1024,40.153,0
+nccl,timed,10,1024,42.786,0
+nccl,timed,11,1024,40.736,0
+nccl,timed,12,1024,40.133,0
+nccl,timed,13,1024,42.660,0
+nccl,timed,14,1024,42.554,0
+nccl,timed,15,1024,41.440,0
+nccl,timed,16,1024,44.820,0
+nccl,timed,17,1024,40.362,0
+nccl,timed,18,1024,39.192,0
+nccl,timed,19,1024,42.082,0
+nccl,timed,20,1024,39.657,0
+nccl,timed,21,1024,40.439,0
+nccl,timed,22,1024,40.722,0
+nccl,timed,23,1024,39.600,0
+nccl,timed,24,1024,39.122,0
+nccl,timed,25,1024,41.588,0
+nccl,timed,26,1024,41.547,0
+nccl,timed,27,1024,39.867,0
+nccl,timed,28,1024,41.058,0
+nccl,timed,29,1024,39.168,0
+nccl,timed,30,1024,41.205,0
+nccl,timed,31,1024,41.093,0
+nccl,timed,32,1024,39.638,0
+nccl,timed,33,1024,41.331,0
+nccl,timed,34,1024,41.900,0
+nccl,timed,35,1024,39.154,0
+nccl,timed,36,1024,41.929,0
+nccl,timed,37,1024,43.600,0
+nccl,timed,38,1024,40.041,0
+nccl,timed,39,1024,39.237,0
+nccl,timed,40,1024,40.229,0
+nccl,timed,41,1024,40.645,0
+nccl,timed,42,1024,40.311,0
+nccl,timed,43,1024,40.484,0
+nccl,timed,44,1024,39.203,0
+nccl,timed,45,1024,39.434,0
+nccl,timed,46,1024,41.756,0
+nccl,timed,47,1024,39.584,0
+nccl,timed,48,1024,39.437,0
+nccl,timed,49,1024,39.902,0
+nccl,timed,50,1024,38.852,0
+# mean,allgather,1024,40.860
+nccl,warmup,1,2048,50.745,0
+nccl,warmup,2,2048,41.943,0
+nccl,warmup,3,2048,44.081,0
+nccl,warmup,4,2048,41.192,0
+nccl,warmup,5,2048,43.366,0
+nccl,warmup,6,2048,40.799,0
+nccl,warmup,7,2048,39.964,0
+nccl,warmup,8,2048,47.099,0
+nccl,warmup,9,2048,42.115,0
+nccl,warmup,10,2048,39.951,0
+nccl,warmup,11,2048,42.787,0
+nccl,warmup,12,2048,41.879,0
+nccl,warmup,13,2048,41.284,0
+nccl,warmup,14,2048,40.780,0
+nccl,warmup,15,2048,40.016,0
+nccl,warmup,16,2048,40.712,0
+nccl,warmup,17,2048,42.519,0
+nccl,warmup,18,2048,40.342,0
+nccl,warmup,19,2048,49.562,0
+nccl,warmup,20,2048,42.570,0
+nccl,timed,1,2048,41.540,0
+nccl,timed,2,2048,41.491,0
+nccl,timed,3,2048,41.801,0
+nccl,timed,4,2048,40.696,0
+nccl,timed,5,2048,43.072,0
+nccl,timed,6,2048,44.293,0
+nccl,timed,7,2048,42.408,0
+nccl,timed,8,2048,42.969,0
+nccl,timed,9,2048,49.726,0
+nccl,timed,10,2048,44.992,0
+nccl,timed,11,2048,42.629,0
+nccl,timed,12,2048,45.451,0
+nccl,timed,13,2048,41.594,0
+nccl,timed,14,2048,44.596,0
+nccl,timed,15,2048,43.402,0
+nccl,timed,16,2048,47.425,0
+nccl,timed,17,2048,43.339,0
+nccl,timed,18,2048,44.272,0
+nccl,timed,19,2048,53.979,0
+nccl,timed,20,2048,44.215,0
+nccl,timed,21,2048,44.954,0
+nccl,timed,22,2048,43.219,0
+nccl,timed,23,2048,43.669,0
+nccl,timed,24,2048,44.827,0
+nccl,timed,25,2048,42.875,0
+nccl,timed,26,2048,42.196,0
+nccl,timed,27,2048,44.415,0
+nccl,timed,28,2048,42.668,0
+nccl,timed,29,2048,44.919,0
+nccl,timed,30,2048,44.389,0
+nccl,timed,31,2048,42.499,0
+nccl,timed,32,2048,42.868,0
+nccl,timed,33,2048,44.115,0
+nccl,timed,34,2048,46.925,0
+nccl,timed,35,2048,43.162,0
+nccl,timed,36,2048,45.019,0
+nccl,timed,37,2048,41.696,0
+nccl,timed,38,2048,46.244,0
+nccl,timed,39,2048,44.092,0
+nccl,timed,40,2048,43.306,0
+nccl,timed,41,2048,43.406,0
+nccl,timed,42,2048,44.378,0
+nccl,timed,43,2048,46.654,0
+nccl,timed,44,2048,42.200,0
+nccl,timed,45,2048,49.178,0
+nccl,timed,46,2048,42.768,0
+nccl,timed,47,2048,42.484,0
+nccl,timed,48,2048,45.261,0
+nccl,timed,49,2048,43.589,0
+nccl,timed,50,2048,42.101,0
+# mean,allgather,2048,44.079
+nccl,warmup,1,4096,54.184,0
+nccl,warmup,2,4096,47.116,0
+nccl,warmup,3,4096,42.929,0
+nccl,warmup,4,4096,44.984,0
+nccl,warmup,5,4096,44.195,0
+nccl,warmup,6,4096,47.056,0
+nccl,warmup,7,4096,50.177,0
+nccl,warmup,8,4096,43.633,0
+nccl,warmup,9,4096,41.771,0
+nccl,warmup,10,4096,43.324,0
+nccl,warmup,11,4096,42.743,0
+nccl,warmup,12,4096,42.745,0
+nccl,warmup,13,4096,44.324,0
+nccl,warmup,14,4096,42.673,0
+nccl,warmup,15,4096,41.979,0
+nccl,warmup,16,4096,45.709,0
+nccl,warmup,17,4096,41.995,0
+nccl,warmup,18,4096,41.477,0
+nccl,warmup,19,4096,47.478,0
+nccl,warmup,20,4096,42.809,0
+nccl,timed,1,4096,42.290,0
+nccl,timed,2,4096,44.153,0
+nccl,timed,3,4096,41.764,0
+nccl,timed,4,4096,42.477,0
+nccl,timed,5,4096,42.831,0
+nccl,timed,6,4096,43.281,0
+nccl,timed,7,4096,41.959,0
+nccl,timed,8,4096,43.211,0
+nccl,timed,9,4096,42.981,0
+nccl,timed,10,4096,47.096,0
+nccl,timed,11,4096,43.600,0
+nccl,timed,12,4096,41.874,0
+nccl,timed,13,4096,41.201,0
+nccl,timed,14,4096,43.125,0
+nccl,timed,15,4096,42.369,0
+nccl,timed,16,4096,43.383,0
+nccl,timed,17,4096,46.553,0
+nccl,timed,18,4096,42.161,0
+nccl,timed,19,4096,41.989,0
+nccl,timed,20,4096,46.900,0
+nccl,timed,21,4096,40.755,0
+nccl,timed,22,4096,42.394,0
+nccl,timed,23,4096,43.381,0
+nccl,timed,24,4096,42.464,0
+nccl,timed,25,4096,41.511,0
+nccl,timed,26,4096,43.728,0
+nccl,timed,27,4096,42.582,0
+nccl,timed,28,4096,42.492,0
+nccl,timed,29,4096,42.488,0
+nccl,timed,30,4096,42.384,0
+nccl,timed,31,4096,41.839,0
+nccl,timed,32,4096,43.568,0
+nccl,timed,33,4096,42.587,0
+nccl,timed,34,4096,40.689,0
+nccl,timed,35,4096,44.973,0
+nccl,timed,36,4096,41.985,0
+nccl,timed,37,4096,42.489,0
+nccl,timed,38,4096,42.308,0
+nccl,timed,39,4096,41.115,0
+nccl,timed,40,4096,41.462,0
+nccl,timed,41,4096,41.901,0
+nccl,timed,42,4096,41.839,0
+nccl,timed,43,4096,43.764,0
+nccl,timed,44,4096,41.660,0
+nccl,timed,45,4096,41.662,0
+nccl,timed,46,4096,42.072,0
+nccl,timed,47,4096,41.821,0
+nccl,timed,48,4096,43.458,0
+nccl,timed,49,4096,42.748,0
+nccl,timed,50,4096,47.938,0
+# mean,allgather,4096,42.825
+nccl,warmup,1,8192,50.640,0
+nccl,warmup,2,8192,45.942,0
+nccl,warmup,3,8192,45.310,0
+nccl,warmup,4,8192,44.395,0
+nccl,warmup,5,8192,44.708,0
+nccl,warmup,6,8192,45.130,0
+nccl,warmup,7,8192,43.629,0
+nccl,warmup,8,8192,42.067,0
+nccl,warmup,9,8192,43.963,0
+nccl,warmup,10,8192,46.828,0
+nccl,warmup,11,8192,43.376,0
+nccl,warmup,12,8192,49.985,0
+nccl,warmup,13,8192,43.727,0
+nccl,warmup,14,8192,44.610,0
+nccl,warmup,15,8192,42.808,0
+nccl,warmup,16,8192,44.131,0
+nccl,warmup,17,8192,42.917,0
+nccl,warmup,18,8192,41.889,0
+nccl,warmup,19,8192,42.823,0
+nccl,warmup,20,8192,44.314,0
+nccl,timed,1,8192,43.133,0
+nccl,timed,2,8192,47.474,0
+nccl,timed,3,8192,42.639,0
+nccl,timed,4,8192,49.490,0
+nccl,timed,5,8192,44.865,0
+nccl,timed,6,8192,43.690,0
+nccl,timed,7,8192,43.016,0
+nccl,timed,8,8192,43.364,0
+nccl,timed,9,8192,42.209,0
+nccl,timed,10,8192,43.677,0
+nccl,timed,11,8192,43.357,0
+nccl,timed,12,8192,43.834,0
+nccl,timed,13,8192,45.011,0
+nccl,timed,14,8192,42.376,0
+nccl,timed,15,8192,45.736,0
+nccl,timed,16,8192,44.900,0
+nccl,timed,17,8192,44.365,0
+nccl,timed,18,8192,44.471,0
+nccl,timed,19,8192,43.209,0
+nccl,timed,20,8192,46.471,0
+nccl,timed,21,8192,43.574,0
+nccl,timed,22,8192,42.991,0
+nccl,timed,23,8192,42.898,0
+nccl,timed,24,8192,45.034,0
+nccl,timed,25,8192,47.223,0
+nccl,timed,26,8192,44.198,0
+nccl,timed,27,8192,44.552,0
+nccl,timed,28,8192,43.797,0
+nccl,timed,29,8192,43.830,0
+nccl,timed,30,8192,49.332,0
+nccl,timed,31,8192,42.641,0
+nccl,timed,32,8192,42.669,0
+nccl,timed,33,8192,41.716,0
+nccl,timed,34,8192,43.910,0
+nccl,timed,35,8192,50.743,0
+nccl,timed,36,8192,43.421,0
+nccl,timed,37,8192,42.095,0
+nccl,timed,38,8192,42.092,0
+nccl,timed,39,8192,42.491,0
+nccl,timed,40,8192,42.658,0
+nccl,timed,41,8192,48.102,0
+nccl,timed,42,8192,43.646,0
+nccl,timed,43,8192,42.204,0
+nccl,timed,44,8192,41.993,0
+nccl,timed,45,8192,43.812,0
+nccl,timed,46,8192,43.477,0
+nccl,timed,47,8192,45.822,0
+nccl,timed,48,8192,43.199,0
+nccl,timed,49,8192,43.271,0
+nccl,timed,50,8192,42.875,0
+# mean,allgather,8192,44.151
+nccl,warmup,1,16384,51.668,0
+nccl,warmup,2,16384,45.765,0
+nccl,warmup,3,16384,50.948,0
+nccl,warmup,4,16384,44.932,0
+nccl,warmup,5,16384,49.012,0
+nccl,warmup,6,16384,45.430,0
+nccl,warmup,7,16384,46.446,0
+nccl,warmup,8,16384,44.910,0
+nccl,warmup,9,16384,43.837,0
+nccl,warmup,10,16384,49.876,0
+nccl,warmup,11,16384,47.049,0
+nccl,warmup,12,16384,47.313,0
+nccl,warmup,13,16384,47.868,0
+nccl,warmup,14,16384,52.399,0
+nccl,warmup,15,16384,52.244,0
+nccl,warmup,16,16384,46.177,0
+nccl,warmup,17,16384,45.780,0
+nccl,warmup,18,16384,44.854,0
+nccl,warmup,19,16384,46.398,0
+nccl,warmup,20,16384,49.172,0
+nccl,timed,1,16384,48.921,0
+nccl,timed,2,16384,48.411,0
+nccl,timed,3,16384,46.826,0
+nccl,timed,4,16384,46.747,0
+nccl,timed,5,16384,48.689,0
+nccl,timed,6,16384,46.660,0
+nccl,timed,7,16384,46.406,0
+nccl,timed,8,16384,45.758,0
+nccl,timed,9,16384,46.707,0
+nccl,timed,10,16384,53.486,0
+nccl,timed,11,16384,45.692,0
+nccl,timed,12,16384,45.279,0
+nccl,timed,13,16384,46.131,0
+nccl,timed,14,16384,45.598,0
+nccl,timed,15,16384,47.064,0
+nccl,timed,16,16384,46.440,0
+nccl,timed,17,16384,44.321,0
+nccl,timed,18,16384,47.954,0
+nccl,timed,19,16384,46.691,0
+nccl,timed,20,16384,46.575,0
+nccl,timed,21,16384,44.442,0
+nccl,timed,22,16384,45.202,0
+nccl,timed,23,16384,45.262,0
+nccl,timed,24,16384,45.449,0
+nccl,timed,25,16384,45.193,0
+nccl,timed,26,16384,45.144,0
+nccl,timed,27,16384,46.927,0
+nccl,timed,28,16384,45.959,0
+nccl,timed,29,16384,45.820,0
+nccl,timed,30,16384,44.702,0
+nccl,timed,31,16384,46.540,0
+nccl,timed,32,16384,45.245,0
+nccl,timed,33,16384,45.392,0
+nccl,timed,34,16384,45.154,0
+nccl,timed,35,16384,45.463,0
+nccl,timed,36,16384,48.159,0
+nccl,timed,37,16384,46.064,0
+nccl,timed,38,16384,45.217,0
+nccl,timed,39,16384,45.807,0
+nccl,timed,40,16384,45.062,0
+nccl,timed,41,16384,46.041,0
+nccl,timed,42,16384,45.549,0
+nccl,timed,43,16384,44.532,0
+nccl,timed,44,16384,47.206,0
+nccl,timed,45,16384,45.378,0
+nccl,timed,46,16384,47.353,0
+nccl,timed,47,16384,45.710,0
+nccl,timed,48,16384,43.918,0
+nccl,timed,49,16384,45.321,0
+nccl,timed,50,16384,45.836,0
+# mean,allgather,16384,46.188
+nccl,warmup,1,32768,57.093,0
+nccl,warmup,2,32768,49.501,0
+nccl,warmup,3,32768,49.627,0
+nccl,warmup,4,32768,57.124,0
+nccl,warmup,5,32768,49.244,0
+nccl,warmup,6,32768,50.325,0
+nccl,warmup,7,32768,49.282,0
+nccl,warmup,8,32768,49.729,0
+nccl,warmup,9,32768,49.134,0
+nccl,warmup,10,32768,48.961,0
+nccl,warmup,11,32768,49.960,0
+nccl,warmup,12,32768,49.012,0
+nccl,warmup,13,32768,50.056,0
+nccl,warmup,14,32768,49.519,0
+nccl,warmup,15,32768,54.710,0
+nccl,warmup,16,32768,49.473,0
+nccl,warmup,17,32768,49.033,0
+nccl,warmup,18,32768,49.123,0
+nccl,warmup,19,32768,49.232,0
+nccl,warmup,20,32768,49.833,0
+nccl,timed,1,32768,52.159,0
+nccl,timed,2,32768,51.020,0
+nccl,timed,3,32768,48.825,0
+nccl,timed,4,32768,48.886,0
+nccl,timed,5,32768,47.947,0
+nccl,timed,6,32768,49.151,0
+nccl,timed,7,32768,49.739,0
+nccl,timed,8,32768,49.693,0
+nccl,timed,9,32768,49.072,0
+nccl,timed,10,32768,48.934,0
+nccl,timed,11,32768,49.492,0
+nccl,timed,12,32768,50.511,0
+nccl,timed,13,32768,48.424,0
+nccl,timed,14,32768,49.241,0
+nccl,timed,15,32768,49.248,0
+nccl,timed,16,32768,48.640,0
+nccl,timed,17,32768,49.228,0
+nccl,timed,18,32768,48.010,0
+nccl,timed,19,32768,53.149,0
+nccl,timed,20,32768,48.788,0
+nccl,timed,21,32768,49.735,0
+nccl,timed,22,32768,51.073,0
+nccl,timed,23,32768,50.758,0
+nccl,timed,24,32768,49.165,0
+nccl,timed,25,32768,53.273,0
+nccl,timed,26,32768,49.843,0
+nccl,timed,27,32768,48.992,0
+nccl,timed,28,32768,48.980,0
+nccl,timed,29,32768,49.218,0
+nccl,timed,30,32768,48.813,0
+nccl,timed,31,32768,49.631,0
+nccl,timed,32,32768,51.565,0
+nccl,timed,33,32768,50.256,0
+nccl,timed,34,32768,48.631,0
+nccl,timed,35,32768,51.911,0
+nccl,timed,36,32768,49.347,0
+nccl,timed,37,32768,53.830,0
+nccl,timed,38,32768,50.210,0
+nccl,timed,39,32768,49.224,0
+nccl,timed,40,32768,53.504,0
+nccl,timed,41,32768,50.460,0
+nccl,timed,42,32768,50.782,0
+nccl,timed,43,32768,51.915,0
+nccl,timed,44,32768,49.879,0
+nccl,timed,45,32768,50.337,0
+nccl,timed,46,32768,49.063,0
+nccl,timed,47,32768,48.350,0
+nccl,timed,48,32768,48.881,0
+nccl,timed,49,32768,57.296,0
+nccl,timed,50,32768,50.985,0
+# mean,allgather,32768,50.121
+nccl,warmup,1,65536,67.773,0
+nccl,warmup,2,65536,57.081,0
+nccl,warmup,3,65536,54.954,0
+nccl,warmup,4,65536,60.241,0
+nccl,warmup,5,65536,55.570,0
+nccl,warmup,6,65536,55.594,0
+nccl,warmup,7,65536,55.166,0
+nccl,warmup,8,65536,61.321,0
+nccl,warmup,9,65536,55.742,0
+nccl,warmup,10,65536,56.335,0
+nccl,warmup,11,65536,56.431,0
+nccl,warmup,12,65536,56.053,0
+nccl,warmup,13,65536,55.252,0
+nccl,warmup,14,65536,56.139,0
+nccl,warmup,15,65536,55.430,0
+nccl,warmup,16,65536,55.860,0
+nccl,warmup,17,65536,56.150,0
+nccl,warmup,18,65536,53.285,0
+nccl,warmup,19,65536,59.679,0
+nccl,warmup,20,65536,55.634,0
+nccl,timed,1,65536,56.033,0
+nccl,timed,2,65536,53.543,0
+nccl,timed,3,65536,53.436,0
+nccl,timed,4,65536,56.381,0
+nccl,timed,5,65536,54.002,0
+nccl,timed,6,65536,55.650,0
+nccl,timed,7,65536,55.539,0
+nccl,timed,8,65536,55.212,0
+nccl,timed,9,65536,57.236,0
+nccl,timed,10,65536,54.669,0
+nccl,timed,11,65536,57.489,0
+nccl,timed,12,65536,56.419,0
+nccl,timed,13,65536,58.046,0
+nccl,timed,14,65536,57.390,0
+nccl,timed,15,65536,57.262,0
+nccl,timed,16,65536,56.580,0
+nccl,timed,17,65536,55.967,0
+nccl,timed,18,65536,59.804,0
+nccl,timed,19,65536,57.864,0
+nccl,timed,20,65536,56.639,0
+nccl,timed,21,65536,56.935,0
+nccl,timed,22,65536,56.445,0
+nccl,timed,23,65536,56.583,0
+nccl,timed,24,65536,56.969,0
+nccl,timed,25,65536,55.220,0
+nccl,timed,26,65536,57.136,0
+nccl,timed,27,65536,60.980,0
+nccl,timed,28,65536,55.780,0
+nccl,timed,29,65536,59.831,0
+nccl,timed,30,65536,56.431,0
+nccl,timed,31,65536,57.145,0
+nccl,timed,32,65536,59.651,0
+nccl,timed,33,65536,56.786,0
+nccl,timed,34,65536,55.912,0
+nccl,timed,35,65536,56.991,0
+nccl,timed,36,65536,57.621,0
+nccl,timed,37,65536,56.856,0
+nccl,timed,38,65536,57.437,0
+nccl,timed,39,65536,55.777,0
+nccl,timed,40,65536,55.769,0
+nccl,timed,41,65536,56.457,0
+nccl,timed,42,65536,56.215,0
+nccl,timed,43,65536,56.102,0
+nccl,timed,44,65536,58.946,0
+nccl,timed,45,65536,56.408,0
+nccl,timed,46,65536,58.246,0
+nccl,timed,47,65536,56.599,0
+nccl,timed,48,65536,55.281,0
+nccl,timed,49,65536,60.217,0
+nccl,timed,50,65536,56.416,0
+# mean,allgather,65536,56.766
+nccl,warmup,1,131072,82.546,0
+nccl,warmup,2,131072,182.646,0
+nccl,warmup,3,131072,144.757,0
+nccl,warmup,4,131072,80.661,0
+nccl,warmup,5,131072,77.615,0
+nccl,warmup,6,131072,78.331,0
+nccl,warmup,7,131072,124.256,0
+nccl,warmup,8,131072,178.028,0
+nccl,warmup,9,131072,490.990,0
+nccl,warmup,10,131072,79.103,0
+nccl,warmup,11,131072,139.621,0
+nccl,warmup,12,131072,81.980,0
+nccl,warmup,13,131072,81.353,0
+nccl,warmup,14,131072,78.144,0
+nccl,warmup,15,131072,171.594,0
+nccl,warmup,16,131072,77.879,0
+nccl,warmup,17,131072,396.551,0
+nccl,warmup,18,131072,78.479,0
+nccl,warmup,19,131072,78.625,0
+nccl,warmup,20,131072,78.902,0
+nccl,timed,1,131072,85.730,0
+nccl,timed,2,131072,79.751,0
+nccl,timed,3,131072,103.308,0
+nccl,timed,4,131072,80.527,0
+nccl,timed,5,131072,81.409,0
+nccl,timed,6,131072,217.076,0
+nccl,timed,7,131072,80.674,0
+nccl,timed,8,131072,293.359,0
+nccl,timed,9,131072,80.993,0
+nccl,timed,10,131072,81.917,0
+nccl,timed,11,131072,79.384,0
+nccl,timed,12,131072,86.065,0
+nccl,timed,13,131072,79.542,0
+nccl,timed,14,131072,152.405,0
+nccl,timed,15,131072,88.646,0
+nccl,timed,16,131072,79.280,0
+nccl,timed,17,131072,78.766,0
+nccl,timed,18,131072,82.387,0
+nccl,timed,19,131072,81.971,0
+nccl,timed,20,131072,78.531,0
+nccl,timed,21,131072,132.311,0
+nccl,timed,22,131072,118.289,0
+nccl,timed,23,131072,87.813,0
+nccl,timed,24,131072,79.816,0
+nccl,timed,25,131072,81.330,0
+nccl,timed,26,131072,339.276,0
+nccl,timed,27,131072,84.492,0
+nccl,timed,28,131072,156.096,0
+nccl,timed,29,131072,152.325,0
+nccl,timed,30,131072,79.229,0
+nccl,timed,31,131072,81.046,0
+nccl,timed,32,131072,79.340,0
+nccl,timed,33,131072,77.928,0
+nccl,timed,34,131072,82.036,0
+nccl,timed,35,131072,125.097,0
+nccl,timed,36,131072,98.425,0
+nccl,timed,37,131072,78.297,0
+nccl,timed,38,131072,78.599,0
+nccl,timed,39,131072,77.301,0
+nccl,timed,40,131072,77.421,0
+nccl,timed,41,131072,78.178,0
+nccl,timed,42,131072,81.077,0
+nccl,timed,43,131072,139.121,0
+nccl,timed,44,131072,78.311,0
+nccl,timed,45,131072,309.768,0
+nccl,timed,46,131072,78.873,0
+nccl,timed,47,131072,82.186,0
+nccl,timed,48,131072,81.757,0
+nccl,timed,49,131072,86.830,0
+nccl,timed,50,131072,84.438,0
+# mean,allgather,131072,106.775
+nccl,warmup,1,262144,1137.153,0
+nccl,warmup,2,262144,947.723,0
+nccl,warmup,3,262144,996.080,0
+nccl,warmup,4,262144,1105.014,0
+nccl,warmup,5,262144,998.390,0
+nccl,warmup,6,262144,754.303,0
+nccl,warmup,7,262144,974.646,0
+nccl,warmup,8,262144,921.312,0
+nccl,warmup,9,262144,991.751,0
+nccl,warmup,10,262144,942.215,0
+nccl,warmup,11,262144,952.563,0
+nccl,warmup,12,262144,900.432,0
+nccl,warmup,13,262144,862.898,0
+nccl,warmup,14,262144,992.796,0
+nccl,warmup,15,262144,827.091,0
+nccl,warmup,16,262144,888.004,0
+nccl,warmup,17,262144,764.911,0
+nccl,warmup,18,262144,947.658,0
+nccl,warmup,19,262144,959.363,0
+nccl,warmup,20,262144,926.326,0
+nccl,timed,1,262144,864.481,0
+nccl,timed,2,262144,944.397,0
+nccl,timed,3,262144,937.548,0
+nccl,timed,4,262144,966.720,0
+nccl,timed,5,262144,831.318,0
+nccl,timed,6,262144,839.026,0
+nccl,timed,7,262144,731.426,0
+nccl,timed,8,262144,852.891,0
+nccl,timed,9,262144,761.760,0
+nccl,timed,10,262144,309.348,0
+nccl,timed,11,262144,700.977,0
+nccl,timed,12,262144,937.688,0
+nccl,timed,13,262144,210.933,0
+nccl,timed,14,262144,844.680,0
+nccl,timed,15,262144,858.443,0
+nccl,timed,16,262144,596.778,0
+nccl,timed,17,262144,773.720,0
+nccl,timed,18,262144,800.439,0
+nccl,timed,19,262144,859.017,0
+nccl,timed,20,262144,861.360,0
+nccl,timed,21,262144,756.989,0
+nccl,timed,22,262144,842.746,0
+nccl,timed,23,262144,742.375,0
+nccl,timed,24,262144,803.893,0
+nccl,timed,25,262144,881.860,0
+nccl,timed,26,262144,905.351,0
+nccl,timed,27,262144,590.307,0
+nccl,timed,28,262144,856.915,0
+nccl,timed,29,262144,305.432,0
+nccl,timed,30,262144,742.576,0
+nccl,timed,31,262144,832.261,0
+nccl,timed,32,262144,886.733,0
+nccl,timed,33,262144,829.147,0
+nccl,timed,34,262144,262.840,0
+nccl,timed,35,262144,766.737,0
+nccl,timed,36,262144,828.000,0
+nccl,timed,37,262144,700.963,0
+nccl,timed,38,262144,316.150,0
+nccl,timed,39,262144,795.168,0
+nccl,timed,40,262144,627.404,0
+nccl,timed,41,262144,838.885,0
+nccl,timed,42,262144,287.891,0
+nccl,timed,43,262144,679.033,0
+nccl,timed,44,262144,778.010,0
+nccl,timed,45,262144,781.946,0
+nccl,timed,46,262144,667.903,0
+nccl,timed,47,262144,226.572,0
+nccl,timed,48,262144,778.675,0
+nccl,timed,49,262144,861.625,0
+nccl,timed,50,262144,832.535,0
+# mean,allgather,262144,729.797
+nccl,warmup,1,524288,2774.056,0
+nccl,warmup,2,524288,2588.883,0
+nccl,warmup,3,524288,2506.358,0
+nccl,warmup,4,524288,2423.259,0
+nccl,warmup,5,524288,2503.017,0
+nccl,warmup,6,524288,1806.187,0
+nccl,warmup,7,524288,2473.539,0
+nccl,warmup,8,524288,2438.687,0
+nccl,warmup,9,524288,2381.865,0
+nccl,warmup,10,524288,2262.872,0
+nccl,warmup,11,524288,2329.326,0
+nccl,warmup,12,524288,1882.443,0
+nccl,warmup,13,524288,2244.263,0
+nccl,warmup,14,524288,2345.440,0
+nccl,warmup,15,524288,2371.877,0
+nccl,warmup,16,524288,2364.612,0
+nccl,warmup,17,524288,3456.547,0
+nccl,warmup,18,524288,1886.970,0
+nccl,warmup,19,524288,1831.208,0
+nccl,warmup,20,524288,2213.163,0
+nccl,timed,1,524288,1826.706,0
+nccl,timed,2,524288,2328.026,0
+nccl,timed,3,524288,2328.844,0
+nccl,timed,4,524288,2323.551,0
+nccl,timed,5,524288,2362.354,0
+nccl,timed,6,524288,2183.469,0
+nccl,timed,7,524288,2251.410,0
+nccl,timed,8,524288,2311.262,0
+nccl,timed,9,524288,2225.576,0
+nccl,timed,10,524288,2338.015,0
+nccl,timed,11,524288,2216.030,0
+nccl,timed,12,524288,2237.028,0
+nccl,timed,13,524288,2190.191,0
+nccl,timed,14,524288,2246.055,0
+nccl,timed,15,524288,2273.089,0
+nccl,timed,16,524288,2014.149,0
+nccl,timed,17,524288,2341.727,0
+nccl,timed,18,524288,1914.881,0
+nccl,timed,19,524288,2044.685,0
+nccl,timed,20,524288,2275.514,0
+nccl,timed,21,524288,2071.305,0
+nccl,timed,22,524288,1838.575,0
+nccl,timed,23,524288,2193.990,0
+nccl,timed,24,524288,1586.690,0
+nccl,timed,25,524288,2262.705,0
+nccl,timed,26,524288,4493.012,0
+nccl,timed,27,524288,2438.953,0
+nccl,timed,28,524288,2049.204,0
+nccl,timed,29,524288,2130.759,0
+nccl,timed,30,524288,1982.178,0
+nccl,timed,31,524288,1860.026,0
+nccl,timed,32,524288,1859.314,0
+nccl,timed,33,524288,2265.261,0
+nccl,timed,34,524288,2163.614,0
+nccl,timed,35,524288,2224.309,0
+nccl,timed,36,524288,2181.921,0
+nccl,timed,37,524288,2277.228,0
+nccl,timed,38,524288,2246.257,0
+nccl,timed,39,524288,1864.373,0
+nccl,timed,40,524288,2096.134,0
+nccl,timed,41,524288,2132.941,0
+nccl,timed,42,524288,1893.330,0
+nccl,timed,43,524288,2097.358,0
+nccl,timed,44,524288,1962.445,0
+nccl,timed,45,524288,2078.066,0
+nccl,timed,46,524288,2108.472,0
+nccl,timed,47,524288,2118.598,0
+nccl,timed,48,524288,1856.922,0
+nccl,timed,49,524288,1563.749,0
+nccl,timed,50,524288,2004.309,0
+# mean,allgather,524288,2162.691
+nccl,warmup,1,1048576,162.452,0
+nccl,warmup,2,1048576,139.699,0
+nccl,warmup,3,1048576,139.222,0
+nccl,warmup,4,1048576,145.368,0
+nccl,warmup,5,1048576,140.106,0
+nccl,warmup,6,1048576,143.162,0
+nccl,warmup,7,1048576,141.770,0
+nccl,warmup,8,1048576,141.032,0
+nccl,warmup,9,1048576,141.864,0
+nccl,warmup,10,1048576,139.668,0
+nccl,warmup,11,1048576,137.403,0
+nccl,warmup,12,1048576,139.380,0
+nccl,warmup,13,1048576,140.157,0
+nccl,warmup,14,1048576,140.966,0
+nccl,warmup,15,1048576,137.974,0
+nccl,warmup,16,1048576,139.694,0
+nccl,warmup,17,1048576,139.590,0
+nccl,warmup,18,1048576,140.301,0
+nccl,warmup,19,1048576,136.901,0
+nccl,warmup,20,1048576,142.104,0
+nccl,timed,1,1048576,141.759,0
+nccl,timed,2,1048576,142.459,0
+nccl,timed,3,1048576,143.742,0
+nccl,timed,4,1048576,140.356,0
+nccl,timed,5,1048576,143.419,0
+nccl,timed,6,1048576,141.224,0
+nccl,timed,7,1048576,136.568,0
+nccl,timed,8,1048576,141.570,0
+nccl,timed,9,1048576,139.796,0
+nccl,timed,10,1048576,138.411,0
+nccl,timed,11,1048576,138.907,0
+nccl,timed,12,1048576,137.282,0
+nccl,timed,13,1048576,143.653,0
+nccl,timed,14,1048576,143.023,0
+nccl,timed,15,1048576,139.217,0
+nccl,timed,16,1048576,138.479,0
+nccl,timed,17,1048576,138.455,0
+nccl,timed,18,1048576,146.972,0
+nccl,timed,19,1048576,140.727,0
+nccl,timed,20,1048576,142.330,0
+nccl,timed,21,1048576,139.314,0
+nccl,timed,22,1048576,137.823,0
+nccl,timed,23,1048576,142.726,0
+nccl,timed,24,1048576,141.751,0
+nccl,timed,25,1048576,141.989,0
+nccl,timed,26,1048576,140.154,0
+nccl,timed,27,1048576,139.814,0
+nccl,timed,28,1048576,145.843,0
+nccl,timed,29,1048576,144.358,0
+nccl,timed,30,1048576,142.756,0
+nccl,timed,31,1048576,138.100,0
+nccl,timed,32,1048576,142.871,0
+nccl,timed,33,1048576,138.948,0
+nccl,timed,34,1048576,139.775,0
+nccl,timed,35,1048576,139.402,0
+nccl,timed,36,1048576,141.260,0
+nccl,timed,37,1048576,138.305,0
+nccl,timed,38,1048576,142.174,0
+nccl,timed,39,1048576,142.276,0
+nccl,timed,40,1048576,145.634,0
+nccl,timed,41,1048576,140.952,0
+nccl,timed,42,1048576,138.133,0
+nccl,timed,43,1048576,139.549,0
+nccl,timed,44,1048576,139.209,0
+nccl,timed,45,1048576,143.231,0
+nccl,timed,46,1048576,140.852,0
+nccl,timed,47,1048576,139.552,0
+nccl,timed,48,1048576,141.163,0
+nccl,timed,49,1048576,138.493,0
+nccl,timed,50,1048576,145.779,0
+# mean,allgather,1048576,141.011
+mibura-sky-test-01:1902847:1902847 [0] NCCL INFO comm 0x5eaa1d813a50 rank 4 nranks 8 cudaDev 0 busId 4a000 - Destroy COMPLETE
+mibura-sky-test-02:2491977:2491977 [0] NCCL INFO comm 0x60368ecc67d0 rank 0 nranks 8 cudaDev 0 busId 4a000 - Destroy COMPLETE
+mibura-sky-test-02:2491978:2491978 [2] NCCL INFO comm 0x5efabd611330 rank 2 nranks 8 cudaDev 2 busId ca000 - Destroy COMPLETE
+mibura-sky-test-01:1902848:1902848 [2] NCCL INFO comm 0x646558588c20 rank 6 nranks 8 cudaDev 2 busId ca000 - Destroy COMPLETE
+mibura-sky-test-02:2491978:2491978 [3] NCCL INFO comm 0x5efabd7225e0 rank 3 nranks 8 cudaDev 3 busId e1000 - Destroy COMPLETE
+mibura-sky-test-01:1902848:1902848 [3] NCCL INFO comm 0x646558699e20 rank 7 nranks 8 cudaDev 3 busId e1000 - Destroy COMPLETE
+mibura-sky-test-01:1902847:1902847 [1] NCCL INFO comm 0x5eaa1d924c50 rank 5 nranks 8 cudaDev 1 busId 61000 - Destroy COMPLETE
+mibura-sky-test-02:2491977:2491977 [1] NCCL INFO comm 0x60368edd7a80 rank 1 nranks 8 cudaDev 1 busId 61000 - Destroy COMPLETE
+mibura-sky-test-01:1902847:1902847 [1] NCCL INFO ENV/Plugin: Closing env plugin ncclEnvDefault
+mibura-sky-test-01:1902848:1902848 [3] NCCL INFO ENV/Plugin: Closing env plugin ncclEnvDefault
+mibura-sky-test-02:2491978:2491978 [3] NCCL INFO ENV/Plugin: Closing env plugin ncclEnvDefault
+mibura-sky-test-02:2491977:2491977 [1] NCCL INFO ENV/Plugin: Closing env plugin ncclEnvDefault
