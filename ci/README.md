@@ -126,6 +126,9 @@ running and then completed, failed, cancelled or skipped, with a run/log link.
 Completion, retries and reruns update that same comment. An initial status-update
 failure is noted separately and does not turn passing CI jobs into a failed test
 result.
+Status labels use ⏳ Queued, 🔄 Running, ✅ Pass, ❌ Failed, ⚠️ Cancelled or
+failed to dispatch, and — Not run. The job results table uses the same outcome
+icons.
 Malformed commands receive usage feedback only after the same permission check;
 non-maintainers remain silent. Forked PRs use the same permission check and exact
 commit; only separate jobs running trusted workflow code can write comments.

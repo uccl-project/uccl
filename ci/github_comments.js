@@ -2,6 +2,21 @@
 const STATUS_MARKER = '\n<!-- uccl-ci-status -->\n';
 const ALLOWED_PERMISSIONS = new Set(['write', 'maintain', 'admin']);
 const USAGE = 'Usage: /run-ci|/run-benchmark <all|cpu|l4|gb10|gh200> [test IDs/globs]';
+const STATUS_LABELS = {
+  queued: '⏳ Queued',
+  running: '🔄 Running',
+  'completed successfully': '✅ Pass',
+  failed: '❌ Failed',
+  'failed to dispatch': '⚠️ Failed to dispatch',
+  cancelled: '⚠️ Cancelled',
+  skipped: '— Not run',
+};
+const RESULT_LABELS = {
+  success: '✅ Pass',
+  failure: '❌ Failed',
+  cancelled: '⚠️ Cancelled',
+  skipped: '— Not run',
+};
 
 function runUrl(context, attempt) {
   const {owner, repo} = context.repo;
@@ -9,15 +24,15 @@ function runUrl(context, attempt) {
 }
 
 function bodyWithStatus(header, status, url, results) {
-  const lines = [header, `**Status: ${status}**`, '', `[Workflow run and logs](${url})`];
+  const lines = [header, `**Status: ${STATUS_LABELS[status] || '❔ Unknown or unclassified'}**`, '', `[Workflow run and logs](${url})`];
   if (results) {
     lines.push('', '| Job | Result |', '|---|---|');
     for (const [id, label] of [['plan', 'Plan'], ['cpu', 'CPU'], ['gpu', 'GPU'], ['status', 'CI status']]) {
-      lines.push(`| ${label} | ${results[id].result} |`);
+      lines.push(`| ${label} | ${RESULT_LABELS[results[id].result] || '❔ Unknown or unclassified'} |`);
     }
     lines.push('', 'Per-suite results, skips and timings are in the run summary and artifacts.');
     if (['failure', 'cancelled'].includes(results['comment-start']?.result)) {
-      lines.push('', 'Note: the initial running-status update did not succeed. The CI result above reflects the test jobs, not that notification failure.');
+      lines.push('', '⚠️ Note: the initial running-status update did not succeed. The CI result above reflects the test jobs, not that notification failure.');
     }
   }
   return lines.join('\n');

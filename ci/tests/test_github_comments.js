@@ -75,7 +75,7 @@ test('both commands authorize against the base repo and dispatch the exact fork 
     assert.equal(request.inputs.tiers, command.startsWith('/run-ci') ? 'cpu,build,integration' : 'performance');
     assert.equal(request.inputs.targets, command.startsWith('/run-ci') ? '' : 'gh200');
     assert.equal(request.inputs.tests, command.startsWith('/run-ci') ? '' : 'ep.bench.*,p2p.*');
-    assert.match(f.reply.body, /Status: queued/);
+    assert.match(f.reply.body, /Status: ⏳ Queued/);
   }
 });
 
@@ -135,7 +135,7 @@ test('dispatch failure updates the queued comment instead of leaving it queued',
   await assert.rejects(dispatch(f), /dispatch refused/);
   assert.equal(f.calls.filter(([kind]) => kind === 'create').length, 1);
   assert.equal(f.calls.at(-1)[1].comment_id, 200);
-  assert.match(f.reply.body, /Status: failed to dispatch/);
+  assert.match(f.reply.body, /Status: ⚠️ Failed to dispatch/);
 });
 
 test('running, completion, retries and reruns update the same status comment', async () => {
@@ -145,22 +145,22 @@ test('running, completion, retries and reruns update the same status comment', a
     f.startRun();
     await update({...f, status: 'running'});
     assert.equal(f.comments.length, 1);
-    assert.match(f.reply.body, /Status: running/);
+    assert.match(f.reply.body, /Status: 🔄 Running/);
     assert.match(f.reply.body, /actions\/runs\/101\/attempts\/1/);
     await update({...f, status: 'complete', results: results()});
-    assert.match(f.reply.body, /Status: completed successfully/);
+    assert.match(f.reply.body, /Status: ✅ Pass/);
     assert.match(f.reply.body, /Requested by: @maintainer/);
     assert.ok(f.reply.body.includes(command));
     assert.ok(f.reply.body.includes(f.pr.head.sha));
-    assert.match(f.reply.body, /\| CPU \| skipped \|/);
+    assert.match(f.reply.body, /\| CPU \| — Not run \|/);
     assert.equal(f.comments.length, 1);
     await update({...f, status: 'complete', results: results()});
     assert.equal(f.comments.length, 1, 'retry must keep the original comment');
     await update({...f, status: 'running', attempt: '2'});
-    assert.match(f.reply.body, /Status: running/);
+    assert.match(f.reply.body, /Status: 🔄 Running/);
     assert.match(f.reply.body, /actions\/runs\/101\/attempts\/2/);
     await update({...f, status: 'complete', attempt: '2', results: results()});
-    assert.match(f.reply.body, /Status: completed successfully/);
+    assert.match(f.reply.body, /Status: ✅ Pass/);
     assert.match(f.reply.body, /actions\/runs\/101\/attempts\/2/);
     assert.equal(f.comments.length, 1, 'a new attempt reuses the original comment');
     assert.equal(f.calls.filter(([kind]) => kind === 'create').length, 1);
@@ -175,11 +175,11 @@ test('a transient completion update failure retries the original comment', async
   const edit = f.github.rest.issues.updateComment;
   f.github.rest.issues.updateComment = async () => {throw new Error('temporary API failure');};
   await assert.rejects(update({...f, status: 'complete', results: results()}), /temporary API failure/);
-  assert.match(f.reply.body, /Status: running/);
+  assert.match(f.reply.body, /Status: 🔄 Running/);
   assert.equal(f.comments.length, 1);
   f.github.rest.issues.updateComment = edit;
   await update({...f, status: 'complete', results: results()});
-  assert.match(f.reply.body, /Status: completed successfully/);
+  assert.match(f.reply.body, /Status: ✅ Pass/);
   assert.equal(f.comments.length, 1);
   assert.equal(f.calls.filter(([kind]) => kind === 'create').length, 1);
   assert.ok(f.calls.filter(([kind]) => kind === 'update').every(([, args]) => args.comment_id === 200));
@@ -187,12 +187,12 @@ test('a transient completion update failure retries the original comment', async
 
 test('final status covers setup/test failures, cancellation and skipped execution', async () => {
   for (const [changes, label] of [
-    [{plan: 'failure', cpu: 'skipped', gpu: 'skipped', status: 'failure'}, 'failed'],
-    [{gpu: 'failure', status: 'failure'}, 'failed'],
-    [{'comment-start': 'failure'}, 'completed successfully'],
-    [{'comment-start': 'cancelled'}, 'completed successfully'],
-    [{gpu: 'cancelled', status: 'failure'}, 'cancelled'],
-    [{cpu: 'skipped', gpu: 'skipped'}, 'skipped'],
+    [{plan: 'failure', cpu: 'skipped', gpu: 'skipped', status: 'failure'}, '❌ Failed'],
+    [{gpu: 'failure', status: 'failure'}, '❌ Failed'],
+    [{'comment-start': 'failure'}, '✅ Pass'],
+    [{'comment-start': 'cancelled'}, '✅ Pass'],
+    [{gpu: 'cancelled', status: 'failure'}, '⚠️ Cancelled'],
+    [{cpu: 'skipped', gpu: 'skipped'}, '— Not run'],
   ]) {
     const f = fixture();
     await dispatch(f); f.startRun();
