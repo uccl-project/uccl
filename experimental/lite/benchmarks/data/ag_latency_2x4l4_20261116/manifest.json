@@ -43,7 +43,7 @@
   "ce_transport_verified": true,
   "all_correctness_checks": "PASS",
   "historical_throughput_sha256": "746a03914fe67ae2ba5d4300a367eb4c98707c8a030a9e31d886a6c279349634",
-  "figure_sha256": "58dccedb9c0f7a754ef5e1c09d42235ab8afb615aaf88dd781956624e82ef101",
+  "figure_sha256": "b0eb588a9c3fa6f5e7ad9e34ad659722f9a9f16b8c4515fba24277697ba553fe",
   "initial_timed_calls_checked": 6600,
   "plotted_timed_calls_checked": 16500,
   "per_series_protocol": {
@@ -60,5 +60,15 @@
       "source": "retest/refresh/raw/"
     }
   },
-  "spike_diagnosis": "RING/LL observed at 256/512 KiB, RING/SIMPLE at 1 MiB. Isolated runs, 100 warmups and one GPU/process still reproduce the spike; forcing Simple removes it. Default curve retains measured spikes."
+  "spike_diagnosis": "RING/LL observed at 256/512 KiB, RING/SIMPLE at 1 MiB. Isolated runs, 100 warmups and one GPU/process still reproduce the spike; forcing Simple removes it. Default curve retains measured spikes.",
+  "latency_display_bands_us": [
+    [
+      0,
+      400
+    ],
+    [
+      500,
+      2100
+    ]
+  ]
 }

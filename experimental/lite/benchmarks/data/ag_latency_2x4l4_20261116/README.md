@@ -31,7 +31,11 @@ Historical throughput is not validation of the refreshed source.
   Points are medians of three run means; min/max run means are retained.
   All 16,500 plotted timed calls pass full correctness checks. No best variant per size.
 
-The plot uses the existing colors, lines, axes and panel styling. Raw samples,
+The latency panel splits its y-axis into 0–400 and 500–2100 µs so normal
+latencies remain readable while the default NCCL spikes stay visible. All
+plotted values and the throughput panel are unchanged.
+
+The plot uses the existing colors, lines and panel styling. Raw samples,
 commands, source/binary hashes, environment and all run-level ranges are kept.
 
 ## Reproduce
