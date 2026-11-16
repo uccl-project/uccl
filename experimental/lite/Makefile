@@ -137,6 +137,12 @@ $(BUILD)/uccl_lite_compact_collectives: benchmarks/cpu_router/compact_collective
 
 -include $(wildcard $(BUILD)/*.d)
 
+# Historical serving data verification and README-style SVGs; no GPU required.
+PYTHON ?= python3
+.PHONY: vllm-pcie-figures
+vllm-pcie-figures:
+	$(PYTHON) integration/vllm_pcie/plot.py --preview
+
 .PHONY: peer-ring-check
 peer-ring-check: $(BUILD)/uccl_lite_peer_ring_check
 $(BUILD)/uccl_lite_peer_ring_check: tests/collectives/peer_ring_check.cu src/collectives/peer_ag_rs.cu | $(BUILD)

@@ -1,0 +1,35 @@
+Completed reproduction and 10 Codex-adapted EAT configurations on wxz-pro6000, all eight RTX PRO 6000 Blackwell GPUs.
+Model: MiniMax-M2.7 FP8; vLLM 0.26.0; TP8 with expert parallelism.
+Pinned experiment source: 8cf173918d7e46fdd9734fac4f7292e310439837.
+Initial reproduction: original PCIeCCL achieved 1.397148x NCCL geometric-mean throughput.
+
+Fresh final fine results (60 s warmup plus 180 s measurement per case; zero request errors in all 21 cases):
+Concurrency    NCCL tok/s    Original tok/s    Retained tok/s    EAT gain
+          1         65.07            108.82            111.89       2.82%
+          2        119.12            189.23            194.23       2.64%
+          4        196.76            307.89            316.73       2.87%
+          8        329.21            427.37            484.46      13.36%
+         16        557.22            709.27            715.33       0.85%
+         32        900.50           1087.39           1088.23       0.08%
+         64       1300.00           1642.47           1643.90       0.09%
+
+Geometric means: original/NCCL=1.398835x; retained/NCCL=1.443027x; retained/original=1.031592x.
+EAT completed 10 source configurations and 18 scored screening/confirmation evaluations. Only c03 met the fixed retention rule; its fresh paired screening gains were 2.4264% and 2.0957%.
+The retained bundle splits LL transmit/receive loops, extends LL from 32 KiB to 64 KiB, and fuses LL caller staging copies. The six-phase GPU reduction tree and larger PUT/CE paths remain unchanged. This is the GPU PCIeCCL path, not the CPU router.
+Other recursive-doubling, hybrid, indexing, launch-geometry and PUT-fusion configurations did not pass the declared retention threshold. Higher screening scores alone were not retained.
+
+Quality acceptance was NOT met. GSM8K uses 1319 questions, 5 shots, temperature 0, seed 42, max 256 output tokens and concurrency 64.
+Original correct counts: [1222, 1213, 1219]; candidate: [1210, 1213, 1222].
+Descriptive medians: original=1219/1319; candidate=1213/1319.
+Invalid-answer counts: original=[0, 1, 0]; candidate=[0, 0, 0].
+The first original repeat had one invalid answer and remains a failed gate. Its post-run fingerprint was not executed after the failure. That raw count is descriptive evidence, not a validated quality pass. The remaining predeclared C,I,C runs were completed without replacing it.
+The repeat servers used the original readiness diagnostic and identical quality commands, without a preceding fine matrix, equally for both implementations. No additional quality samples were taken.
+The lower descriptive candidate median and failed gate mean this cannot be reported as a confirmed quality-preserving improvement. The experiment does not establish a statistically significant accuracy regression or its cause.
+
+The separate finite-input diagnostic compared 1792 paired BF16/FP32 outputs across sizes, alignments, eager calls and changing-input graph replay: zero bit differences, guard failures or rank disagreements. This is evidence for the tested corpus only and does not override model-quality results.
+
+Interpretation limits: one final fine pass per implementation, no confidence interval; equal-weight geometric mean across request concurrency 1,2,4,8,16,32,64; request concurrency is not a fixed token batch. The 70% constructed shared prefix is not a measured cache-hit rate.
+NCCL uses the upstream experiment configuration, with vLLM custom and symmetric-memory all-reduce disabled and transport selection unforced. Requested naive all-to-all maps to allgather_reducescatter in this pinned vLLM version.
+The experimental patch is retained for review; it is not certified as preserving serving quality. Dollar/token telemetry is unavailable.
+
+Files: comparison.csv/json; performance.png/svg; retained-pcieccl.patch (exact pinned-base patch); algorithm-changes.diff (formatted-baseline review diff); quality-summary.json; finite-bitwise.json.

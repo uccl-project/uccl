@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/env/.venv/bin/python",
+    "/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/controller/finite_bitwise_compatibility.py"
+  ],
+  "finished": 1794754512.5809295,
+  "pid": 175738,
+  "process_start": "3089063",
+  "returncode": 0,
+  "started": 1794754498.972289,
+  "timeout_seconds": 900
+}

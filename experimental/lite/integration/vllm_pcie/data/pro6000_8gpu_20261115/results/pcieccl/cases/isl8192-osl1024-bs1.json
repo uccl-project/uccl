@@ -1,0 +1,54 @@
+{
+  "status": "complete",
+  "config_signature": "598566e7277b03b20c5c5df8c4c74ca8b2fd2cd52650fae2118c1cd67201280c",
+  "case": {
+    "name": "isl8192-osl1024-bs1",
+    "isl": 8192,
+    "osl": 1024,
+    "bs": 1,
+    "warmup_seconds": 60.0,
+    "measurement_seconds": 180.0
+  },
+  "workload": {
+    "type": "fixed",
+    "prefix_cache_hit_rate": 0.7,
+    "dataset_path": null,
+    "seed": 20260814
+  },
+  "metrics": {
+    "measurement_seconds": 180.0,
+    "requests_started": 19,
+    "requests_completed": 18,
+    "request_errors": 0,
+    "measurement_output_tokens": 19585,
+    "completed_output_tokens": 18432,
+    "completed_input_tokens": 147456,
+    "request_throughput": 0.1,
+    "input_token_throughput": 819.2,
+    "output_token_throughput": 108.80555555555556,
+    "total_token_throughput": 928.0055555555556,
+    "per_user_output_tps": 108.80555555555556,
+    "aggregate_tpot_ms": 9.190707173857543,
+    "ttft_ms": {
+      "avg": 198.3197675000257,
+      "p50": 198.11116399978346,
+      "p90": 199.2540330003976,
+      "p95": 199.29313684870064
+    },
+    "tpot_ms": {
+      "avg": 9.006552841424973,
+      "p50": 9.007511644671634,
+      "p90": 9.021872028055137,
+      "p95": 9.030953228249194
+    },
+    "e2e_ms": {
+      "avg": 9412.023324277774,
+      "p50": 9412.83454150016,
+      "p90": 9428.688243399301,
+      "p95": 9438.047635648943
+    },
+    "errors": []
+  },
+  "started_at_utc": "2026-11-15T08:56:36.545980+00:00",
+  "completed_at_utc": "2026-11-15T09:00:36.550472+00:00"
+}

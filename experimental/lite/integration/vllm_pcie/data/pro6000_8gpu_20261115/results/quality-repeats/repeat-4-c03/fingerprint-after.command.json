@@ -1,0 +1,17 @@
+{
+  "argv": [
+    "/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/env/.venv/bin/python",
+    "/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/controller/final_fingerprint.py",
+    "c03",
+    "/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/controller/pcieccl.toml",
+    "/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/quality-repeats/repeat-4-c03/fingerprint-after.json",
+    "--compare",
+    "/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/quality-repeats/repeat-4-c03/fingerprint-before.json"
+  ],
+  "finished": 1794754476.2536292,
+  "pid": 175605,
+  "process_start": "3086568",
+  "returncode": 0,
+  "started": 1794754474.0227137,
+  "timeout_seconds": 3429.6801459610033
+}

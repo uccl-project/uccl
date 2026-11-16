@@ -1,0 +1,2 @@
+# Raw diagnostic and NCCL transport logs are measurement evidence.
+!*.log

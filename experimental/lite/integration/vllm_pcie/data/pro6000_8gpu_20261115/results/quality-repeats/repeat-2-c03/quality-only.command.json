@@ -1,0 +1,15 @@
+{
+  "argv": [
+    "/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/env/.venv/bin/python",
+    "/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/controller/quality_repeat.py",
+    "c03",
+    "/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/quality-repeats/repeat-2-c03",
+    "--worker"
+  ],
+  "finished": 1794754126.3258646,
+  "pid": 170535,
+  "process_start": "3035004",
+  "returncode": 0,
+  "started": 1794753958.3886347,
+  "timeout_seconds": 3597.7631801679963
+}

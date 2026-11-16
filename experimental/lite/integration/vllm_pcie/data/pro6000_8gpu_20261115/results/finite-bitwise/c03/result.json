@@ -1,0 +1,14 @@
+{
+  "finished": 1794754528.8152947,
+  "identity": {
+    "binary_name": "_pcieccl_C.cpython-312-x86_64-linux-gnu.so",
+    "binary_sha256": "89ebe0c1de86d93f6d92e709fcc2dbf753b46579e5fd588c8e35ae5bd1dc243b",
+    "source_sha256": "ce751fa67339d5163171721a350c09d8edc14876a2e89cb808349ba984f75175"
+  },
+  "scored": false,
+  "snapshot": "c03",
+  "started": 1794754515.3720646,
+  "status": "complete",
+  "test": "finite-bits",
+  "test_sha256": "4d7842cfeec03efffa497874a562f8b84be8e90016234b70735069a81f6b2492"
+}

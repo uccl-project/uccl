@@ -1,0 +1,359 @@
+{
+  "platform": "wxz-pro6000, RTX PRO 6000 Blackwell x8",
+  "model": "MiniMax-M2.7 FP8, TP8+EP",
+  "loops": 10,
+  "incumbent": {
+    "snapshot": "c03",
+    "loop": 3,
+    "scores": [
+      1.4276239429697326,
+      1.4244755219159624
+    ],
+    "score": 1.4260497324428476,
+    "source_sha256": "ce751fa67339d5163171721a350c09d8edc14876a2e89cb808349ba984f75175",
+    "source_revision": "c56f95e0d8aebef230ad4e2526f8a4dcdd567304"
+  },
+  "rows": [
+    {
+      "concurrency": 1,
+      "nccl_tok_s": 65.07222222222222,
+      "nccl_tpot_ms": 15.119142154447484,
+      "nccl_ttft_ms": 256.17467199845123,
+      "original_tok_s": 108.82222222222222,
+      "original_tpot_ms": 9.000793456988603,
+      "original_ttft_ms": 198.4711690001859,
+      "best_tok_s": 111.88888888888889,
+      "best_tpot_ms": 8.754630452592512,
+      "best_ttft_ms": 198.0565640005807,
+      "original_vs_nccl": 1.6723298898659609,
+      "best_vs_nccl": 1.7194570135746605,
+      "best_vs_original": 1.0281805186849091
+    },
+    {
+      "concurrency": 2,
+      "nccl_tok_s": 119.12222222222222,
+      "nccl_tpot_ms": 16.533666801565953,
+      "nccl_ttft_ms": 277.16906199930236,
+      "original_tok_s": 189.23333333333332,
+      "original_tpot_ms": 10.377352716520381,
+      "original_ttft_ms": 208.756579000692,
+      "best_tok_s": 194.23333333333332,
+      "best_tpot_ms": 10.113180698436013,
+      "best_ttft_ms": 207.12089900007413,
+      "original_vs_nccl": 1.588564499580263,
+      "best_vs_nccl": 1.6305381960638,
+      "best_vs_original": 1.0264224062004579
+    },
+    {
+      "concurrency": 4,
+      "nccl_tok_s": 196.75555555555556,
+      "nccl_tpot_ms": 19.889213102638394,
+      "nccl_ttft_ms": 195.6743294995249,
+      "original_tok_s": 307.8888888888889,
+      "original_tpot_ms": 12.631008567450097,
+      "original_ttft_ms": 216.1205840002367,
+      "best_tok_s": 316.73333333333335,
+      "best_tpot_ms": 12.301352223852197,
+      "best_ttft_ms": 214.54790900133958,
+      "original_vs_nccl": 1.5648294556132822,
+      "best_vs_nccl": 1.6097808899932236,
+      "best_vs_original": 1.0287260916636594
+    },
+    {
+      "concurrency": 8,
+      "nccl_tok_s": 329.2111111111111,
+      "nccl_tpot_ms": 23.741516584555594,
+      "nccl_ttft_ms": 210.2531939981418,
+      "original_tok_s": 427.3722222222222,
+      "original_tpot_ms": 18.270162005866556,
+      "original_ttft_ms": 120.27192099958484,
+      "best_tok_s": 484.4611111111111,
+      "best_tpot_ms": 16.16201200684289,
+      "best_ttft_ms": 105.06511200037494,
+      "original_vs_nccl": 1.2981707111276115,
+      "best_vs_nccl": 1.4715818961152924,
+      "best_vs_original": 1.1335811873594448
+    },
+    {
+      "concurrency": 16,
+      "nccl_tok_s": 557.2222222222222,
+      "nccl_tpot_ms": 27.806990268818073,
+      "nccl_ttft_ms": 771.4900579976529,
+      "original_tok_s": 709.2666666666667,
+      "original_tpot_ms": 21.991270749753973,
+      "original_ttft_ms": 261.389022000003,
+      "best_tok_s": 715.3277777777778,
+      "best_tpot_ms": 21.298760969697213,
+      "best_ttft_ms": 136.2127459997282,
+      "original_vs_nccl": 1.2728614157527418,
+      "best_vs_nccl": 1.283738783649053,
+      "best_vs_original": 1.0085456026568913
+    },
+    {
+      "concurrency": 32,
+      "nccl_tok_s": 900.5,
+      "nccl_tpot_ms": 33.333025081623006,
+      "nccl_ttft_ms": 221.96751899900846,
+      "original_tok_s": 1087.3944444444444,
+      "original_tpot_ms": 28.588461237048044,
+      "original_ttft_ms": 615.5519724998157,
+      "best_tok_s": 1088.2333333333333,
+      "best_tpot_ms": 29.046300969209263,
+      "best_ttft_ms": 567.1175679981388,
+      "original_vs_nccl": 1.207545190943303,
+      "best_vs_nccl": 1.208476772163613,
+      "best_vs_original": 1.0007714669623107
+    },
+    {
+      "concurrency": 64,
+      "nccl_tok_s": 1300.0,
+      "nccl_tpot_ms": 45.86426284506253,
+      "nccl_ttft_ms": 897.2461900011695,
+      "original_tok_s": 1642.4722222222222,
+      "original_tpot_ms": 37.253752130008905,
+      "original_ttft_ms": 280.4308119993948,
+      "best_tok_s": 1643.9,
+      "best_tpot_ms": 36.93532102932674,
+      "best_ttft_ms": 314.5327250003902,
+      "original_vs_nccl": 1.2634401709401708,
+      "best_vs_nccl": 1.2645384615384616,
+      "best_vs_original": 1.0008692857988466
+    }
+  ],
+  "throughput_geomean": {
+    "original_vs_nccl": 1.3988347186069425,
+    "best_vs_nccl": 1.443026675518921,
+    "best_vs_original": 1.0315919788979702
+  },
+  "quality": {
+    "nccl": {
+      "correct": 1214,
+      "total": 1319,
+      "invalid_rate": 0.0,
+      "accuracy": 0.9203942380591357,
+      "artifact": "/home/wxzheng/Documents/Codex/2026-11-12/explain-the-desing-of-uccl-lite/work/eat-pcieccl-vllm-pro6000-20261115-074910/results/final-validation/quality/gsm8k-nccl.json"
+    },
+    "original": {
+      "correct": 1222,
+      "total": 1319,
+      "invalid_rate": 0.0,
+      "accuracy": 0.9264594389689158,
+      "artifact": "/home/wxzheng/Documents/Codex/2026-11-12/explain-the-desing-of-uccl-lite/work/eat-pcieccl-vllm-pro6000-20261115-074910/results/quality/gsm8k-pcieccl.json"
+    },
+    "best": {
+      "correct": 1210,
+      "total": 1319,
+      "invalid_rate": 0.0,
+      "accuracy": 0.9173616376042456,
+      "artifact": "/home/wxzheng/Documents/Codex/2026-11-12/explain-the-desing-of-uccl-lite/work/eat-pcieccl-vllm-pro6000-20261115-074910/results/final-validation/quality/gsm8k-pcieccl.json"
+    }
+  },
+  "quality_repeats_required": true,
+  "limitations": [
+    "One final fine matrix per implementation; no confidence interval.",
+    "EAT finite-wave scores and original fine steady-state throughput are distinct metrics.",
+    "NCCL uses original experiment settings: custom/symmetric-memory AR disabled; transport selection unforced.",
+    "Original PCIeCCL quality is the initial reproduction sample, per frozen repeat policy.",
+    "Construction uses a 70% shared prefix; this is not a measured cache hit rate."
+  ],
+  "quality_confirmation": {
+    "protocol": "quality-repeat-summary-v1",
+    "scored": false,
+    "predeclared_order": [
+      "initial",
+      "c03",
+      "initial",
+      "c03"
+    ],
+    "samples": [
+      {
+        "index": 1,
+        "snapshot": "initial",
+        "correct": 1213,
+        "invalid": 1,
+        "questions": 1319,
+        "sample_completed": true,
+        "gate_status": "failed",
+        "gate_pass": false,
+        "pre_fingerprint_verified": true,
+        "post_fingerprint_present": false,
+        "post_fingerprint_verified": false,
+        "count_interpretation": "descriptive only; invalid gate and missing post provenance",
+        "started": 1794753453.0505104,
+        "finished": 1794753623.8051214,
+        "artifact_sha256": {
+          "result.json": "1f5a4c44d3a6655ebcd32274d92cd4151f83bbd6d83b4f19dee56ad33f405e63",
+          "lifecycle/gsm8k.json": "29fecf7f41159227c6f420820935f1aa3a1b561c310f597f7a30216f4998d82f",
+          "lifecycle/gsm8k.command.json": "271defd6d06540bd3cbeebddd6e1532f93a23e1cb0c6bd85fb2fe5c8e97b19b7",
+          "lifecycle/gsm8k.log": "82b3d63032eca61dc71c2c7b7db4360568a10ea80312c5f18032d5a846190137",
+          "quality-only.command.json": "71e419e54a2f101d9cc692ad2188403e01ce59270d559337ecad8e8f31c1347e",
+          "quality-only.log": "556729e3380dd45a1c2025d931a25f98fc488f2b8ca4274ffd55926fd451380a",
+          "fingerprint-before.command.json": "ad278ab2bdd97d926bb51e330f8e2027fc4e8ace40410f33e89997fbcca9956e",
+          "fingerprint-before.json": "dad41844d262633496df332fb608faefb1e83ec174fed2670a2fd3673004fcb4"
+        }
+      },
+      {
+        "index": 2,
+        "snapshot": "c03",
+        "correct": 1213,
+        "invalid": 0,
+        "questions": 1319,
+        "sample_completed": true,
+        "gate_status": "complete",
+        "gate_pass": true,
+        "pre_fingerprint_verified": true,
+        "post_fingerprint_present": true,
+        "post_fingerprint_verified": true,
+        "count_interpretation": "valid quality/provenance sample",
+        "started": 1794753956.0813158,
+        "finished": 1794754128.6041248,
+        "artifact_sha256": {
+          "result.json": "c1737f336f7f645b93bb619e55ea8bcbb6de02158201d02c061ed018501100fd",
+          "lifecycle/gsm8k.json": "91a38bfa30e0496e165799348890e67fad9dcb38f2192155fda5a1c31ae1887b",
+          "lifecycle/gsm8k.command.json": "9aa03f9d99d4c7d40457e3f2d42db823e06cde826f3abe8977c84d04c7ec442a",
+          "lifecycle/gsm8k.log": "ac761c33e96e1e7428399da0ea597cc5cb51dd20c35021e99798cd1f4b1ec650",
+          "quality-only.command.json": "2662f200153d937f562dea5ebbaac1cc1a94d6955b836aa9b130935b1150245a",
+          "quality-only.log": "555a90f505803c3d4be2a822e07c72a72675cdd3472b53d333ed2e0a4f82c564",
+          "fingerprint-before.command.json": "c7619a8287ba8bd22f1dc756a31bc81ea950070882a718749b86f1fda322f116",
+          "fingerprint-before.json": "6bdfd38d034e656ddbcd8acbe15479a2a5ec15552e30c9f7bb590fa7fbfb81d4",
+          "fingerprint-after.command.json": "6c1ed1c307a4442e35c92ce92c0dc18862b9fd87b250b446e70a9ea85475a767",
+          "fingerprint-after.json": "6bdfd38d034e656ddbcd8acbe15479a2a5ec15552e30c9f7bb590fa7fbfb81d4"
+        }
+      },
+      {
+        "index": 3,
+        "snapshot": "initial",
+        "correct": 1219,
+        "invalid": 0,
+        "questions": 1319,
+        "sample_completed": true,
+        "gate_status": "complete",
+        "gate_pass": true,
+        "pre_fingerprint_verified": true,
+        "post_fingerprint_present": true,
+        "post_fingerprint_verified": true,
+        "count_interpretation": "valid quality/provenance sample",
+        "started": 1794754128.7698746,
+        "finished": 1794754303.4738839,
+        "artifact_sha256": {
+          "result.json": "7d230f602a565447e223234a446ae31c29815adb10c60b400b8d8127371e64f3",
+          "lifecycle/gsm8k.json": "80732ea52ea169d18952f600c14bed64ff27cfb0feedd3fac801e4d718e74104",
+          "lifecycle/gsm8k.command.json": "6a7541d8807bcdaf84f5afa2fc8a86ead02ddde73cb2d4b94620696682001f4c",
+          "lifecycle/gsm8k.log": "c20b55ef09483d06425248d7cd2560f225a9487f8346e0f297ec57bbfadcc099",
+          "quality-only.command.json": "e59b92b32fa687d9888756744168afbbdb952d464bfabced28d5a87789b154a5",
+          "quality-only.log": "459d584d7c6642c4c37f64ec29388ffcbe9745d5345ff2de682b0cda235920a6",
+          "fingerprint-before.command.json": "c31f0e79a136c9cdb4a7a29ebf3ef4bc3a44ab180f11db27e74d84cec5d2c9bf",
+          "fingerprint-before.json": "dad41844d262633496df332fb608faefb1e83ec174fed2670a2fd3673004fcb4",
+          "fingerprint-after.command.json": "1d357ed109b17743ea34bfef153880883ff0f8f28422a131d865dfce0df8ee72",
+          "fingerprint-after.json": "dad41844d262633496df332fb608faefb1e83ec174fed2670a2fd3673004fcb4"
+        }
+      },
+      {
+        "index": 4,
+        "snapshot": "c03",
+        "correct": 1222,
+        "invalid": 0,
+        "questions": 1319,
+        "sample_completed": true,
+        "gate_status": "complete",
+        "gate_pass": true,
+        "pre_fingerprint_verified": true,
+        "post_fingerprint_present": true,
+        "post_fingerprint_verified": true,
+        "count_interpretation": "valid quality/provenance sample",
+        "started": 1794754303.6333208,
+        "finished": 1794754476.3006158,
+        "artifact_sha256": {
+          "result.json": "745cfdbcdb67a926f9d4bb5fa1446156a38503b34439113e1978018fb38e9c82",
+          "lifecycle/gsm8k.json": "5beb8217011b5000f9373f418f3c27ef76083c0e5bbb531f4b00d45ff3dad451",
+          "lifecycle/gsm8k.command.json": "1786e59b548287d6ec14b4836088abf7528fd978acd2553f876942eca52ce949",
+          "lifecycle/gsm8k.log": "c9355cd0b9402b54941fd48dfe035721b7e128df7da8aa35b0e5f90696c67c26",
+          "quality-only.command.json": "8d1d22af205a0e1dd749b5b0bcaceca4f70381411b81fcc5559a2e000a103f28",
+          "quality-only.log": "4611ba418b19d72edfdb4f94f8cbd727e008d58ad7f7dfff558cc5930ed1e1c7",
+          "fingerprint-before.command.json": "992d3d3cd032ad5c603f774f9b0228e37b783465af9902d2966783845d7560c3",
+          "fingerprint-before.json": "6bdfd38d034e656ddbcd8acbe15479a2a5ec15552e30c9f7bb590fa7fbfb81d4",
+          "fingerprint-after.command.json": "67e81b64ead77ae280aa0c0db92f6b0cfe94b8cf823f0235a1d3cc77e7a0f80b",
+          "fingerprint-after.json": "6bdfd38d034e656ddbcd8acbe15479a2a5ec15552e30c9f7bb590fa7fbfb81d4"
+        }
+      }
+    ],
+    "errors": [],
+    "all_quality_gates_pass": false,
+    "quality_preserving_claim_allowed": false,
+    "quality_preserving_win_claim": false,
+    "postprovenancelimits": [
+      "repeat-1-initial: invalid-answer gate failed; post-run fingerprint was not executed, so post-run provenance is unverified"
+    ],
+    "limitation": "Raw invalid-answer counts are preserved descriptively. A favorable median cannot waive zero-invalid or missing post-run provenance.",
+    "first_samples": {
+      "initial": {
+        "correct": 1222,
+        "invalid": 0,
+        "sha256": "dedfdc725346acfab514bcadb7a36600384e30aa97a7c13289e84312aedae6e5"
+      },
+      "c03": {
+        "correct": 1210,
+        "invalid": 0,
+        "sha256": "0486d3de42fde05db1cf0d733e22cfb06e2c3ce2ab606a7eb4a508c4cf2d3775"
+      }
+    },
+    "correct_counts": {
+      "original": [
+        1222,
+        1213,
+        1219
+      ],
+      "best": [
+        1210,
+        1213,
+        1222
+      ]
+    },
+    "median_correct": {
+      "original": 1219,
+      "best": 1213
+    },
+    "invalid_counts": {
+      "original": [
+        0,
+        1,
+        0
+      ],
+      "best": [
+        0,
+        0,
+        0
+      ]
+    },
+    "median_rule_met": false,
+    "complete_planned_sequence": true,
+    "descriptive_correct_counts": {
+      "initial": [
+        1222,
+        1213,
+        1219
+      ],
+      "c03": [
+        1210,
+        1213,
+        1222
+      ]
+    },
+    "descriptive_medians": {
+      "initial": 1219,
+      "c03": 1213
+    },
+    "descriptive_median_no_decline": false,
+    "status": "quality-unconfirmed",
+    "summary_controller_sha256": "d68014361e3db619eb07b91f993b719e7ecb20b236f01d18a5dcd38a76c58566"
+  },
+  "finite_bitwise": {
+    "status": "no_observed_bit_difference",
+    "paired_outputs": 1792,
+    "mismatches": 0,
+    "scope": "A match means no observed bit difference for this finite corpus. It is not a quality proof, cannot override the GSM8K policy, and can share a common error. A mismatch alone does not identify the wrong scalar or explain a model-quality change."
+  },
+  "performance_improvement_observed": true,
+  "quality_preserving_improvement_confirmed": false,
+  "patch_status": "experimental; quality acceptance not met"
+}

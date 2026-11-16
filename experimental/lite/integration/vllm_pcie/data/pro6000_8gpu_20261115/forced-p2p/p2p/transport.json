@@ -1,0 +1,156 @@
+{
+  "forced": true,
+  "channel_rows": 32,
+  "p2p_rows": 32,
+  "other_rows": [],
+  "p2p_logging_ranks": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
+  "rows": [
+    {
+      "file": "nccl.wxz-pro6000.179908.log",
+      "line": "wxz-pro6000:179908:179908 [0] NCCL INFO Channel 00/0 : 0[0] -> 1[1] via P2P/CUMEM"
+    },
+    {
+      "file": "nccl.wxz-pro6000.179908.log",
+      "line": "wxz-pro6000:179908:179908 [0] NCCL INFO Channel 01/0 : 0[0] -> 1[1] via P2P/CUMEM"
+    },
+    {
+      "file": "nccl.wxz-pro6000.179908.log",
+      "line": "wxz-pro6000:179908:179908 [0] NCCL INFO Channel 00/0 : 0[0] -> 1[1] via P2P/CUMEM"
+    },
+    {
+      "file": "nccl.wxz-pro6000.179908.log",
+      "line": "wxz-pro6000:179908:179908 [0] NCCL INFO Channel 01/0 : 0[0] -> 1[1] via P2P/CUMEM"
+    },
+    {
+      "file": "nccl.wxz-pro6000.179909.log",
+      "line": "wxz-pro6000:179909:179909 [1] NCCL INFO Channel 00/0 : 1[1] -> 2[2] via P2P/CUMEM"
+    },
+    {
+      "file": "nccl.wxz-pro6000.179909.log",
+      "line": "wxz-pro6000:179909:179909 [1] NCCL INFO Channel 01/0 : 1[1] -> 2[2] via P2P/CUMEM"
+    },
+    {
+      "file": "nccl.wxz-pro6000.179909.log",
+      "line": "wxz-pro6000:179909:179909 [1] NCCL INFO Channel 00/0 : 1[1] -> 2[2] via P2P/CUMEM"
+    },
+    {
+      "file": "nccl.wxz-pro6000.179909.log",
+      "line": "wxz-pro6000:179909:179909 [1] NCCL INFO Channel 01/0 : 1[1] -> 2[2] via P2P/CUMEM"
+    },
+    {
+      "file": "nccl.wxz-pro6000.179910.log",
+      "line": "wxz-pro6000:179910:179910 [2] NCCL INFO Channel 00/0 : 2[2] -> 3[3] via P2P/CUMEM"
+    },
+    {
+      "file": "nccl.wxz-pro6000.179910.log",
+      "line": "wxz-pro6000:179910:179910 [2] NCCL INFO Channel 01/0 : 2[2] -> 3[3] via P2P/CUMEM"
+    },
+    {
+      "file": "nccl.wxz-pro6000.179910.log",
+      "line": "wxz-pro6000:179910:179910 [2] NCCL INFO Channel 00/0 : 2[2] -> 3[3] via P2P/CUMEM"
+    },
+    {
+      "file": "nccl.wxz-pro6000.179910.log",
+      "line": "wxz-pro6000:179910:179910 [2] NCCL INFO Channel 01/0 : 2[2] -> 3[3] via P2P/CUMEM"
+    },
+    {
+      "file": "nccl.wxz-pro6000.179911.log",
+      "line": "wxz-pro6000:179911:179911 [3] NCCL INFO Channel 00/0 : 3[3] -> 4[4] via P2P/CUMEM"
+    },
+    {
+      "file": "nccl.wxz-pro6000.179911.log",
+      "line": "wxz-pro6000:179911:179911 [3] NCCL INFO Channel 01/0 : 3[3] -> 4[4] via P2P/CUMEM"
+    },
+    {
+      "file": "nccl.wxz-pro6000.179911.log",
+      "line": "wxz-pro6000:179911:179911 [3] NCCL INFO Channel 00/0 : 3[3] -> 4[4] via P2P/CUMEM"
+    },
+    {
+      "file": "nccl.wxz-pro6000.179911.log",
+      "line": "wxz-pro6000:179911:179911 [3] NCCL INFO Channel 01/0 : 3[3] -> 4[4] via P2P/CUMEM"
+    },
+    {
+      "file": "nccl.wxz-pro6000.179912.log",
+      "line": "wxz-pro6000:179912:179912 [4] NCCL INFO Channel 00/0 : 4[4] -> 5[5] via P2P/CUMEM"
+    },
+    {
+      "file": "nccl.wxz-pro6000.179912.log",
+      "line": "wxz-pro6000:179912:179912 [4] NCCL INFO Channel 01/0 : 4[4] -> 5[5] via P2P/CUMEM"
+    },
+    {
+      "file": "nccl.wxz-pro6000.179912.log",
+      "line": "wxz-pro6000:179912:179912 [4] NCCL INFO Channel 00/0 : 4[4] -> 5[5] via P2P/CUMEM"
+    },
+    {
+      "file": "nccl.wxz-pro6000.179912.log",
+      "line": "wxz-pro6000:179912:179912 [4] NCCL INFO Channel 01/0 : 4[4] -> 5[5] via P2P/CUMEM"
+    },
+    {
+      "file": "nccl.wxz-pro6000.179913.log",
+      "line": "wxz-pro6000:179913:179913 [5] NCCL INFO Channel 00/0 : 5[5] -> 6[6] via P2P/CUMEM"
+    },
+    {
+      "file": "nccl.wxz-pro6000.179913.log",
+      "line": "wxz-pro6000:179913:179913 [5] NCCL INFO Channel 01/0 : 5[5] -> 6[6] via P2P/CUMEM"
+    },
+    {
+      "file": "nccl.wxz-pro6000.179913.log",
+      "line": "wxz-pro6000:179913:179913 [5] NCCL INFO Channel 00/0 : 5[5] -> 6[6] via P2P/CUMEM"
+    },
+    {
+      "file": "nccl.wxz-pro6000.179913.log",
+      "line": "wxz-pro6000:179913:179913 [5] NCCL INFO Channel 01/0 : 5[5] -> 6[6] via P2P/CUMEM"
+    },
+    {
+      "file": "nccl.wxz-pro6000.179914.log",
+      "line": "wxz-pro6000:179914:179914 [6] NCCL INFO Channel 00/0 : 6[6] -> 7[7] via P2P/CUMEM"
+    },
+    {
+      "file": "nccl.wxz-pro6000.179914.log",
+      "line": "wxz-pro6000:179914:179914 [6] NCCL INFO Channel 01/0 : 6[6] -> 7[7] via P2P/CUMEM"
+    },
+    {
+      "file": "nccl.wxz-pro6000.179914.log",
+      "line": "wxz-pro6000:179914:179914 [6] NCCL INFO Channel 00/0 : 6[6] -> 7[7] via P2P/CUMEM"
+    },
+    {
+      "file": "nccl.wxz-pro6000.179914.log",
+      "line": "wxz-pro6000:179914:179914 [6] NCCL INFO Channel 01/0 : 6[6] -> 7[7] via P2P/CUMEM"
+    },
+    {
+      "file": "nccl.wxz-pro6000.179915.log",
+      "line": "wxz-pro6000:179915:179915 [7] NCCL INFO Channel 00/0 : 7[7] -> 0[0] via P2P/CUMEM"
+    },
+    {
+      "file": "nccl.wxz-pro6000.179915.log",
+      "line": "wxz-pro6000:179915:179915 [7] NCCL INFO Channel 01/0 : 7[7] -> 0[0] via P2P/CUMEM"
+    },
+    {
+      "file": "nccl.wxz-pro6000.179915.log",
+      "line": "wxz-pro6000:179915:179915 [7] NCCL INFO Channel 00/0 : 7[7] -> 0[0] via P2P/CUMEM"
+    },
+    {
+      "file": "nccl.wxz-pro6000.179915.log",
+      "line": "wxz-pro6000:179915:179915 [7] NCCL INFO Channel 01/0 : 7[7] -> 0[0] via P2P/CUMEM"
+    }
+  ],
+  "log_sha256": {
+    "nccl.wxz-pro6000.179908.log": "bb8e03120b896dd52eb61522e160ef3e58f1e533079d7fb3e515e701002efd8c",
+    "nccl.wxz-pro6000.179909.log": "195d08cd22e322204819121d3ca1a81eec61d5824681efd278d92aba582b8637",
+    "nccl.wxz-pro6000.179910.log": "d8e0610862cdaae75d821ec84f5a291c917898b1cf35453cdf2d1fec1866dd1d",
+    "nccl.wxz-pro6000.179911.log": "f3e596ccf4cda4659634695e99387020cf4fe4183eca6faf50016748c343f694",
+    "nccl.wxz-pro6000.179912.log": "ee08e7ef54d24abf3a163a8d7392f18d4ecf22da5e653758ec8939e375af3511",
+    "nccl.wxz-pro6000.179913.log": "f724cbcbe21b80f3cf297dae15fdfc3e4860977503c731e5480adb3f770b82c5",
+    "nccl.wxz-pro6000.179914.log": "d9b27015a4981abd0a4f9552aa2fa3015fa0af43e3aa93c99e5560d1edaf0ec0",
+    "nccl.wxz-pro6000.179915.log": "8ad253694c803e6dda5b2f1445c9acc196b9363fc3e352fde98a510c5ef9229d"
+  }
+}

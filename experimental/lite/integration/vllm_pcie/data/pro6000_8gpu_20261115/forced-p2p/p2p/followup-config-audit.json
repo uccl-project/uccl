@@ -1,0 +1,14 @@
+{
+  "base": "/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/controller/final-nccl.toml",
+  "changes": {
+    "NCCL_DEBUG": "INFO",
+    "NCCL_P2P_DISABLE": "0",
+    "NCCL_DEBUG_FILE": "/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/forced-p2p/p2p/nccl.%h.%p.log",
+    "NCCL_P2P_LEVEL": "SYS",
+    "NCCL_DEBUG_SUBSYS": "INIT,GRAPH,ENV,P2P,SHM,NET",
+    "NCCL_SHM_DISABLE": "1"
+  },
+  "config_sha256": "6b85397ac31ac5a20dcf2eaa9f37907754df1273d2f074c4e86a5fdb58d558c3",
+  "runner_sha256": "ecfe635bfcd3b653f194f48633e88306a8fc2c20e1791df80324f7539a2cd37e",
+  "start": 1794774511.4213698
+}

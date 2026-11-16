@@ -1,0 +1,10 @@
+{
+  "CUDA_HOME": "/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/deps/cuda133-packages/nvidia/cu13",
+  "CUDA_VISIBLE_DEVICES": "0,1,2,3,4,5,6,7",
+  "CXX": "/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/deps/compiler-bin/g++",
+  "NCCL_IB_DISABLE": "1",
+  "NCCL_NET": "Socket",
+  "NVCC_PREPEND_FLAGS": "-ccbin=/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/deps/compiler-bin/g++",
+  "VLLM_ALLREDUCE_USE_SYMM_MEM": "0",
+  "VLLM_USE_PCIECCL": "0"
+}

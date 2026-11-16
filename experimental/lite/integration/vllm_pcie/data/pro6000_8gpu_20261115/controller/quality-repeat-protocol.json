@@ -1,0 +1,48 @@
+{
+  "protocol": "conditional-quality-repeat-v1",
+  "declared_at_unix": 1794749886.994404,
+  "trigger": "Final retained c03 correct count < unchanged initial PCIeCCL 1222/1319, with zero invalid responses required.",
+  "candidate_quality_at_declaration": "not yet reported to this reviewer",
+  "reference_counts": {
+    "initial_pcieccl": 1222,
+    "initial_nccl": 1216,
+    "final_nccl": 1214
+  },
+  "fresh_server_order": [
+    "initial",
+    "c03",
+    "initial",
+    "c03"
+  ],
+  "additional_runs_per_implementation": 2,
+  "decision": "Compare median of three c03 counts (first final plus two repeats) to median of three initial counts (original1222 plus two repeats). Lower c03 median => performance quality-unconfirmed; otherwise no observed decline under this repeat protocol. Never claim universal numerical equivalence.",
+  "quality_argv": [
+    "--num-questions",
+    "1319",
+    "--num-shots",
+    "5",
+    "--max-tokens",
+    "256",
+    "--temperature",
+    "0",
+    "--seed",
+    "42",
+    "--max-concurrency",
+    "64"
+  ],
+  "lifecycle": "Fresh original Task2Runner engine/readiness and64token parity request; run_case override runs quality only. No serving benchmark cases or fabricated performance metrics. Fine workload/config durations remain unchanged but unused by this separate quality lifecycle.",
+  "per_repeat_outer_timeout_seconds": 3600,
+  "pin_files": {
+    "controller/pcieccl.toml": "d1142090d21501f38f7dea7124f93fc30fd115d37bf2dec05c6a5ddb63693774",
+    "controller/final_fingerprint.py": "c341d0527f9a91127fcd301f1ae87336de4c9a9a8e0698425cdbaa3928dc105e",
+    "controller/eat_evaluate_waves.py": "7346429b91001f973b191710eb2ac1723eec7d753472e6e82ae145ef6e2e1d76",
+    "source/vllm-0.26.0/tests/evals/gsm8k/gsm8k_eval.py": "ffe099eeb73e958e4b96a2831b3be0fac203801e40ff95e5c475f53a1f9761cd",
+    "source/benchmarks/run_task2.py": "28abbcc28569fbcea01ca1d3ff0e4a83040dacf327bef884663f4dff9b8db8b6",
+    "source/common/libs/service-benchmark/src/service_benchmark/runner.py": "edb187590c2cf0187431174f8b7ea23507f310c0dcfca77c78331e88696f25c8"
+  },
+  "source_snapshots": {
+    "initial": "aec0856c1657fcce6e3dca1dcf979a472938a182eab239457399a8028c53f364",
+    "c03": "ce751fa67339d5163171721a350c09d8edc14876a2e89cb808349ba984f75175"
+  },
+  "authority": "Supervisor-authorized conditional quality adjunct under frozen task/eat/policy.json. No scorer/model/test/tolerance changes."
+}

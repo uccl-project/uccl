@@ -1,0 +1,9 @@
+{
+  "quality_only": true,
+  "performance_cases_run": false,
+  "snapshot": "c03",
+  "protocol_sha256": "13bff60df9c236843196008a235428840ff39b73eb77e3b954f0e2abfb1a7116",
+  "lifecycle": "Original Task2Runner engine and readiness; quality-only run_case",
+  "selected_case_name_as_lifecycle_hook": "isl8192-osl1024-bs64",
+  "original_config_sha256": "d1142090d21501f38f7dea7124f93fc30fd115d37bf2dec05c6a5ddb63693774"
+}

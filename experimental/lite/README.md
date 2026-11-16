@@ -17,6 +17,7 @@
   <tr><td>2</td><td>8 × NVIDIA L4</td><td>Without P2P</td><td>8xL4 SHM: GPU peer transport disabled by policy.</td></tr>
   <tr><td>3</td><td>4 × NVIDIA L4</td><td>With P2P</td><td>PCIe Gen4 dual-socket node; multi-node tests use two such nodes with two NIC rails per node.</td></tr>
   <tr><td>4</td><td>2 × NVIDIA RTX PRO 6000</td><td>With P2P</td><td>BF16 peer path.</td></tr>
+  <tr><td>5</td><td>8 × NVIDIA RTX PRO 6000 Blackwell</td><td>With P2P</td><td>MiniMax-M2.7 FP8 serving; four GPUs per NUMA node; separate external PCIeCCL experiment.</td></tr>
 </table>
 
 </div>
@@ -70,6 +71,27 @@ The [PRO 6000 experiment](integration/peer_e2e/README.md) records communication
 fractions, numerical checks, raw repetitions and the parameter-sharded adapter's
 scope. Its per-layer BF16 AG/RS messages are 37.53 MiB; this is a separate
 workload from Testbed 1's SGLang serving and DDP/FSDP training.
+
+#### Testbed 5
+
+Historical MiniMax-M2.7 FP8 / vLLM TP8+EP serving uses the external PCIeCCL
+GPU path. **The EAT candidate did not meet quality acceptance.** These figures
+do not establish a quality-preserving improvement or validate the current
+UCCL Lite runtime.
+
+<table>
+  <tr><th>Serving throughput</th><th>NCCL transport follow-up</th></tr>
+  <tr>
+    <td width="50%" valign="top"><img src="docs/assets/vllm-pcie-pro6000x8-throughput.svg" alt="MiniMax-M2.7 throughput on eight RTX PRO 6000 GPUs: NCCL default, original PCIeCCL and EAT c03; quality acceptance not met" width="100%"></td>
+    <td width="50%" valign="top"><img src="docs/assets/vllm-pcie-pro6000x8-transport.svg" alt="Fresh NCCL default and forced-P2P throughput; PCIeCCL measurements reused from the prior comparison" width="100%"></td>
+  </tr>
+</table>
+
+The [experiment report and raw data](integration/vllm_pcie/README.md) include
+all seven concurrency cases, TPOT/TTFT latency plots, rejected candidates,
+quality failures and transport evidence. Each case uses 60 s warmup and a
+180 s measurement window, with one final matrix per backend and no per-case
+best-run selection. The transport follow-up reuses the prior PCIeCCL timings.
 
 ### Single-node collectives
 

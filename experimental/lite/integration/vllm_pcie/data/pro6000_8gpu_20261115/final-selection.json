@@ -1,0 +1,13 @@
+{
+  "snapshot": "c03",
+  "loop": 3,
+  "scores": [
+    1.4276239429697326,
+    1.4244755219159624
+  ],
+  "score": 1.4260497324428476,
+  "source_sha256": "ce751fa67339d5163171721a350c09d8edc14876a2e89cb808349ba984f75175",
+  "source_revision": "c56f95e0d8aebef230ad4e2526f8a4dcdd567304",
+  "final_source_commit": "5dbd0666a626a44eeaee55680f846425fc87baa5",
+  "patch_sha256": "4dffb130df4368cb839d98222bbc714f34527f2fa33052aaac77d39912f1d0cc"
+}

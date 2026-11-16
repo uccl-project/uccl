@@ -1,0 +1,191 @@
+{
+  "config_signature": "60e7825e0413453ec8efb73f29e9631e60941f578ea9cd8f5388603340c1918e",
+  "config": {
+    "config_path": "/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/controller/final-pcieccl.toml",
+    "result_dir": "/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/final-validation/pcieccl",
+    "mode": "fine",
+    "inference": {
+      "engine": "vllm",
+      "uv_project": "/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/env",
+      "model_path": "/dev/shm/wxzheng-eat-pcieccl-vllm-pro6000-20261115-074910/model",
+      "served_model_name": "MiniMax-M2.7",
+      "host": "127.0.0.1",
+      "port": 31001,
+      "tp": 8,
+      "ep": null,
+      "gpu_ids": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "numa_nodes": [
+        0,
+        1
+      ],
+      "source_roots": [],
+      "environment": {
+        "NCCL_IB_DISABLE": "1",
+        "NCCL_NET": "Socket",
+        "VLLM_ALLREDUCE_USE_SYMM_MEM": "0",
+        "VLLM_USE_PCIECCL": "1",
+        "VLLM_PCIECCL_MAX_SIZE_BYTES": "67108864"
+      },
+      "environment_unset": [],
+      "extra_args": [
+        "--enable-expert-parallel",
+        "--all2all-backend",
+        "naive",
+        "--enable-prefix-caching",
+        "--disable-custom-all-reduce",
+        "--max-model-len",
+        "10240",
+        "--max-num-batched-tokens",
+        "8192",
+        "--max-num-seqs",
+        "64",
+        "--gpu-memory-utilization",
+        "0.92",
+        "--compilation-config",
+        "{\"pass_config\":{\"fuse_allreduce_rms\":false}}"
+      ],
+      "launcher": [],
+      "startup_timeout_seconds": 3600.0,
+      "request_timeout_seconds": 3600.0,
+      "uv_locked": true,
+      "require_idle_gpus": true
+    },
+    "workload": {
+      "kind": "fixed",
+      "prefix_cache_hit_rate": 0.7,
+      "dataset_path": null,
+      "dataset_max_prompts": 256,
+      "seed": 20260814
+    },
+    "cases": [
+      {
+        "name": "isl8192-osl1024-bs1",
+        "isl": 8192,
+        "osl": 1024,
+        "bs": 1,
+        "warmup_seconds": 60.0,
+        "measurement_seconds": 180.0
+      },
+      {
+        "name": "isl8192-osl1024-bs2",
+        "isl": 8192,
+        "osl": 1024,
+        "bs": 2,
+        "warmup_seconds": 60.0,
+        "measurement_seconds": 180.0
+      },
+      {
+        "name": "isl8192-osl1024-bs4",
+        "isl": 8192,
+        "osl": 1024,
+        "bs": 4,
+        "warmup_seconds": 60.0,
+        "measurement_seconds": 180.0
+      },
+      {
+        "name": "isl8192-osl1024-bs8",
+        "isl": 8192,
+        "osl": 1024,
+        "bs": 8,
+        "warmup_seconds": 60.0,
+        "measurement_seconds": 180.0
+      },
+      {
+        "name": "isl8192-osl1024-bs16",
+        "isl": 8192,
+        "osl": 1024,
+        "bs": 16,
+        "warmup_seconds": 60.0,
+        "measurement_seconds": 180.0
+      },
+      {
+        "name": "isl8192-osl1024-bs32",
+        "isl": 8192,
+        "osl": 1024,
+        "bs": 32,
+        "warmup_seconds": 60.0,
+        "measurement_seconds": 180.0
+      },
+      {
+        "name": "isl8192-osl1024-bs64",
+        "isl": 8192,
+        "osl": 1024,
+        "bs": 64,
+        "warmup_seconds": 60.0,
+        "measurement_seconds": 180.0
+      }
+    ]
+  },
+  "engine_command": [
+    "/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/deps/os/usr/bin/numactl",
+    "--cpunodebind=0,1",
+    "--membind=0,1",
+    "/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/tools/uv",
+    "run",
+    "--locked",
+    "--no-sync",
+    "--project",
+    "/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/env",
+    "python",
+    "-m",
+    "vllm.entrypoints.openai.api_server",
+    "--model",
+    "/dev/shm/wxzheng-eat-pcieccl-vllm-pro6000-20261115-074910/model",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "31001",
+    "--tensor-parallel-size",
+    "8",
+    "--served-model-name",
+    "MiniMax-M2.7",
+    "--enable-expert-parallel",
+    "--all2all-backend",
+    "naive",
+    "--enable-prefix-caching",
+    "--disable-custom-all-reduce",
+    "--max-model-len",
+    "10240",
+    "--max-num-batched-tokens",
+    "8192",
+    "--max-num-seqs",
+    "64",
+    "--gpu-memory-utilization",
+    "0.92",
+    "--compilation-config",
+    "{\"pass_config\":{\"fuse_allreduce_rms\":false}}"
+  ],
+  "configured_environment": {
+    "NCCL_IB_DISABLE": "1",
+    "NCCL_NET": "Socket",
+    "VLLM_ALLREDUCE_USE_SYMM_MEM": "0",
+    "VLLM_USE_PCIECCL": "1",
+    "VLLM_PCIECCL_MAX_SIZE_BYTES": "67108864"
+  },
+  "environment_unset": [],
+  "inference_distribution": {
+    "distribution": "vllm",
+    "version": "0.26.0",
+    "module_path": "/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/env/.venv/lib/python3.12/site-packages/vllm/__init__.py",
+    "gpu_numa_nodes": {
+      "0": 0,
+      "1": 0,
+      "2": 0,
+      "3": 0,
+      "4": 1,
+      "5": 1,
+      "6": 1,
+      "7": 1
+    }
+  },
+  "created_at_utc": "2026-11-15T13:36:34.908313+00:00"
+}

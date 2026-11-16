@@ -1,0 +1,9 @@
+{
+  "complete": true,
+  "configs": [
+    "/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/controller/final-nccl.toml",
+    "/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/controller/final-pcieccl.toml"
+  ],
+  "quality": true,
+  "time": 1794751638.3380265
+}
