@@ -52,7 +52,7 @@
     "build/cpu_router/libuccl_lite_cpu_router.a": "5368d5262da11810905c55c59f7e757ea58a34704184b49d227483308823460a",
     "build/l4_e2e/libuccl_lite_peer_e2e.so": "03f0f812c90e686e4d77d77d365c149ba17d7ae10d3039ce07f1dc59cb098aa6",
     "integration/l4_e2e/summarize.py": "05402a328c6cf4af6f3e7526c8e6409701de0d4d402ca53ca62b7cdb0ceab251",
-    "integration/l4_e2e/plot.py": "6e3a7fe52c57b064749619ba4a64b186f7a077d4c74b9834dbc5489495ab430d",
+    "integration/l4_e2e/plot.py": "6863c9115842ba61c93626dbc96e037a6dfffd7e2e29dae52aacfc0ddcc7fa68",
     "integration/l4_e2e/validate_parameters.py": "cf8094691e3abde701188d8b297522c809addc693e7235a170f90937e0679efa",
     "integration/l4_e2e/check_rematerialization.py": "9134f559ab3ea5527ab5e94c21e76dbf7b9f53b009a09642c63f91a7ddcb083c",
     "integration/l4_e2e/profile_communication.py": "fb280a2cb4c0759eb56b54e6d16ef6cdd449c043603f1f1f10ad99ee9a7f724c",
@@ -66,10 +66,10 @@
   "all_independent_candidate_jobs_beat_all_controls": true,
   "adapter_graph_support": false,
   "figure_sha256": {
-    "docs/assets/training-e2e-1x4l4.svg": "55277ae80ee5041462159051f58a08a4520b8eb16aa2ac9753a53ac36b3d78ae",
-    "docs/assets/serving-e2e-2x4l4.svg": "620fd6ec05525125b472ac54151bf5cb7a1c29c3884bbc367f6369b3243f2565",
-    "docs/assets/serving-e2e-1x4l4.svg": "a581f31164bae302751af4854cc88ecedf2b9497498345d8e424436fd84eaa06",
-    "docs/assets/training-e2e-2x4l4.svg": "57ce75cf222e96283827a49d59e1a4d68f136b9dd7b4827208fe509956cac41b"
+    "docs/assets/training-e2e-1x4l4.svg": "8657125fecd06d49bd36939a5644d37953aaa1416c85f625ebb2c57b946af00e",
+    "docs/assets/serving-e2e-2x4l4.svg": "cd10d8fa11ef939c4d7dc370db44f9b168fc58ce980a92dea3020e9cba607d08",
+    "docs/assets/serving-e2e-1x4l4.svg": "a86b3e55768850a01cfc7e383451d3274b758bc6a593a3f60b4b84ae3fec3bbc",
+    "docs/assets/training-e2e-2x4l4.svg": "67d5a72822a5aee17937df595acc519dbaa4f74903a4c3ad1abdd040c7c18ce7"
   },
   "numerical_validation": {
     "4l4": {

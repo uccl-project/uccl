@@ -56,15 +56,7 @@ figures.
 
 #### Testbed 3: four L4 GPUs
 
-Fresh **GPT-2-XL BF16** measurements use an explicit parameter-sharded adapter
-and one fixed **GPU-progress packet AllGather + peer ReduceScatter** backend.
-Each block has **58.63 MiB** complete AG output / RS input. Training uses the
-same block checkpointing on both backends (96 AG + 48 RS calls/full SGD step).
-Serving measures complete HTTP batches with eight generated tokens.
-
-Whole HTTP-batch latency is **18.1–18.9% lower**; full training-step latency is
-**5.9–6.5% lower** than fresh default NCCL. Both independent UCCL jobs
-beat both NCCL controls in every shown case.
+GPT-2-XL BF16 · experimental parameter-sharded serving and checkpointed training.
 
 <table>
   <tr><th>Serving</th><th>Training</th></tr>
@@ -74,17 +66,9 @@ beat both NCCL controls in every shown case.
   </tr>
 </table>
 
-#### Testbed 3 × 2 nodes: two four-rank sharded replicas
+#### Testbed 3 × 2 nodes
 
-This configuration is **DP2 × shard4**. Serving completes both replicas' HTTP
-batches; training includes NCCL synchronization of owned gradient shards
-between nodes. Both backends use the same groups and network path. Global
-batch doubles relative to one host, keeping per-GPU work constant (**weak
-scaling**, not a strong-scaling speedup). The changed component is local AG/RS.
-
-Whole HTTP-batch latency is **18.8–19.6% lower**; full training-step latency is
-**8.6–9.5% lower** than fresh default NCCL. Both independent UCCL jobs
-beat both NCCL controls in every shown case.
+DP2 × shard4; global batch doubles with GPU count (weak scaling).
 
 <table>
   <tr><th>Serving</th><th>Training</th></tr>
@@ -94,15 +78,7 @@ beat both NCCL controls in every shown case.
   </tr>
 </table>
 
-The [four-L4 / two-node experiment](integration/l4_e2e/README.md) records all
-samples, full-parameter numerical checks, CPU binding, packet settings and
-hardware. These are experimental adapters, not stock FSDP/SGLang or evidence
-of the model's best deployment (GPT-2-XL fits one L4). No kernel or automatic
-routing policy changes. Each point uses two independent jobs/backend, five
-warmups and ten measurements/job; whiskers span job medians. All cases are
-shown, with no per-size best variant. The earlier peer-only cohort, CPU-binding
-confound, slower packet RS and separate GPT-2-large global-eight-shard pilot
-are retained as controls, not mixed into these figures.
+[Experiment setup, numerical checks and raw data](integration/l4_e2e/README.md).
 
 #### Testbed 4
 
