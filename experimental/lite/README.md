@@ -161,6 +161,16 @@ slowest rank, medians of five independent runs. The NCCL SM reference uses
 per-size configurations frozen from separate calibration. This figure measures
 the original standalone UCCL Lite implementation over 1 KiB–1 MiB.
 
+![Eight-GPU FP32 AllReduce against tuned NCCL CE](docs/assets/collectives-pro6000x8-allreduce-fp32-ce-optimized.svg)
+
+[Fresh full-range FP32/C++ CE comparison](benchmarks/data/pro6000_allreduce_ce_cpp_20261116/README.md)
+(experimental): five independent rounds with frozen per-size policies, matched
+placement and complete output/guard/reuse checks. UCCL Lite wins every paired
+run at 15/21 sizes, from 1 KiB through 16 MiB. **The all-size goal is not met:**
+it loses at 32–512 MiB and 1 GiB. At 1 GiB, UCCL Lite reaches 41.97 GB/s versus
+50.68 GB/s for tuned NCCL CE. The report retains an initial CE reuse failure,
+its completion-acknowledgement fix, and all failed or slower experiments.
+
 ### Multi-node collectives
 
 #### Testbed 3 × 2 nodes

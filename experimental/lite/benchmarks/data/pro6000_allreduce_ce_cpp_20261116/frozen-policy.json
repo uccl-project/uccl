@@ -1,0 +1,1159 @@
+{
+  "created": "2026-11-16T08:55:15.506910+00:00",
+  "policy": {
+    "ours": {
+      "1024": "ll-16-256",
+      "2048": "ll-1-256",
+      "4096": "ll-32-256",
+      "8192": "ll-16-256",
+      "16384": "ll-32-256",
+      "32768": "ll-32-1024",
+      "65536": "ll-32-1024",
+      "131072": "ll-32-1024",
+      "262144": "ll-32-256",
+      "524288": "put-64",
+      "1048576": "put-16",
+      "2097152": "put-16",
+      "4194304": "put-64",
+      "8388608": "staged-ce-64",
+      "16777216": "staged-ce-128",
+      "33554432": "staged-ce-128",
+      "67108864": "drained-ce-128",
+      "134217728": "staged-ce-128",
+      "268435456": "staged-ce-128",
+      "536870912": "staged-ce-128",
+      "1073741824": "staged-ce-128"
+    },
+    "nccl": {
+      "1024": "ce-ring-ch1",
+      "2048": "ce-ring-ch1",
+      "4096": "ce-ring-ch1",
+      "8192": "ce-ring-ch2",
+      "16384": "ce-ring-ch1",
+      "32768": "ce-ring-ch1",
+      "65536": "ce-ring-ch1",
+      "131072": "ce-ring-ch1",
+      "262144": "ce-ring-ch1",
+      "524288": "ce-ring-ch1",
+      "1048576": "ce-ring-ch1",
+      "2097152": "ce-auto",
+      "4194304": "ce-auto",
+      "8388608": "ce-ring-ch2-b1m",
+      "16777216": "ce-ring-ch2",
+      "33554432": "ce-ring-ch2",
+      "67108864": "ce-ring-ch2-b16m",
+      "134217728": "ce-ring-ch4-b16m",
+      "268435456": "ce-ring-ch4-b16m",
+      "536870912": "ce-ring-ch4-b16m",
+      "1073741824": "ce-ring-ch4-b16m"
+    }
+  },
+  "identities": {
+    "build/uccl_lite_pro6000_ar": "041eda76bfea8a5ec91cf35ec33daa8e7e34e2accffdb619d8def87367dad271",
+    "build/uccl_lite_pro6000_ar_nccl": "7039c7dfb22b2da53f4c0847431ec9d9724e11c210c842f3ca2d1126668cc096",
+    "src/collectives/pro6000_allreduce.cu": "3b32d3e2eb10f8b500aff2fa1cd86f92a2c5f44edad3373efa9e9d170410d272",
+    "include/uccl_lite/pro6000_allreduce.cuh": "cbbcaa951950a62897b99ec7d801426cb19141cf03666a93f918afdcbe684629",
+    "include/uccl_lite/allreduce_validation.cuh": "9b90e925e08ad9a3f4bb3fc394e68bd817ba484da8014b641c027eaf0f0b7b20"
+  },
+  "placement": "local-four",
+  "platform": {
+    "gpu_identity": "0, NVIDIA RTX PRO 6000 Blackwell Server Edition, GPU-6abab0bc-276e-afcf-1767-ef32e6f2f08e, 00000000:05:00.0, 580.178.04\n1, NVIDIA RTX PRO 6000 Blackwell Server Edition, GPU-232a1b58-d532-a4ae-20d4-1a93970343ea, 00000000:06:00.0, 580.178.04\n2, NVIDIA RTX PRO 6000 Blackwell Server Edition, GPU-b6be3df3-a733-0a0a-1431-15153988fd63, 00000000:0A:00.0, 580.178.04\n3, NVIDIA RTX PRO 6000 Blackwell Server Edition, GPU-0612c62a-6e7b-abcd-da0b-e3b96ed02851, 00000000:0B:00.0, 580.178.04\n4, NVIDIA RTX PRO 6000 Blackwell Server Edition, GPU-90129106-1aef-ab36-fe51-c8a7d4bfca1b, 00000000:84:00.0, 580.178.04\n5, NVIDIA RTX PRO 6000 Blackwell Server Edition, GPU-4bfa2c93-d647-6a75-d28f-97b41d43a76e, 00000000:85:00.0, 580.178.04\n6, NVIDIA RTX PRO 6000 Blackwell Server Edition, GPU-3bced1fe-eab0-de91-f981-dc0add143eab, 00000000:89:00.0, 580.178.04\n7, NVIDIA RTX PRO 6000 Blackwell Server Edition, GPU-74c7b00a-d022-d649-f4fc-584f0d29d36a, 00000000:8A:00.0, 580.178.04\n",
+    "topology": "\t\u001b[4mGPU0\tGPU1\tGPU2\tGPU3\tGPU4\tGPU5\tGPU6\tGPU7\tCPU Affinity\tNUMA Affinity\tGPU NUMA ID\u001b[0m\nGPU0\t X \tPIX\tNODE\tNODE\tSYS\tSYS\tSYS\tSYS\t0-95,192-287\t0\t\tN/A\nGPU1\tPIX\t X \tNODE\tNODE\tSYS\tSYS\tSYS\tSYS\t0-95,192-287\t0\t\tN/A\nGPU2\tNODE\tNODE\t X \tPIX\tSYS\tSYS\tSYS\tSYS\t0-95,192-287\t0\t\tN/A\nGPU3\tNODE\tNODE\tPIX\t X \tSYS\tSYS\tSYS\tSYS\t0-95,192-287\t0\t\tN/A\nGPU4\tSYS\tSYS\tSYS\tSYS\t X \tPIX\tNODE\tNODE\t96-191,288-383\t1\t\tN/A\nGPU5\tSYS\tSYS\tSYS\tSYS\tPIX\t X \tNODE\tNODE\t96-191,288-383\t1\t\tN/A\nGPU6\tSYS\tSYS\tSYS\tSYS\tNODE\tNODE\t X \tPIX\t96-191,288-383\t1\t\tN/A\nGPU7\tSYS\tSYS\tSYS\tSYS\tNODE\tNODE\tPIX\t X \t96-191,288-383\t1\t\tN/A\n\nLegend:\n\n  X    = Self\n  SYS  = Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)\n  NODE = Connection traversing PCIe as well as the interconnect between PCIe Host Bridges within a NUMA node\n  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)\n  PXB  = Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)\n  PIX  = Connection traversing at most a single PCIe bridge\n  NV#  = Connection traversing a bonded set of # NVLinks\n",
+    "cpu_topology": "# The following is the parsable format, which can be fed to other\n# programs. Each different item in every column has an unique ID\n# starting usually from zero.\n# CPU,Socket,Node\n0,0,0\n1,0,0\n2,0,0\n3,0,0\n4,0,0\n5,0,0\n6,0,0\n7,0,0\n8,0,0\n9,0,0\n10,0,0\n11,0,0\n12,0,0\n13,0,0\n14,0,0\n15,0,0\n16,0,0\n17,0,0\n18,0,0\n19,0,0\n20,0,0\n21,0,0\n22,0,0\n23,0,0\n24,0,0\n25,0,0\n26,0,0\n27,0,0\n28,0,0\n29,0,0\n30,0,0\n31,0,0\n32,0,0\n33,0,0\n34,0,0\n35,0,0\n36,0,0\n37,0,0\n38,0,0\n39,0,0\n40,0,0\n41,0,0\n42,0,0\n43,0,0\n44,0,0\n45,0,0\n46,0,0\n47,0,0\n48,0,0\n49,0,0\n50,0,0\n51,0,0\n52,0,0\n53,0,0\n54,0,0\n55,0,0\n56,0,0\n57,0,0\n58,0,0\n59,0,0\n60,0,0\n61,0,0\n62,0,0\n63,0,0\n64,0,0\n65,0,0\n66,0,0\n67,0,0\n68,0,0\n69,0,0\n70,0,0\n71,0,0\n72,0,0\n73,0,0\n74,0,0\n75,0,0\n76,0,0\n77,0,0\n78,0,0\n79,0,0\n80,0,0\n81,0,0\n82,0,0\n83,0,0\n84,0,0\n85,0,0\n86,0,0\n87,0,0\n88,0,0\n89,0,0\n90,0,0\n91,0,0\n92,0,0\n93,0,0\n94,0,0\n95,0,0\n96,1,1\n97,1,1\n98,1,1\n99,1,1\n100,1,1\n101,1,1\n102,1,1\n103,1,1\n104,1,1\n105,1,1\n106,1,1\n107,1,1\n108,1,1\n109,1,1\n110,1,1\n111,1,1\n112,1,1\n113,1,1\n114,1,1\n115,1,1\n116,1,1\n117,1,1\n118,1,1\n119,1,1\n120,1,1\n121,1,1\n122,1,1\n123,1,1\n124,1,1\n125,1,1\n126,1,1\n127,1,1\n128,1,1\n129,1,1\n130,1,1\n131,1,1\n132,1,1\n133,1,1\n134,1,1\n135,1,1\n136,1,1\n137,1,1\n138,1,1\n139,1,1\n140,1,1\n141,1,1\n142,1,1\n143,1,1\n144,1,1\n145,1,1\n146,1,1\n147,1,1\n148,1,1\n149,1,1\n150,1,1\n151,1,1\n152,1,1\n153,1,1\n154,1,1\n155,1,1\n156,1,1\n157,1,1\n158,1,1\n159,1,1\n160,1,1\n161,1,1\n162,1,1\n163,1,1\n164,1,1\n165,1,1\n166,1,1\n167,1,1\n168,1,1\n169,1,1\n170,1,1\n171,1,1\n172,1,1\n173,1,1\n174,1,1\n175,1,1\n176,1,1\n177,1,1\n178,1,1\n179,1,1\n180,1,1\n181,1,1\n182,1,1\n183,1,1\n184,1,1\n185,1,1\n186,1,1\n187,1,1\n188,1,1\n189,1,1\n190,1,1\n191,1,1\n192,0,0\n193,0,0\n194,0,0\n195,0,0\n196,0,0\n197,0,0\n198,0,0\n199,0,0\n200,0,0\n201,0,0\n202,0,0\n203,0,0\n204,0,0\n205,0,0\n206,0,0\n207,0,0\n208,0,0\n209,0,0\n210,0,0\n211,0,0\n212,0,0\n213,0,0\n214,0,0\n215,0,0\n216,0,0\n217,0,0\n218,0,0\n219,0,0\n220,0,0\n221,0,0\n222,0,0\n223,0,0\n224,0,0\n225,0,0\n226,0,0\n227,0,0\n228,0,0\n229,0,0\n230,0,0\n231,0,0\n232,0,0\n233,0,0\n234,0,0\n235,0,0\n236,0,0\n237,0,0\n238,0,0\n239,0,0\n240,0,0\n241,0,0\n242,0,0\n243,0,0\n244,0,0\n245,0,0\n246,0,0\n247,0,0\n248,0,0\n249,0,0\n250,0,0\n251,0,0\n252,0,0\n253,0,0\n254,0,0\n255,0,0\n256,0,0\n257,0,0\n258,0,0\n259,0,0\n260,0,0\n261,0,0\n262,0,0\n263,0,0\n264,0,0\n265,0,0\n266,0,0\n267,0,0\n268,0,0\n269,0,0\n270,0,0\n271,0,0\n272,0,0\n273,0,0\n274,0,0\n275,0,0\n276,0,0\n277,0,0\n278,0,0\n279,0,0\n280,0,0\n281,0,0\n282,0,0\n283,0,0\n284,0,0\n285,0,0\n286,0,0\n287,0,0\n288,1,1\n289,1,1\n290,1,1\n291,1,1\n292,1,1\n293,1,1\n294,1,1\n295,1,1\n296,1,1\n297,1,1\n298,1,1\n299,1,1\n300,1,1\n301,1,1\n302,1,1\n303,1,1\n304,1,1\n305,1,1\n306,1,1\n307,1,1\n308,1,1\n309,1,1\n310,1,1\n311,1,1\n312,1,1\n313,1,1\n314,1,1\n315,1,1\n316,1,1\n317,1,1\n318,1,1\n319,1,1\n320,1,1\n321,1,1\n322,1,1\n323,1,1\n324,1,1\n325,1,1\n326,1,1\n327,1,1\n328,1,1\n329,1,1\n330,1,1\n331,1,1\n332,1,1\n333,1,1\n334,1,1\n335,1,1\n336,1,1\n337,1,1\n338,1,1\n339,1,1\n340,1,1\n341,1,1\n342,1,1\n343,1,1\n344,1,1\n345,1,1\n346,1,1\n347,1,1\n348,1,1\n349,1,1\n350,1,1\n351,1,1\n352,1,1\n353,1,1\n354,1,1\n355,1,1\n356,1,1\n357,1,1\n358,1,1\n359,1,1\n360,1,1\n361,1,1\n362,1,1\n363,1,1\n364,1,1\n365,1,1\n366,1,1\n367,1,1\n368,1,1\n369,1,1\n370,1,1\n371,1,1\n372,1,1\n373,1,1\n374,1,1\n375,1,1\n376,1,1\n377,1,1\n378,1,1\n379,1,1\n380,1,1\n381,1,1\n382,1,1\n383,1,1\n",
+    "mscclpp_sha256": "8c33feaae3d692065bfb3cf5394764e959310766ef52bde88577122c1ef98209",
+    "nccl_sha256": "1c8618b866734cbdd5401715d6178be763ece283b7f808ecf86dedab211162c1",
+    "dtype": "FP32",
+    "operation": "in-place SUM",
+    "ranks": 8,
+    "warmups": 10,
+    "continuous_calls": 20,
+    "capacity": 1073741824
+  },
+  "platform_sha256": "53dd99d594fca1230d885179aaaad2d5bea42dd8afb7a79ddadc85fbe2627d4c",
+  "nccl_candidates": {
+    "ce-auto": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple"
+    },
+    "ce-ring": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring"
+    },
+    "ce-tree": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Tree"
+    },
+    "ce-ring-ch1": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "1",
+      "NCCL_MAX_NCHANNELS": "1"
+    },
+    "ce-ring-ch2": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "2",
+      "NCCL_MAX_NCHANNELS": "2"
+    },
+    "ce-ring-ch4": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "4",
+      "NCCL_MAX_NCHANNELS": "4"
+    },
+    "ce-ring-ch8": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8"
+    },
+    "ce-ring-ch16": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "16",
+      "NCCL_MAX_NCHANNELS": "16"
+    },
+    "ce-ring-ch2-b1m": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "2",
+      "NCCL_MAX_NCHANNELS": "2",
+      "NCCL_BUFFSIZE": "1048576"
+    },
+    "ce-ring-ch2-b16m": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "2",
+      "NCCL_MAX_NCHANNELS": "2",
+      "NCCL_BUFFSIZE": "16777216"
+    },
+    "ce-ring-ch4-b1m": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "4",
+      "NCCL_MAX_NCHANNELS": "4",
+      "NCCL_BUFFSIZE": "1048576"
+    },
+    "ce-ring-ch4-b16m": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "4",
+      "NCCL_MAX_NCHANNELS": "4",
+      "NCCL_BUFFSIZE": "16777216"
+    },
+    "ce-ring-ch8-b1m": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8",
+      "NCCL_BUFFSIZE": "1048576"
+    },
+    "ce-ring-ch8-b16m": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8",
+      "NCCL_BUFFSIZE": "16777216"
+    },
+    "ce-ring-ch2-t128": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "2",
+      "NCCL_MAX_NCHANNELS": "2",
+      "NCCL_NTHREADS": "128"
+    },
+    "ce-ring-ch4-t128": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "4",
+      "NCCL_MAX_NCHANNELS": "4",
+      "NCCL_NTHREADS": "128"
+    },
+    "ce-ring-ch8-t128": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8",
+      "NCCL_NTHREADS": "128"
+    },
+    "ce-ring-ch4-b64m": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "4",
+      "NCCL_MAX_NCHANNELS": "4",
+      "NCCL_BUFFSIZE": "67108864"
+    },
+    "ce-ring-ch8-b64m": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8",
+      "NCCL_BUFFSIZE": "67108864"
+    }
+  },
+  "ours_candidates": {
+    "ll-1-256": {
+      "mode": "ll",
+      "blocks": 1,
+      "threads": 256,
+      "end": 4194304
+    },
+    "ll-1-1024": {
+      "mode": "ll",
+      "blocks": 1,
+      "threads": 1024,
+      "end": 4194304
+    },
+    "ll-4-256": {
+      "mode": "ll",
+      "blocks": 4,
+      "threads": 256,
+      "end": 4194304
+    },
+    "ll-4-1024": {
+      "mode": "ll",
+      "blocks": 4,
+      "threads": 1024,
+      "end": 4194304
+    },
+    "ll-16-256": {
+      "mode": "ll",
+      "blocks": 16,
+      "threads": 256,
+      "end": 4194304
+    },
+    "ll-16-1024": {
+      "mode": "ll",
+      "blocks": 16,
+      "threads": 1024,
+      "end": 4194304
+    },
+    "ll-32-256": {
+      "mode": "ll",
+      "blocks": 32,
+      "threads": 256,
+      "end": 4194304
+    },
+    "ll-32-1024": {
+      "mode": "ll",
+      "blocks": 32,
+      "threads": 1024,
+      "end": 4194304
+    },
+    "put-4": {
+      "mode": "put",
+      "blocks": 4,
+      "threads": 256
+    },
+    "put-16": {
+      "mode": "put",
+      "blocks": 16,
+      "threads": 256
+    },
+    "put-64": {
+      "mode": "put",
+      "blocks": 64,
+      "threads": 256
+    },
+    "drained-ce-16": {
+      "mode": "drained-ce",
+      "blocks": 16,
+      "threads": 512,
+      "begin": 1024
+    },
+    "drained-ce-64": {
+      "mode": "drained-ce",
+      "blocks": 64,
+      "threads": 512,
+      "begin": 1024
+    },
+    "chunk-ce-1-1m": {
+      "mode": "chunk-ce",
+      "blocks": 1,
+      "threads": 512,
+      "tile": 1048576,
+      "begin": 1048576
+    },
+    "chunk-ce-1-4m": {
+      "mode": "chunk-ce",
+      "blocks": 1,
+      "threads": 512,
+      "tile": 4194304,
+      "begin": 1048576
+    },
+    "chunk-ce-1-16m": {
+      "mode": "chunk-ce",
+      "blocks": 1,
+      "threads": 512,
+      "tile": 16777216,
+      "begin": 1048576
+    },
+    "chunk-ce-1-64m": {
+      "mode": "chunk-ce",
+      "blocks": 1,
+      "threads": 512,
+      "tile": 67108864,
+      "begin": 1048576
+    },
+    "chunk-ce-4-1m": {
+      "mode": "chunk-ce",
+      "blocks": 4,
+      "threads": 512,
+      "tile": 1048576,
+      "begin": 1048576
+    },
+    "chunk-ce-4-4m": {
+      "mode": "chunk-ce",
+      "blocks": 4,
+      "threads": 512,
+      "tile": 4194304,
+      "begin": 1048576
+    },
+    "chunk-ce-4-16m": {
+      "mode": "chunk-ce",
+      "blocks": 4,
+      "threads": 512,
+      "tile": 16777216,
+      "begin": 1048576
+    },
+    "chunk-ce-4-64m": {
+      "mode": "chunk-ce",
+      "blocks": 4,
+      "threads": 512,
+      "tile": 67108864,
+      "begin": 1048576
+    },
+    "chunk-ce-16-1m": {
+      "mode": "chunk-ce",
+      "blocks": 16,
+      "threads": 512,
+      "tile": 1048576,
+      "begin": 1048576
+    },
+    "chunk-ce-16-4m": {
+      "mode": "chunk-ce",
+      "blocks": 16,
+      "threads": 512,
+      "tile": 4194304,
+      "begin": 1048576
+    },
+    "chunk-ce-16-16m": {
+      "mode": "chunk-ce",
+      "blocks": 16,
+      "threads": 512,
+      "tile": 16777216,
+      "begin": 1048576
+    },
+    "chunk-ce-16-64m": {
+      "mode": "chunk-ce",
+      "blocks": 16,
+      "threads": 512,
+      "tile": 67108864,
+      "begin": 1048576
+    },
+    "chunk-ce-1-4m-w4": {
+      "mode": "chunk-ce",
+      "blocks": 1,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 4,
+      "begin": 1048576
+    },
+    "chunk-ce-1-4m-w8": {
+      "mode": "chunk-ce",
+      "blocks": 1,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "chunk-ce-1-16m-w4": {
+      "mode": "chunk-ce",
+      "blocks": 1,
+      "threads": 256,
+      "tile": 16777216,
+      "workers": 4,
+      "begin": 1048576
+    },
+    "chunk-ce-1-16m-w8": {
+      "mode": "chunk-ce",
+      "blocks": 1,
+      "threads": 256,
+      "tile": 16777216,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "chunk-ce-1-64m-w4": {
+      "mode": "chunk-ce",
+      "blocks": 1,
+      "threads": 256,
+      "tile": 67108864,
+      "workers": 4,
+      "begin": 1048576
+    },
+    "chunk-ce-1-64m-w8": {
+      "mode": "chunk-ce",
+      "blocks": 1,
+      "threads": 256,
+      "tile": 67108864,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "chunk-ce-4-4m-w4": {
+      "mode": "chunk-ce",
+      "blocks": 4,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 4,
+      "begin": 1048576
+    },
+    "chunk-ce-4-4m-w8": {
+      "mode": "chunk-ce",
+      "blocks": 4,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "chunk-ce-4-16m-w4": {
+      "mode": "chunk-ce",
+      "blocks": 4,
+      "threads": 256,
+      "tile": 16777216,
+      "workers": 4,
+      "begin": 1048576
+    },
+    "chunk-ce-4-16m-w8": {
+      "mode": "chunk-ce",
+      "blocks": 4,
+      "threads": 256,
+      "tile": 16777216,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "chunk-ce-4-64m-w4": {
+      "mode": "chunk-ce",
+      "blocks": 4,
+      "threads": 256,
+      "tile": 67108864,
+      "workers": 4,
+      "begin": 1048576
+    },
+    "chunk-ce-4-64m-w8": {
+      "mode": "chunk-ce",
+      "blocks": 4,
+      "threads": 256,
+      "tile": 67108864,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "chunk-ce-8-4m-w4": {
+      "mode": "chunk-ce",
+      "blocks": 8,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 4,
+      "begin": 1048576
+    },
+    "chunk-ce-8-4m-w8": {
+      "mode": "chunk-ce",
+      "blocks": 8,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "chunk-ce-8-16m-w4": {
+      "mode": "chunk-ce",
+      "blocks": 8,
+      "threads": 256,
+      "tile": 16777216,
+      "workers": 4,
+      "begin": 1048576
+    },
+    "chunk-ce-8-16m-w8": {
+      "mode": "chunk-ce",
+      "blocks": 8,
+      "threads": 256,
+      "tile": 16777216,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "chunk-ce-8-64m-w4": {
+      "mode": "chunk-ce",
+      "blocks": 8,
+      "threads": 256,
+      "tile": 67108864,
+      "workers": 4,
+      "begin": 1048576
+    },
+    "chunk-ce-8-64m-w8": {
+      "mode": "chunk-ce",
+      "blocks": 8,
+      "threads": 256,
+      "tile": 67108864,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "chunk-ce-16-4m-w4": {
+      "mode": "chunk-ce",
+      "blocks": 16,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 4,
+      "begin": 1048576
+    },
+    "chunk-ce-16-4m-w8": {
+      "mode": "chunk-ce",
+      "blocks": 16,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "chunk-ce-16-16m-w4": {
+      "mode": "chunk-ce",
+      "blocks": 16,
+      "threads": 256,
+      "tile": 16777216,
+      "workers": 4,
+      "begin": 1048576
+    },
+    "chunk-ce-16-16m-w8": {
+      "mode": "chunk-ce",
+      "blocks": 16,
+      "threads": 256,
+      "tile": 16777216,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "chunk-ce-16-64m-w4": {
+      "mode": "chunk-ce",
+      "blocks": 16,
+      "threads": 256,
+      "tile": 67108864,
+      "workers": 4,
+      "begin": 1048576
+    },
+    "chunk-ce-16-64m-w8": {
+      "mode": "chunk-ce",
+      "blocks": 16,
+      "threads": 256,
+      "tile": 67108864,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "chunk-ce-1-4m-s3": {
+      "mode": "chunk-ce",
+      "blocks": 1,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 8,
+      "streams": 3,
+      "begin": 1048576
+    },
+    "chunk-ce-1-16m-s3": {
+      "mode": "chunk-ce",
+      "blocks": 1,
+      "threads": 256,
+      "tile": 16777216,
+      "workers": 8,
+      "streams": 3,
+      "begin": 1048576
+    },
+    "chunk-ce-1-64m-s3": {
+      "mode": "chunk-ce",
+      "blocks": 1,
+      "threads": 256,
+      "tile": 67108864,
+      "workers": 8,
+      "streams": 3,
+      "begin": 1048576
+    },
+    "chunk-ce-4-4m-s3": {
+      "mode": "chunk-ce",
+      "blocks": 4,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 8,
+      "streams": 3,
+      "begin": 1048576
+    },
+    "chunk-ce-4-16m-s3": {
+      "mode": "chunk-ce",
+      "blocks": 4,
+      "threads": 256,
+      "tile": 16777216,
+      "workers": 8,
+      "streams": 3,
+      "begin": 1048576
+    },
+    "chunk-ce-4-64m-s3": {
+      "mode": "chunk-ce",
+      "blocks": 4,
+      "threads": 256,
+      "tile": 67108864,
+      "workers": 8,
+      "streams": 3,
+      "begin": 1048576
+    },
+    "chunk-ce-8-4m-s3": {
+      "mode": "chunk-ce",
+      "blocks": 8,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 8,
+      "streams": 3,
+      "begin": 1048576
+    },
+    "chunk-ce-8-16m-s3": {
+      "mode": "chunk-ce",
+      "blocks": 8,
+      "threads": 256,
+      "tile": 16777216,
+      "workers": 8,
+      "streams": 3,
+      "begin": 1048576
+    },
+    "chunk-ce-8-64m-s3": {
+      "mode": "chunk-ce",
+      "blocks": 8,
+      "threads": 256,
+      "tile": 67108864,
+      "workers": 8,
+      "streams": 3,
+      "begin": 1048576
+    },
+    "chunk-ce-16-4m-s3": {
+      "mode": "chunk-ce",
+      "blocks": 16,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 8,
+      "streams": 3,
+      "begin": 1048576
+    },
+    "chunk-ce-16-16m-s3": {
+      "mode": "chunk-ce",
+      "blocks": 16,
+      "threads": 256,
+      "tile": 16777216,
+      "workers": 8,
+      "streams": 3,
+      "begin": 1048576
+    },
+    "chunk-ce-16-64m-s3": {
+      "mode": "chunk-ce",
+      "blocks": 16,
+      "threads": 256,
+      "tile": 67108864,
+      "workers": 8,
+      "streams": 3,
+      "begin": 1048576
+    },
+    "host-ce-1-4m": {
+      "mode": "host-ce",
+      "blocks": 1,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "host-ce-1-16m": {
+      "mode": "host-ce",
+      "blocks": 1,
+      "threads": 256,
+      "tile": 16777216,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "host-ce-1-64m": {
+      "mode": "host-ce",
+      "blocks": 1,
+      "threads": 256,
+      "tile": 67108864,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "host-ce-1-256m": {
+      "mode": "host-ce",
+      "blocks": 1,
+      "threads": 256,
+      "tile": 268435456,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "host-ce-4-4m": {
+      "mode": "host-ce",
+      "blocks": 4,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "host-ce-4-16m": {
+      "mode": "host-ce",
+      "blocks": 4,
+      "threads": 256,
+      "tile": 16777216,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "host-ce-4-64m": {
+      "mode": "host-ce",
+      "blocks": 4,
+      "threads": 256,
+      "tile": 67108864,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "host-ce-4-256m": {
+      "mode": "host-ce",
+      "blocks": 4,
+      "threads": 256,
+      "tile": 268435456,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "host-ce-8-4m": {
+      "mode": "host-ce",
+      "blocks": 8,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "host-ce-8-16m": {
+      "mode": "host-ce",
+      "blocks": 8,
+      "threads": 256,
+      "tile": 16777216,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "host-ce-8-64m": {
+      "mode": "host-ce",
+      "blocks": 8,
+      "threads": 256,
+      "tile": 67108864,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "host-ce-8-256m": {
+      "mode": "host-ce",
+      "blocks": 8,
+      "threads": 256,
+      "tile": 268435456,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "host-ce-16-4m": {
+      "mode": "host-ce",
+      "blocks": 16,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "host-ce-16-16m": {
+      "mode": "host-ce",
+      "blocks": 16,
+      "threads": 256,
+      "tile": 16777216,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "host-ce-16-64m": {
+      "mode": "host-ce",
+      "blocks": 16,
+      "threads": 256,
+      "tile": 67108864,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "host-ce-16-256m": {
+      "mode": "host-ce",
+      "blocks": 16,
+      "threads": 256,
+      "tile": 268435456,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "chunk-ce-8-1m-w4-s3": {
+      "mode": "chunk-ce",
+      "blocks": 8,
+      "threads": 256,
+      "tile": 1048576,
+      "workers": 4,
+      "streams": 3,
+      "begin": 1048576
+    },
+    "chunk-ce-8-4m-w4-s3": {
+      "mode": "chunk-ce",
+      "blocks": 8,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 4,
+      "streams": 3,
+      "begin": 1048576
+    },
+    "chunk-ce-16-1m-w4-s3": {
+      "mode": "chunk-ce",
+      "blocks": 16,
+      "threads": 256,
+      "tile": 1048576,
+      "workers": 4,
+      "streams": 3,
+      "begin": 1048576
+    },
+    "chunk-ce-16-4m-w4-s3": {
+      "mode": "chunk-ce",
+      "blocks": 16,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 4,
+      "streams": 3,
+      "begin": 1048576
+    },
+    "chunk-ce-32-1m-w4-s3": {
+      "mode": "chunk-ce",
+      "blocks": 32,
+      "threads": 256,
+      "tile": 1048576,
+      "workers": 4,
+      "streams": 3,
+      "begin": 1048576
+    },
+    "chunk-ce-32-4m-w4-s3": {
+      "mode": "chunk-ce",
+      "blocks": 32,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 4,
+      "streams": 3,
+      "begin": 1048576
+    },
+    "staged-ce-32": {
+      "mode": "staged-ce",
+      "blocks": 32,
+      "threads": 512,
+      "begin": 1024
+    },
+    "staged-ce-64": {
+      "mode": "staged-ce",
+      "blocks": 64,
+      "threads": 512,
+      "begin": 1024
+    },
+    "staged-ce-128": {
+      "mode": "staged-ce",
+      "blocks": 128,
+      "threads": 512,
+      "begin": 1024
+    },
+    "drained-ce-128": {
+      "mode": "drained-ce",
+      "blocks": 128,
+      "threads": 512,
+      "begin": 1024
+    }
+  },
+  "calibration_hashes": {
+    "calibrate-3-ours-put-64.txt": "5a7137efef1d16ec7af7b72c540b85754cdf3907aa0d21d2042ed13ba4a4a3ed",
+    "calibrate-3-ours-put-64.json": "ec584602687c02c1f470582716adb622f12c1cfc01d368307b0b1e8050b813a0",
+    "calibrate-1-ours-chunk-ce-16-4m-s3.json": "d41fa716c6b78ecec74b34aafa2613629143790e2651db4ddaeeb6401f55b6e5",
+    "calibrate-2-nccl-ce-ring.txt": "cb27fdfa58bf32c22f3fff72ae8b99abcebf7ed5a55611f0a68775d7033912a0",
+    "calibrate-1-nccl-ce-ring-ch1.txt": "bbb6439a6bccc7dee3db5b5db6003218546340a026ca832067897bfec043188f",
+    "calibrate-3-nccl-ce-ring-ch4-b1m.txt": "eb19650f65d24f44efc174ac7670ece6b0a22718096c07e81d6da23228671d19",
+    "calibrate-2-ours-put-64.txt": "8c7cee0cb7afc137d9d57531a570e9c2c66930145949ec0b54a3cc4855e18e49",
+    "calibrate-2-ours-put-4.json": "a771be58ff5ff1f14ab02c3f3add3c77557b5e8d2c12c5da22d0ace7cc1101a4",
+    "calibrate-2-ours-drained-ce-16.json": "05a5d03c0d132024e531bc7b375ae06c4e7f78bb159b8263c090452eb133959b",
+    "calibrate-3-nccl-ce-ring-ch8-b16m.txt": "9158a1f62b47478441692fc4837cda08047bf44762709271d57cc2cbd529e71a",
+    "calibrate-2-nccl-ce-ring-ch8.json": "9f1df5b2a4b54dda5b49e17baa0c56b72796d7ff5713395473b619f9f237512e",
+    "calibrate-3-ours-host-ce-4-64m.txt": "5a9c2deceb3300da1796713e95adf26144f3ecab45f6630279510d07fb67649c",
+    "calibrate-2-ours-ll-16-256.txt": "fcb1c2856fc1a806fb3f40d18a41e7ebc7781bae235d39c554ece1de15414d4e",
+    "calibrate-1-nccl-ce-ring-ch4.txt": "bd6ade8f38eff5a90ee66a1908eb2e55d6e4f6fc3de6288126ba31a73d581cc5",
+    "calibrate-3-ours-ll-16-256.txt": "a3861185b68c3fa14c06bd54cfa9b73afef3f14da95b55fc2ee379e08a970fd8",
+    "calibrate-3-nccl-ce-ring-ch2-b16m.json": "7552b32a975e2b0b9f0d8474c76bae0bba36c4376d7377f98c2f797d624f1ad7",
+    "calibrate-1-nccl-ce-ring-ch8-b1m.json": "846840c568e967e30d42c91ef972d10818eb1bb9d94efaa79d9cbec628ce562c",
+    "calibrate-1-ours-drained-ce-16.txt": "a1ea2097403648b3cfa029b320c81609ba3a60c4616409fe37de9c4fbd7288f4",
+    "calibrate-2-nccl-ce-ring-ch8.txt": "d2d2f0c9f736a0848eac7a1db2abd5d03d504157824e5c88bc3a44450fe3a517",
+    "calibrate-1-nccl-ce-ring-ch8-b1m.txt": "93d4fd3f06432fbf3709ac257743ef5d5bab391e990879b5f1a7d833bfecae65",
+    "calibrate-1-nccl-ce-tree.json": "8eaf6defed8ac9609ab126ab14952d5a674d81edaa3068642aee343ee2fb9187",
+    "calibrate-2-nccl-ce-ring-ch4.txt": "f11534a005e0f20f99687bd0fa6fe288c3a28dd50fa709c4dc4ebbbf8e3af59b",
+    "calibrate-1-ours-chunk-ce-4-16m-w8.json": "84ef13ee62f183dd54e5d40a755b2a8b7e2718472edfd7ef00c0f2b14c2800d6",
+    "calibrate-2-ours-drained-ce-16.txt": "0aeeae8cbb30f4928e624a07d5688d9b99930cc64b2102e2e72cf7d4bbda3839",
+    "calibrate-1-nccl-ce-ring-ch2-b16m.txt": "47c635af6e6ec89059233b9781af13c1156a208ec705229c3ff7d139d8b6f4d1",
+    "calibrate-2-ours-ll-1-1024.txt": "5fbaf56b3bf97cded454a415f5fc2f40058af08f147fe7607f57d5c8159bfbb5",
+    "calibrate-1-nccl-ce-ring.txt": "856f7ac6e4ef7a5bca77cce77f556a14f92da52462d675648173b193dacb7bc6",
+    "calibrate-2-ours-ll-16-1024.json": "bcfa49b9051cd2d94d6d21ee2454e1473b8a26ba1f9f6863491599a436158dfe",
+    "calibrate-2-ours-ll-32-256.json": "1bd9e806a43f1bc2161e37717ebf517329be786fee8107f9a983d6e99c0a8ff7",
+    "calibrate-3-ours-put-16.txt": "bacd160bd6bb86e639a54761dd1c7e7d1e99ca1c4924b2108ad62b1dbd0fe70b",
+    "calibrate-2-nccl-ce-ring-ch4-b64m.json": "b125e795d1ef3921447e730436704f853d1f73a0a1e6d3bd20a1f701b12314ab",
+    "calibrate-3-nccl-ce-ring-ch8-t128.json": "057f2dfb96f5e18b2151fdf71b3218a55c1ba4e90affbb253206e8f6c8b7dd62",
+    "calibrate-3-ours-put-4.txt": "3dc519f073a268a43af3e020de70947438b61d7e8c1bade7377f93f73aed57b9",
+    "calibrate-3-ours-host-ce-4-64m.json": "4a55c1980779577997536205902d4ec6502fc320278b67d307263b85a03ca08b",
+    "calibrate-2-ours-drained-ce-64.json": "d96de4348f5e205f6f60c30c197feaa272597e254b5db776ef7211e1960f10ac",
+    "calibrate-1-ours-ll-32-1024.txt": "4a21c1060076dd589bc470a157ae9797a9f81e62494fe5cd2ed6d4afa500cf4e",
+    "calibrate-2-ours-ll-16-256.json": "3278bfbc1c9f022b525848d171a82fb4cc7cc14e29a26571274c26945804bbfd",
+    "calibrate-2-ours-ll-4-1024.txt": "f8e34a917696792623a145d0a55a8c8a2aa5feb51d2d0da4d3b23cca5475e4d9",
+    "calibrate-3-ours-ll-32-256.txt": "879a1473c9400295d90a0a890fb13d1e09753265e23143205eb129497f9bf115",
+    "calibrate-2-nccl-ce-ring-ch2-b16m.json": "f40faf66076b9e632b2ec22320c4c012b3597f7df8de0d28873a900d8f3ea82d",
+    "calibrate-1-nccl-ce-ring-ch8-b64m.txt": "a87761839b648ff9fc9371cdc441c54c623d8998f8fb87bba05cca3ab53284a5",
+    "calibrate-3-ours-put-16.json": "e0fd940d1f9b53c4132619a3a530a560e1976cbd83e3fc1cb957e16201a4d704",
+    "calibrate-1-ours-ll-16-1024.txt": "c25af0469eec36f84b0bdddf618d5496602f5bfdb9835d55b7b65f65458adadc",
+    "calibrate-1-ours-chunk-ce-4-16m-w8.txt": "9f18a1c29ae4dfca43b63fe6b04a2623ecab1249055a2313821cbbf4d489a5d3",
+    "calibrate-2-nccl-ce-ring-ch8-b1m.txt": "6adba599a49478f81eb96972c662e0bf3319fda093daa05b003e671f48256fda",
+    "calibrate-1-ours-staged-ce-128.txt": "6c136aa5973248f4aee5092a2374d2b77941d252ee56efdc4a48059b7ef3c17e",
+    "calibrate-3-nccl-ce-ring-ch2.txt": "821b18d753dc2f500677c291c21d8bedf87644940d6edb673d693554cc162dc8",
+    "calibrate-2-ours-ll-4-256.txt": "70917d01245bfc5ffedf7ef11bd0d9a9f42dda51bd7c1997c7b9ff07478c6a07",
+    "calibrate-3-ours-drained-ce-128.json": "e3e15e3c20e6fb996cc31d98ba5ca7d36badea76bec89667ffe1ecd5bea1f883",
+    "calibrate-3-nccl-ce-ring-ch4-t128.txt": "a162a100219848ad12ed957b2b9a9f1017558a06125b7d770c8d616d5915b989",
+    "calibrate-2-ours-put-64.json": "e393ebea0cd436971ef03ee7185d3d85780eb1e66e2d27e6c25855fee29cdf78",
+    "calibrate-3-nccl-ce-ring-ch8.json": "3c83fabdc7e9df7b6f4750844766add390632e7f301d2f4162ff6f60622a312d",
+    "calibrate-3-nccl-ce-ring-ch4-b16m.json": "53a6cd9975d2a85178cdebc873051af925779a5eaa7af2b27956299939a5a648",
+    "calibrate-1-nccl-ce-ring-ch16.json": "3243178175bd685b142c75452feb2582c36d05efdbd7cbb7f511e6cc9d6195c4",
+    "calibrate-1-nccl-ce-ring-ch2.json": "652f03a4d46dadfdd014d9161459bb5b00b5ba4adf6ec610800cd82cab4f47d8",
+    "calibrate-1-ours-put-16.txt": "611fd81637148309d07cf1171fab43268d9fa29bfbb31cd0b068f5a656453cfd",
+    "calibrate-2-nccl-ce-ring-ch2-b16m.txt": "b8b70c1fd7540bce814cd3d68da23a96b00a36b7f6daa0ada317e58f537bd834",
+    "calibrate-2-nccl-ce-ring-ch1.json": "ff6fea8afeb1329c7b73f489f6ed8ce3b1a1d8b01984dc10a202fcb5ea24b38d",
+    "calibrate-1-ours-ll-1-1024.txt": "872ff5746b985b15fb3b93aa597699f562b8568b70e27f50f1258b39a1a976bb",
+    "calibrate-2-ours-staged-ce-32.json": "a7a0307349ffe97e49b314c1e1ae0b095ca7287df02c236b0e93d1fd547ccbc1",
+    "calibrate-1-nccl-ce-ring-ch8-b16m.json": "5d04714c535fce9d7a3b5e5dfaedba477dc011cd6906c87bd9bbb435e515594d",
+    "calibrate-2-nccl-ce-ring-ch4-t128.txt": "5d85de9c745d39142766a9ee26620c96b6b477736d9a4341e0d03c98401b8b2d",
+    "calibrate-3-ours-ll-1-256.json": "f2829b2db140b21d92a62c441021a7bdf32070a646d12f42dc812d17aaac39d3",
+    "calibrate-3-ours-chunk-ce-32-4m-w4-s3.txt": "29e63023c19df959893973869eb63bd1f43de69bf49d0d553d598150bc38683c",
+    "calibrate-3-nccl-ce-ring-ch1.json": "674256aef33e94607af2dd7f3a599b4993840796f61b4e9264fae76aaa2e4989",
+    "calibrate-2-nccl-ce-auto.txt": "f5ba670066dd9a2960657a90c75e8b31cd70a1d2a34330b066814ecb7d60f709",
+    "calibrate-3-ours-ll-32-1024.json": "6bbba2e1a53341d24e8d6488b590edf20eb4955de31c0ed4201cf6a83d8ef384",
+    "calibrate-1-nccl-ce-ring-ch8-b16m.txt": "be6621a3c62be26cde8c8bd6e4382408c7fc2758042e2f2db3d041874bda3c39",
+    "calibrate-3-ours-put-4.json": "13ddec4a9c54e479bf1262ec2d61bd54cfdccbd8f78541127516ac1bc2ca34da",
+    "calibrate-1-ours-ll-32-256.json": "aa3aad526e7272b849eca547b1acb978fc690b3defd637f26995f515add31a4c",
+    "calibrate-1-nccl-ce-ring-ch4-b1m.txt": "fd7a11a90f70e018ca3024f557c8ae46111dd05fdc189ab814c1d76cdce10c70",
+    "calibrate-2-ours-chunk-ce-16-4m-s3.json": "e72acdd250d3ec7ed2d36105a9d7f969e654113afe03632c3ebdd3c9c465235c",
+    "calibrate-3-ours-ll-4-1024.txt": "24d5fc6a8401139c3fab55085a9fa5b1a152da4131668db6714f38c5848ad584",
+    "calibrate-3-nccl-ce-ring-ch8-b1m.json": "35a42c5677bf0eef342c9cdce7154ccb5e9906f3b12303a83b39811504c427fb",
+    "calibrate-2-ours-chunk-ce-16-4m-s3.txt": "be7570106287315d108bdfe63c46e11157c9891228ce46c2735aad35ebc3df50",
+    "calibrate-1-nccl-ce-ring-ch4-b16m.json": "e3eee423ca1b6e85be8184b586ae37209a8771362aafe1b0c8da87c0d052da9f",
+    "calibrate-2-nccl-ce-ring-ch8-b64m.txt": "12232f72aa8bc4a4a9db5095455691623443a2ca009da3a890a8ca1b47f7d8d7",
+    "calibrate-1-nccl-ce-ring-ch8-t128.txt": "fb541cdd22c9839c52de68571a96cb8e36daed0afc14ff5755bb0a4c297f6d39",
+    "calibrate-3-ours-chunk-ce-16-4m-s3.json": "8d566937d4e0f98ae83a9a2ea66c24b34683791bc3f3a793920992e498b507fd",
+    "calibrate-2-nccl-ce-ring-ch2.txt": "550c935cd4e9948271d6b1e20fd79229a38c92433d032428fa06caa19dd358b2",
+    "calibrate-1-ours-ll-32-256.txt": "358abdb7c3b236fa788efea219b2c22b1e4511499c791329d6fa1729683af5c6",
+    "calibrate-2-ours-ll-32-1024.txt": "661dc6fe3bb1c1268ff83f26b8e9911025efc68e49cc3bda76da01613c00676c",
+    "calibrate-3-ours-staged-ce-128.json": "16e6a80c3213f97c17bf858d98ca5430ae5f6447cd015d331b545dd380faf6ec",
+    "calibrate-1-ours-host-ce-4-64m.json": "c690791ba86183c3580efab61755324f0a4c3dcbc94ddcfa00a52bd2cc0a2e3e",
+    "calibrate-2-nccl-ce-ring-ch4-b1m.json": "c72a2733eb761735ec2bada825fc98bbc8c920fe25f0ac9674ed960cea6a5446",
+    "calibrate-3-ours-ll-1-1024.txt": "d56dfa7f318292a1a2ef9b7c60e1d3824717c9966be479ae1d07872ba43907ef",
+    "calibrate-2-ours-staged-ce-64.txt": "8ab6b55de2e2f76d89d0b7f2c4fad5a0c13562658fd6a87e1e38d4cbd02090b8",
+    "calibrate-1-nccl-ce-ring-ch2-b16m.json": "8642bcb69597a68770df8bcd70619acb28928a0e478b4555c08df68bf5004df3",
+    "calibrate-2-nccl-ce-ring-ch4-b1m.txt": "a5de55e2baee2ea179c6587e43ee2368e7a153714628a81781dc88fa07c7b8ea",
+    "calibrate-2-nccl-ce-ring-ch2.json": "c1196d89b0ae4a7f8afb240fa1e12d2b9aa391465bbf7089290c7939f71b7160",
+    "calibrate-1-nccl-ce-ring-ch4-b1m.json": "4d2820813d00abb143951f37f4d8882c9b5fbb3d266a6bfe29724692b01c353a",
+    "calibrate-2-nccl-ce-tree.json": "383eea338be57ec7b49e5762d1da3851a7573f9b4262a965bab38d674c93dd6f",
+    "calibrate-2-ours-put-16.json": "c86735bf011695b70b43d4cdb244e6544752d294572892c9ee6ffd4330af857e",
+    "calibrate-2-ours-chunk-ce-4-16m-w8.json": "bc29e9863b10da2fbc77eba34c9416036278fbb4323457235dc4f50244d168ab",
+    "calibrate-3-nccl-ce-ring-ch4-b1m.json": "c889b49d8f5816dabdda4a3389082fca80f646fbf2744a90c5f4ec4d44dec55d",
+    "calibrate-3-nccl-ce-ring-ch8-b16m.json": "b4e608d5d11bf1323d26b4661b126ef7b25399ace0d1e16ec22d5ed41e46ff57",
+    "calibrate-3-nccl-ce-ring-ch8.txt": "467c5aace878305e982d4216477bf6e0a6d47aa60299233cf2afad950227f322",
+    "calibrate-1-ours-ll-16-1024.json": "a304d32f9343f486959166842d40f23260149a1a0610c0ab2ea57c67b4021234",
+    "calibrate-1-ours-host-ce-4-64m.txt": "2de925759ebbd066b563778741fc961042b03d1e266af943a4e46023e8e5bced",
+    "calibrate-3-nccl-ce-ring.txt": "60ceb4b28bb63919acf02b9a1f1bb692bf1b8769ab59a1732099d28664a237ec",
+    "calibrate-3-nccl-ce-ring-ch1.txt": "ed8519bdc022a62af53c54274d0e3a1c75f616cea3f95efa8a8d3a5c16304942",
+    "calibrate-2-ours-ll-32-1024.json": "fdecd98d4e70ccbcd82ff264bea4f9f1f4c1b721d743dd7a7a78fd72861ecdd7",
+    "calibrate-1-ours-put-16.json": "ad14f48209fb7531d57925148ea54fb80e00f74663734b45384183d4b0ce9845",
+    "calibrate-2-ours-ll-16-1024.txt": "9b7404d3c2ea7929a54480afa9d2eac234957bcdc3c16c7f59e24abefaf1dcbd",
+    "calibrate-1-nccl-ce-ring-ch2-t128.txt": "6d27caa6b2cf99cce1dca19fb8901db483e5f77fd906b6e5f67afdf30a99b763",
+    "calibrate-2-nccl-ce-ring-ch8-b16m.json": "65e9d0c951f9b12b3464b99d47c1be66970df9e659f894678a98fc1964f6d3a9",
+    "calibrate-3-ours-ll-4-256.json": "ce06f8de9f8a881ddb51c0ed338ff951041f3cec64477d5b2275a2856766dc88",
+    "calibrate-1-ours-drained-ce-64.txt": "e1384097807fd9e74ac8b9416f907475631794215df81a7b6feed8e209b0d7cc",
+    "calibrate-1-ours-ll-4-256.json": "ca498c5383a16f50d7c4ff369b0322c9b96cf54861e7dd019cc08be1839dad72",
+    "calibrate-1-nccl-ce-ring-ch2-b1m.txt": "041e61c2580b7912d1b0215abb3d2b3a4c4e55bf5d4b5abbfe2a931e0a29d805",
+    "calibrate-3-nccl-ce-ring-ch16.txt": "ff43a01f5953346ac7e37d598c997605fbf07a0b1eceb8394d4861ef39701bf6",
+    "calibrate-1-nccl-ce-ring-ch1.json": "c3164da2686228d3ea21e2c9591466dbf63bfc9ed19a56dc755e490bab7dd93e",
+    "calibrate-3-nccl-ce-ring-ch8-b64m.json": "c6d805da95a36dbc10d91af6a0baaa6b82c6e11bcc06889bb0da6680a894446c",
+    "calibrate-2-nccl-ce-ring-ch16.txt": "d073859619c724ab47b14d617cca36817dad00abc53ce123289c797ab00b242c",
+    "calibrate-2-nccl-ce-ring-ch2-b1m.json": "e82448fb4ff747b99aa93d05159824f73a9a86217fed889a15e5408531cf3d95",
+    "calibrate-3-ours-drained-ce-64.txt": "9faf35abfbe6d922db43dba21d924ebdff8dba012440429f0966117e1bbb4b11",
+    "calibrate-1-nccl-ce-ring-ch4.json": "aa056477567479041021122890513516e9c8edd06e6afd94aa604d7e198b87aa",
+    "calibrate-2-ours-chunk-ce-4-16m-w8.txt": "bba6a696c4847855367a4ebe02ad8d24753434823ed7eb6bcbf5b8b1115b508b",
+    "calibrate-3-ours-staged-ce-64.txt": "e4600c1f59d45e8e99d33f658850802a695127ca1619b7f5e17517330d9a5203",
+    "calibrate-3-nccl-ce-ring-ch2-t128.json": "dd72af87450485e2c59a245fefb95b5393cf9dfc827568a855f10c2ae70c789b",
+    "calibrate-1-nccl-ce-ring-ch8-b64m.json": "5c92ab4137cc36c3b32bd35a5885ed42a2a6a03134f4a677b3ffb85c02eb90c2",
+    "calibrate-1-ours-staged-ce-32.json": "3ad64c64f82f5b91f57580e148b2be380a0cb38a26fdf65fa5d84cab4c8ab479",
+    "calibrate-2-ours-put-4.txt": "b2ba11eedb713b4ad313365461c81892f531c5d21df50f18763d1ea08ad87783",
+    "calibrate-3-ours-ll-1-1024.json": "81b50fc18a844d12082bb2e481ba94110ef257ecdd56c3a2569ba646811d4509",
+    "calibrate-1-ours-ll-1-1024.json": "119a4c572595851652e2d58b3cc41cf317cd93caafa10b536d038a9ddf13a039",
+    "calibrate-2-ours-chunk-ce-32-4m-w4-s3.json": "7884d7be0809ad9da323ec9136942e5087b1b6069ef38dfa77514164fd051402",
+    "calibrate-1-nccl-ce-auto.json": "db8585ed517162c74d5bc7e83a70985afd72c42f1d058c26e2d3e0ee0be6831a",
+    "calibrate-3-nccl-ce-auto.txt": "ec1c0e62b58c1ebb28686540c0e7a9ca2d21d63c9d1b884a47a1bb1abcb02811",
+    "calibrate-1-ours-put-64.json": "537caff3510430dc8815a518fe8ad059d13c51e11f86d885f39e8b28ca3b32c9",
+    "calibrate-1-nccl-ce-ring-ch16.txt": "2e507622e3d3b038913d7cb753184387dd2a450c579a7ed78e7c6c43f0c6447b",
+    "calibrate-1-nccl-ce-auto.txt": "9f50e36f085f0c87ce91efb6d069fdffd0c1903a80a96444a01e87f0944c8ee6",
+    "calibrate-1-ours-ll-16-256.txt": "72dcdb995b3ee5ff6eada3c49ad892f14f8d00b96e251b27300c402a31afc895",
+    "calibrate-2-nccl-ce-ring.json": "a63ca9d0a6c3174302594398f7de5d59a7f1723655dc4cb906da68ed92358720",
+    "calibrate-3-ours-staged-ce-128.txt": "a33da9cb7f0c850764e5cff47e86cd64b6fcaec79cd0df67ac3c9cfb8c81d9ff",
+    "calibrate-2-nccl-ce-ring-ch4-b16m.txt": "6d473b898d0528c57bdc70a5c2a1561f1deedc9e4927b08f135410408e586e8b",
+    "calibrate-2-ours-staged-ce-128.txt": "e58f799fd59fe0794fb19c9c20d05ec6d1fef71eca38723c1dd64bbb84163982",
+    "calibrate-3-ours-chunk-ce-16-4m-s3.txt": "435fe2f7fb480f8b46602c8ca5c680113aec1a777ee07584106b191a7e942bd1",
+    "calibrate-2-ours-staged-ce-32.txt": "256e9480bebc88951bd92a583fd0b0c936088a2e7e8af931586646e099d34035",
+    "calibrate-3-ours-drained-ce-16.txt": "4c66c3c3848a6a0fdc2479942d079c01e2310e50345a0d1e8ee0580fb27563c0",
+    "calibrate-2-nccl-ce-ring-ch2-t128.json": "e51e56cf685a298cd7ff24859dd2393eaeebce8ef08551053c2fafc945ebf9d6",
+    "calibrate-2-ours-ll-32-256.txt": "b0ac0e057b9ed9fca204e89ab005e9ee35f060c4d1d8d924ffff2d92182ca466",
+    "calibrate-3-ours-ll-4-1024.json": "047606d1d3c866a837f62801983b8ce612d350e9c3bc35920515648c38b2fc5c",
+    "calibrate-3-nccl-ce-ring-ch4-t128.json": "92954bbad4073b5f9689ac70f249f54b6289ea0aca7222e8585cd2a637c03a57",
+    "calibrate-3-ours-ll-32-1024.txt": "2d2014b2d6c4b49ca4d7faf0cd9a87e705c277e599cb893868cae68eb58cb6e5",
+    "calibrate-2-ours-drained-ce-128.json": "1983ca78abfbe57a3a6d5581c9ab11b68e778c998726319dca6b522b6616a6a6",
+    "calibrate-1-ours-drained-ce-128.json": "c44f0e3804dbe87729c082de386b686b069cc543c95baff3672a80a3ffcdee7b",
+    "calibrate-3-ours-ll-16-1024.txt": "79c0bd45495e810eb773ca962acd256f03d28aa4e2f86edb7c9e6304e8c34f76",
+    "calibrate-1-ours-put-64.txt": "c9d667cde2d7be2487ca286c240704c4c2305618f28f8e4bac4b8744f0bc4d84",
+    "calibrate-3-ours-staged-ce-64.json": "6f531ed7f052afaece227d98dab1dd97e91c0de220ff086eb32743319e5193c6",
+    "calibrate-3-nccl-ce-tree.txt": "a9266f80065660618857e063d26f88aba644497811a129814d6d97ecdf796b97",
+    "calibrate-3-nccl-ce-ring-ch8-b1m.txt": "58bbbd77071c88e5c16ee12b879c3777f5b7f46d1fef8a50f6a2f01b9d064c50",
+    "calibrate-3-ours-drained-ce-64.json": "9af7694600b5ddfb79130ad10f38c7e77cf1329080740e8ae0ee805d6dad66e4",
+    "calibrate-2-ours-put-16.txt": "1ef6ddb2cf8fbdfde0e7a81ac1527c20869b53da9231ee42ae01c2cf5e2276c3",
+    "calibrate-1-ours-ll-16-256.json": "d4021771b2a004521602ca5a33cabc2985c023df0a41631e094c1818438fa43e",
+    "calibrate-1-nccl-ce-ring-ch4-b16m.txt": "c8228f53855c348a43b745bd24086303104a3e7d4b17a3b1bd0512e8d6bc51eb",
+    "calibrate-1-nccl-ce-ring-ch4-b64m.json": "442fa612a4862ddd396153414a8df44cea16c2eb655d283fd719de90b1e4dd7a",
+    "calibrate-1-nccl-ce-ring-ch4-b64m.txt": "8451379662230fd7d581ac0728f7256d792bb36474dcc68bd07f117e1d68cdda",
+    "calibrate-1-nccl-ce-tree.txt": "df870e3d458f23e07d30b939205dcc10a8ea05b09509abb98b9a22b6b5604208",
+    "calibrate-3-nccl-ce-ring-ch2.json": "a2652f6ac05eba348212942a7aa4bf05ad09f668e6b0a729f7d3f688d6deb5b7",
+    "calibrate-2-ours-ll-4-1024.json": "999698982054ee4a57c1e029f8806ee7ac5631fc1d941dc58ae077162deb2888",
+    "calibrate-3-ours-ll-32-256.json": "1ff37ea80393480239614804ea9c5c4289abb601159fdc7e5374908887dee2db",
+    "calibrate-2-ours-ll-1-1024.json": "8af6af4e3e8340eaa41113b9bf6655151bfbdcb9309ed9c59305ade9a228bcbd",
+    "calibrate-1-ours-drained-ce-128.txt": "471c6e5dbecbee7638c7a28cbbbad91fe1e9c2d17af015d2d1559c1c68823b69",
+    "calibrate-2-ours-ll-4-256.json": "2c646281569fc2d8da6bee6ad9dc9d8d2bcd58ea7ca907a90315084d5061f58d",
+    "calibrate-3-ours-staged-ce-32.json": "eb74a8c5cd15782bf31ab3aa8a5a40f8030ecdab597bb7a434fd527f4bc5b7e4",
+    "calibrate-3-ours-ll-1-256.txt": "c64c97cbfabce8e45b6d491a60fec4f067eda0e09ab20594b95492dd4d306983",
+    "calibrate-1-ours-put-4.json": "6fb1de2457e9ce7f2fbf16f8aca03ce56f6e25161e8389742ada4c7de032a50e",
+    "calibrate-2-nccl-ce-ring-ch4-b64m.txt": "b1dbf2706369fc4205f67a0d4cbaaeff8deca5173cc78027775b1901bf589389",
+    "calibrate-3-ours-staged-ce-32.txt": "cdb7460bca77cafdcc68a992b7044d93f8fc107b1031744a981e5e58608ee7e4",
+    "calibrate-2-ours-staged-ce-64.json": "6b4049d4153700121d4aa4d1b23dabf3a6a1b9fbf109bd614f23862e726b86fa",
+    "calibrate-2-ours-ll-1-256.json": "c01203498488a40ecd962e8c511404d8b214b2c4996795d1578c7e2f638f96f0",
+    "calibrate-2-ours-host-ce-4-64m.txt": "c4cf18a40ecc42293ba09d685dca9efa81f8ce200f3b94f129cedd37c9e4966f",
+    "calibrate-3-ours-ll-4-256.txt": "bb59c79098f51648c8047f36681cbd6f7006ee0e2b0f98eb10a044324781ae96",
+    "calibrate-3-nccl-ce-tree.json": "55db5c9e0778a383934129c766194bca1e1eb7481730f1f6b4c1ec3d4a90531f",
+    "calibrate-2-nccl-ce-ring-ch4.json": "1d0c530131b2f547fa5f40027a5fc70ae7b1fdc7cf74875bef3e7f7daf407cd8",
+    "calibrate-1-ours-chunk-ce-32-4m-w4-s3.txt": "51fad733f4c342cf68f506480a18f3b25f64b5a74054067ed0cfd63fc84434cd",
+    "calibrate-2-nccl-ce-ring-ch1.txt": "37afbb61b69f6c728f65d1343db46152627fd2500bf57479ecd74dc6037e69ad",
+    "calibrate-2-ours-host-ce-4-64m.json": "e5dacf9a78834c149ddc25fa38cf34f034d9f5d57f0a9c1b64951b17ce973248",
+    "calibrate-1-nccl-ce-ring-ch2-b1m.json": "dca561769d8c64c6e9e8e8b9dbc1b2f7e10afeee90df764fd5bcadaef358d9d6",
+    "calibrate-1-nccl-ce-ring-ch8-t128.json": "b9995cd2ef11d53a8e5659484616c28433734dbe21a3f4b96a146266401ef9d0",
+    "calibrate-2-nccl-ce-auto.json": "98582a3555b3be0a895fc93717ff561db30a47737fa24fa0390545c9d0134dd6",
+    "calibrate-2-nccl-ce-ring-ch16.json": "5beda6c769bf587db1c0723de63e615bdb17a9c7c73015b4a63a05d08d332df9",
+    "calibrate-2-ours-drained-ce-128.txt": "58f29cb650fc97373331f9dbf1704f36adcf8e95393d4a691ef58f237881e299",
+    "calibrate-2-nccl-ce-ring-ch8-b1m.json": "74b92fca44953a3da030f0a70935ca1040157e492874820e02156f512170354f",
+    "calibrate-3-nccl-ce-ring-ch8-b64m.txt": "4417347e6fcc365f2865521dc44cd2893b9a466c133d93ebae3869af90858246",
+    "calibrate-3-nccl-ce-ring-ch8-t128.txt": "40d485cf9c7263d2f0cbe48ae31b0da012b71dbd7f920c575f95331bf93b8a28",
+    "calibrate-3-nccl-ce-ring-ch4.txt": "09766d99e4976e9372655843f77d451404c0857c2245d3c0f238b88d411584c1",
+    "calibrate-3-nccl-ce-ring-ch2-b16m.txt": "edb8ba613b0db27684f6e1789e52d98858a757930586f03f58d6e086f2f44dcd",
+    "calibrate-1-nccl-ce-ring.json": "fb91ce7e09ea0f466d98ecfe220fd4a2928c056c2b4910f2a059ab0f7809a523",
+    "calibrate-1-ours-staged-ce-32.txt": "dfc687d2c7902f616ac6d2a033826c1ebdf5357db41299a8f44fb01614224b96",
+    "calibrate-3-nccl-ce-ring-ch4-b64m.txt": "28ff5ba6d715f8de5f0ea9d943f4b3465743f1b7d4f58aed1c8d40f8a5c4459e",
+    "calibrate-3-nccl-ce-ring-ch16.json": "9504160dc8634362f065c83ea4cf1170d4b45a2cda20cbc9f16ca84fadaf1579",
+    "calibrate-3-nccl-ce-ring-ch4-b16m.txt": "238a116b24047c72aa40bece998537e3013697851499cef3a6ad0239c58184f0",
+    "calibrate-3-ours-chunk-ce-4-16m-w8.txt": "88c3c73d5013305d3953aac658d0e6aa252643ab86697e974ef833e0b9ec7f3f",
+    "calibrate-2-nccl-ce-ring-ch8-b64m.json": "a8114e64edef65c2c5993348730d4c28ae55a82c3f9da622f24c50a70badbe03",
+    "calibrate-3-ours-ll-16-1024.json": "0ecbe5719d99eadcc9382ca93ab0427bedcf5d3d25585a55042080e301fa6a0f",
+    "calibrate-3-nccl-ce-ring-ch4-b64m.json": "135fdd29c2148a06aed0c4ffb618e0effca4049693f0e7c7e6012255164dd9f1",
+    "calibrate-1-nccl-ce-ring-ch8.json": "2ca0770263238f1c76416bd6a22cc10ffffd284fe639aa4c3679f03ff6ee5a63",
+    "calibrate-3-ours-ll-16-256.json": "822d700a3972fa196f542af42414031ad65eb58057848b4208fc8e2233457248",
+    "calibrate-3-nccl-ce-ring-ch2-b1m.json": "cd8119e975abbc93a90acb6e34e246f640d30fb7077c34db784b622262da1323",
+    "calibrate-2-nccl-ce-ring-ch8-t128.txt": "926dc864afa368ec1396a2df8c5422c4cd87953307e5ca369c4c11dadbf271e6",
+    "calibrate-1-ours-ll-32-1024.json": "73f88659264e6bcff62ccc796872ef10308d8f37744bc1bcd301a107be88a2e5",
+    "calibrate-1-ours-chunk-ce-32-4m-w4-s3.json": "116f8b81e2ebf070299ee4465ed9f77665f8c1f2e27b8d4ec0e89213b670e901",
+    "calibrate-2-nccl-ce-ring-ch4-t128.json": "fcc2cc8c53623de8abe3e518b81822ad9d77dc6501656f553b5833191979a97d",
+    "calibrate-3-nccl-ce-auto.json": "ac74158e8b0881e8511d390243b933e176b0f40b2deb3d2f26924c05ec1d6d1e",
+    "calibrate-3-nccl-ce-ring-ch2-b1m.txt": "20a2da6d64b804e805931a66563bcd916453c85b27bcf2ba056e5bd6d79a558d",
+    "calibrate-1-ours-ll-1-256.json": "ed05e631bb0561e630be4e7bb39d421c7bc36c2e1dcbf814a8904c47f9d56ed6",
+    "calibrate-2-ours-chunk-ce-32-4m-w4-s3.txt": "4104275cb8f06663587382a2e646d6c32b041dc106d6bcf054d1db49eff0fbcd",
+    "calibrate-2-nccl-ce-ring-ch8-b16m.txt": "7e9c3a1785f6735c5623aab5963d3f1d918bb3da7b20088d17c9765d5b97b0fc",
+    "calibrate-3-ours-chunk-ce-32-4m-w4-s3.json": "e32cda3b1f0a58ae2c58359768e7cd7b8d99b54a413c214954516dd33c29a69b",
+    "calibrate-1-ours-ll-4-1024.txt": "c549ac1974e435f914e022f4a0b9ad3d4926c7b543ddf0f6b2deddf140bcd5ba",
+    "calibrate-1-ours-drained-ce-16.json": "f8d88e86ac73843e4849a53578ab8252e2c979e95d5049e8cc7d4a23a71ea00d",
+    "calibrate-1-ours-drained-ce-64.json": "587aa01f9c0926eaacd872498153b1b948db36be40c0981414ab16274e83a0cc",
+    "calibrate-2-nccl-ce-ring-ch2-b1m.txt": "9d8d728985a5ee7c1810f6ac5eed88e7500de6f82954e6b80527195fa7514c1e",
+    "calibrate-1-ours-ll-4-1024.json": "e5dbd3d706ebbf270bf4a539953d2b67cf24c1474450d7a3705617ae8c1db8dc",
+    "calibrate-1-ours-staged-ce-64.txt": "10603453cce9592ea098898ed8a31b0e10fc59c548389cd83f7bcee46b9cf54c",
+    "calibrate-3-nccl-ce-ring-ch2-t128.txt": "ea84af3c593dda71b1d16e1e98511e786cdb1307563455a2370fd18e1d441957",
+    "calibrate-1-ours-staged-ce-64.json": "544cd2a3b490165e882bf95bc2f4669fcca06864a3015f36e0152117fece9872",
+    "calibrate-3-nccl-ce-ring.json": "ee757eebba0ea6391fa7ab7e0117c0c0142baa90e94c506e826bd41e79a3dca3",
+    "calibrate-3-nccl-ce-ring-ch4.json": "13bd0017efb0925315f9c12e838bb27cf44fc7a338530bd302244227b7113b99",
+    "calibrate-1-nccl-ce-ring-ch8.txt": "eea7a31203fd76fd10466213bf392cf47a615f8aa5d4232e7c932cec456c7924",
+    "calibrate-3-ours-drained-ce-16.json": "4c5d1083178cd5098c54ac2f560895ffea9f321e7808ab47f9621fb01324e820",
+    "calibrate-1-ours-ll-4-256.txt": "ac4e0a74e5ce309f1e8e334aafc3670f1aac1fc8e803b8f3cfd27c7f222a0830",
+    "calibrate-1-nccl-ce-ring-ch4-t128.txt": "edb3f9f287e3379ba0a4ed81e3da6c33e3ac9347fbfe18d5d2ccbd4d28b158fc",
+    "calibrate-1-ours-chunk-ce-16-4m-s3.txt": "700fc6eef0a7e7fe14aca4907438ef8c56a648cb2560242a3dbc69cff763071a",
+    "calibrate-2-ours-staged-ce-128.json": "8bd394ebf66175e4b691e959b13726c929fb445024adbdf6dd0335b41cbcd2b1",
+    "calibrate-1-ours-put-4.txt": "8f0e7d4db37b8ab563bd6b95afc3c49ef8d47cde50152048d0c5ec6483fcac5f",
+    "calibrate-3-ours-chunk-ce-4-16m-w8.json": "ccf0877b9f77774f5c16253325fff1ae73153b6219cfee97dc57fafdf94fca52",
+    "calibrate-1-ours-staged-ce-128.json": "95882643b399a410207d1a111d97e658dbdf54936f26beefd4560d19ae81f3df",
+    "calibrate-2-nccl-ce-tree.txt": "9a561b58460bb84bdb4aa9df1d0f17627d74b9bcb2a256b4d5be67b763097154",
+    "calibrate-2-nccl-ce-ring-ch4-b16m.json": "1467fd16119deb4e42a576786dff71fc47777c35d2ac44d00eac122b93e003b3",
+    "calibrate-3-ours-drained-ce-128.txt": "c5ee95c21e634c88a3cd8392885c79a129d5aedfc2336833c4bb317e8ea7a901",
+    "calibrate-1-ours-ll-1-256.txt": "2eaf58b84e49264144a0dd40de046921097d76bf7443a1a01277a4f3e424f5e8",
+    "calibrate-2-nccl-ce-ring-ch8-t128.json": "09f313556812872fee67683e5a099b8e0d9e9ec2338179345089d3b9e14d525b",
+    "calibrate-1-nccl-ce-ring-ch4-t128.json": "b0b517a4d8e98f180cb576bd806298ff0b3edbf949b1562eddf21f78e6f8f9ec",
+    "calibrate-1-nccl-ce-ring-ch2.txt": "f0a428624dd8e6a814643e5b8defaaa0a7072dbee436772c5982577dc02c001c",
+    "calibrate-1-nccl-ce-ring-ch2-t128.json": "dcf092c149dd390a2833285c444ab04761211fe2133d59a4232bc4e4facc9602",
+    "calibrate-2-nccl-ce-ring-ch2-t128.txt": "0a059790ef0f480e68766ccaf26ca1a766200472ae4cb93d46b5492de325c7d8",
+    "calibrate-2-ours-ll-1-256.txt": "6ec1f26c496f3fac2d8c7ba0bf1f438ad72885ab295462d08948e8001a798f51",
+    "calibrate-2-ours-drained-ce-64.txt": "b235f410d9f3b31ce285ed7919ac17e7bb2f99ca6354d53941e69b5989546416"
+  }
+}

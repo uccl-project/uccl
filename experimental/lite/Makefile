@@ -237,3 +237,20 @@ $(BUILD)/uccl_lite_router_%_nccl_reference: benchmarks/joint/focused/%_aligned.c
 joint-peer-check: $(BUILD)/uccl_lite_joint_peer_check
 $(BUILD)/uccl_lite_joint_peer_check: tests/collectives/joint_peer_check.cu benchmarks/joint/joint_bench.cu $(JOINT_OBJECTS) $(ROUTER_STATIC) | $(BUILD)
 	$(NVCC) $(NVCC_FLAGS) -std=c++17 $(ROUTER_INC) -I$(NCCL_HOME)/include $< $(JOINT_OBJECTS) $(ROUTER_STATIC) -L$(NCCL_HOME)/lib -lnccl -Xlinker -rpath=$(NCCL_HOME)/lib -Xcompiler=-pthread -ldl -o $@
+
+# Matched FP32 in-place C++ AllReduce; the UCCL target does not link NCCL.
+.PHONY: pro6000-ar pro6000-ar-reference
+pro6000-ar: $(BUILD)/uccl_lite_pro6000_ar
+pro6000-ar-reference: $(BUILD)/uccl_lite_pro6000_ar_nccl
+$(BUILD)/uccl_lite_pro6000_ar: src/collectives/pro6000_allreduce.cu include/uccl_lite/pro6000_allreduce.cuh include/uccl_lite/allreduce_validation.cuh | $(BUILD)
+	$(NVCC) $(NVCC_FLAGS) -std=c++20 -Iinclude -I$(MSCCLPP_HOME)/include $< -o $@ -L$(MSCCLPP_HOME)/lib -lmscclpp -lcudart -lpthread -Xlinker -rpath=$(MSCCLPP_HOME)/lib
+$(BUILD)/uccl_lite_pro6000_ar_nccl: src/collectives/pro6000_allreduce.cu include/uccl_lite/allreduce_validation.cuh | $(BUILD)
+	$(NVCC) $(NVCC_FLAGS) -std=c++20 -DUCCL_LITE_NCCL_REFERENCE -Iinclude -I$(MSCCLPP_HOME)/include -I$(NCCL_HOME)/include $< -o $@ -L$(MSCCLPP_HOME)/lib -lmscclpp -L$(NCCL_HOME)/lib -l:libnccl.so.2 -lcudart -lpthread -Xlinker -rpath=$(MSCCLPP_HOME)/lib -Xlinker -rpath=$(NCCL_HOME)/lib
+
+.PHONY: pro6000-ar-evidence-check pro6000-ar-summary pro6000-ar-figures
+pro6000-ar-evidence-check:
+	$(PYTHON) -B -m unittest discover -s tests -p test_pro6000_allreduce_evidence.py -v
+pro6000-ar-summary:
+	$(PYTHON) -B scripts/summarize_pro6000_allreduce.py --input benchmarks/data/pro6000_allreduce_ce_cpp_20261116/measurements.tar.gz --output $(BUILD)/pro6000-ar-report
+pro6000-ar-figures: pro6000-ar-summary
+	MPLCONFIGDIR=$(abspath $(BUILD)/mplconfig) $(PYTHON) -B scripts/plot_pro6000_allreduce.py --summary $(BUILD)/pro6000-ar-report/summary.csv --preview

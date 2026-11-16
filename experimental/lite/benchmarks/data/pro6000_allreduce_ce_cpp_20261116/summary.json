@@ -1,0 +1,58 @@
+{
+  "frozen_sha256": "315035e5db1f1a7cdf08f498a0f1fdee3f9c2d28da5340d040762b06db0d070d",
+  "counts": {
+    "calibration_pass": 120,
+    "calibration_fail": 0,
+    "validation_pass": 75,
+    "output_checks": 14150,
+    "rank_checks": 113200,
+    "nccl_rank_logs": 696
+  },
+  "retained_failed_epochs": [
+    {
+      "directory": "failed-epoch1",
+      "incident": {
+        "status": "failed_epoch_not_eligible_for_success",
+        "failure_log": "validation/validation-3-ours-original-ce-128.txt",
+        "failed_size": 131072,
+        "bad_checks_per_rank": 8128,
+        "selected_at_failed_size": false,
+        "original_ce_128_selected_sizes": [
+          16777216,
+          67108864
+        ],
+        "diagnosis": "Incoming final AG completion does not prove the sender's outgoing read of recv[1] has drained before the next invocation reuses it. Added a symmetric final GPU acknowledgement; the observed failure is consistent with this lifetime hazard.",
+        "action": "Retain the entire failed epoch, rename the repaired variant drained-ce, rerun calibration and five independent validation rounds."
+      },
+      "failures": [
+        {
+          "label": "validation-3-ours-original-ce-128",
+          "reason": "process return code -6",
+          "bad_rows": [
+            "RESULT 131072 90.081000 2.546331 8128"
+          ]
+        }
+      ]
+    }
+  ],
+  "median_wins": 15,
+  "five_of_five_wins": 15,
+  "separated_range_wins": 15,
+  "remaining_losing_or_inconsistent_sizes": [
+    "32 MiB",
+    "64 MiB",
+    "128 MiB",
+    "256 MiB",
+    "512 MiB",
+    "1 GiB"
+  ],
+  "nonseparated_sizes": [
+    "32 MiB",
+    "64 MiB",
+    "128 MiB",
+    "256 MiB",
+    "512 MiB",
+    "1 GiB"
+  ],
+  "all_sizes_reproducibly_faster": false
+}
