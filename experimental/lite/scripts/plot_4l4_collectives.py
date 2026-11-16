@@ -43,6 +43,9 @@ def plot(rows, name, timer, factor):
             ('ce_median_us', 'NCCL CE (tuned)', '#B899C8', '^', (0, (6, 2, 1, 2))),
             ('uccl_median_us', 'UCCL Lite', '#0068B5', 'o', '-'),
         ):
+            # NCCL's copy engine path only supports AllGather here.
+            if key == 'ce_median_us' and name != 'AllGather':
+                continue
             selected = tuned if key.startswith(('sm_', 'ce_')) else by_size
             values = [measure(size, float(selected[size][key])) for size in sizes]
             prefix = key.removesuffix('median_us')
