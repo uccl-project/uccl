@@ -1,0 +1,60 @@
+{
+  "schema": 1,
+  "measured_date": "2026-11-16",
+  "audit_revision": "Published auditor normalizes dispatch tuples to JSON lists; measured runner snapshot is retained in epoch/source. No timing, policy, environment, or CUDA change.",
+  "base_git_commit": "e26433823017c30afd6daf765e05e2d066cbc33a",
+  "identities": {
+    "Makefile": "9f1ad6c1556bac583299b5fcf9dcd12e9b3624be98a69d9ef01ca623a6aeb8cd",
+    "src/collectives/pro6000_allreduce.cu": "2468c7d9ff84c7a7a83f66f12c71b5e3184bcbbb636a101518a9deca8c74dda2",
+    "src/collectives/pro6000_ag_rs.cu": "7f1b41a9b0ac23e9b8f4087758c2e32108df8ece0bb35bb3631c2d4ae27b6d2f",
+    "include/uccl_lite/pro6000_allreduce.cuh": "607bb008e5e559b568907e537e3883519ce24f9881a922b3735efbf8c22cbadf",
+    "include/uccl_lite/pro6000_ag_rs.cuh": "7189440df0701fe7ae243ba1f70ed2c3ffcd981c5ed54f572ea9751e185755e7",
+    "include/uccl_lite/allreduce_validation.cuh": "56e69cae5e47809137f31baf36f03484320067be4b38ebba8b32396d29072863",
+    "scripts/run_pro6000_nccl_baselines.py": "95c2221e70c9162b5fbb3ff67f275d3c8189ef8e3287ea9b2c8f7cf98659ada6",
+    "scripts/prepare_pro6000_ag_rs.py": "07cc01863c39ecfe595b0b7c3e20d405652ab0527abc5b159f4cb6b774017582",
+    "scripts/run_pro6000_ag_rs.py": "d09717b0836460ced257cd57c1c97d8dec431e433a2266658d855d0ce0152925",
+    "scripts/run_pro6000_allreduce.py": "34bac7e3ddfd26c696b483ed3734ec74651129c9f51ea71082049701149a51ee",
+    "build/uccl_lite_pro6000_ar": "cf2ee9f42b194a0072711957c4c1a726b434c97a72016d2cd90a156e238f3364",
+    "build/uccl_lite_pro6000_ar_nccl": "b3fce5f10f5054b896350dc208a1796b032d918f1353a8c340ba69bfea5a3cc2",
+    "build/uccl_lite_pro6000_ag_rs": "323aa5227a4fc83f4e139aab448fec8878e65f99c0cd477927c4584d3d741e0b",
+    "build/uccl_lite_pro6000_ag_rs_nccl": "0f56747010c67822b2a44a07ab5f9d09677764e66126fdc34ff0e31c19de12cc"
+  },
+  "libraries": {
+    "/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/deps/mscclpp/lib/libmscclpp.so.0": "8c33feaae3d692065bfb3cf5394764e959310766ef52bde88577122c1ef98209",
+    "/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/deps/cuda133-packages/nvidia/cu13/lib/libcudart.so.13": "9f92e4c3f7e14d0fed69ef876a45d4255a2dc88cb552a673a90ce881c26282fe",
+    "/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/env/.venv/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2": "1c8618b866734cbdd5401715d6178be763ece283b7f808ecf86dedab211162c1"
+  },
+  "policy_sha256": "a8131df284dd76186f392041bc15f25455f2adc9de8b41b0b9ddba06cfb2c6c2",
+  "evidence": {
+    "full_per_rank_checks": 337600,
+    "nccl_rank_logs": 2496,
+    "jobs": {
+      "calibration": 144,
+      "diagnostic": 28,
+      "validation": 305
+    }
+  },
+  "files": {
+    "README.md": "ed288ef4f97304996cdaea8b1bf3dbf3d93748d0f7c71eeaaac9a844051206c8",
+    "allgather.csv": "5a4ae48f0c936cc8c47167ef09c74a13475a6c430c72cd10c4274abf2693334a",
+    "allreduce.csv": "0da84492a784775ca9b704af2825a9b54092e8156898557e1da5b9e31a801a4c",
+    "configurations.json": "0fe24e42d37be9e602f59d61482e4df162b2e7aacb2b026279142f4ec6d8f446",
+    "measurements.tar.gz": "a161aa902da97e855d57eb25538794e0ef18f1767c7dbb53b1462608a5642e18",
+    "platform.json": "145382bcd30a4387f2bf6b3027e1115325fbf49d102e2e7ff73662375099c4cb",
+    "policy.json": "a8131df284dd76186f392041bc15f25455f2adc9de8b41b0b9ddba06cfb2c6c2",
+    "reducescatter.csv": "36c7adca2c281f555b6ef34e4adb7944ae2cdf58ab37146fc3b79ea61773fc27",
+    "results.md": "cc0eb615f27218ee7fcf886d0cddfb6f5b471d6e5edc42934325087b8f706547",
+    "summary.json": "c7b1f50b5c5955ed10c14124676113cc29b3a5a2b4d54938ba168b797b0429d3"
+  },
+  "figures": {
+    "docs/assets/collectives-pro6000x8-allreduce-fp32-nccl-baselines.svg": "8852d6ef2b19dc5370a60dc8ab5397ecaf9315ed42eeb197ae2b4130f24cab94",
+    "docs/assets/collectives-pro6000x8-allgather-fp32-nccl-baselines.svg": "b703b3ca5407d2a7c63bbf230cf60b96f850f9143f79f54e1e20b313cfb2105f",
+    "docs/assets/collectives-pro6000x8-reducescatter-fp32-nccl-baselines.svg": "c92242676e96ffd9c65442f0f8d2bbd1325e67f52dba8cd2031a759dcef2cf5e"
+  },
+  "analysis_tools": {
+    "scripts/run_pro6000_nccl_baselines.py": "61318acefa1241553994b5577c13a0e072113d6d14184a691f3089387674a0b0",
+    "scripts/plot_pro6000_nccl_baselines.py": "f4fce52bf0d8d2cf9873469e57e7fc7e17ad5dedf2cff5c606ca41fd9f033200",
+    "scripts/figure_style.py": "be8a2965df7de8398d20ba83ada8047f96f5a48b488b97dd899a727543839195",
+    "tests/test_pro6000_nccl_baselines.py": "616f95e1a583aaa80f48ba8046dc53a7bb103b4ddad33ad864f9d67a26d1bdcf"
+  }
+}

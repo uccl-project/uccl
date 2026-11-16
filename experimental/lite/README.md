@@ -149,9 +149,9 @@ workload from Testbed 1's SGLang serving and DDP/FSDP training.
 <table>
   <tr><th>AllReduce</th><th>AllGather</th><th>ReduceScatter</th></tr>
   <tr>
-    <td width="33%"><a href="benchmarks/data/pro6000_allreduce_ce_ring_cpp_20261116/README.md"><img src="docs/assets/collectives-pro6000x8-allreduce-fp32-ce-ring.svg" alt="Eight RTX PRO 6000 FP32 AllReduce: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite and NCCL CE (tuned)" width="100%"></a></td>
-    <td width="33%"><a href="benchmarks/data/pro6000_ag_rs_cpp_20261116/README.md"><img src="docs/assets/collectives-pro6000x8-allgather-fp32.svg" alt="Eight RTX PRO 6000 FP32 AllGather: frozen per-size UCCL Lite and tuned NCCL SM/CE, median latency and bus throughput over five independent runs" width="100%"></a></td>
-    <td width="33%"><a href="benchmarks/data/pro6000_ag_rs_cpp_20261116/README.md"><img src="docs/assets/collectives-pro6000x8-reducescatter-fp32.svg" alt="Eight RTX PRO 6000 FP32 ReduceScatter: frozen per-size UCCL Lite and tuned NCCL SM/CE, median latency and bus throughput over five independent runs" width="100%"></a></td>
+    <td width="33%"><a href="benchmarks/data/pro6000_nccl_baselines_cpp_20261116/README.md"><img src="docs/assets/collectives-pro6000x8-allreduce-fp32-nccl-baselines.svg" alt="Eight RTX PRO 6000 FP32 AllReduce: UCCL Lite, NCCL (tuned SM/CE), and NCCL (default); median latency and bus throughput over five independent runs" width="100%"></a></td>
+    <td width="33%"><a href="benchmarks/data/pro6000_nccl_baselines_cpp_20261116/README.md"><img src="docs/assets/collectives-pro6000x8-allgather-fp32-nccl-baselines.svg" alt="Eight RTX PRO 6000 FP32 AllGather: UCCL Lite, NCCL (tuned SM/CE), and NCCL (default); median latency and bus throughput over five independent runs" width="100%"></a></td>
+    <td width="33%"><a href="benchmarks/data/pro6000_nccl_baselines_cpp_20261116/README.md"><img src="docs/assets/collectives-pro6000x8-reducescatter-fp32-nccl-baselines.svg" alt="Eight RTX PRO 6000 FP32 ReduceScatter: UCCL Lite, NCCL (tuned SM/CE), and NCCL (default); median latency and bus throughput over five independent runs" width="100%"></a></td>
   </tr>
 </table>
 

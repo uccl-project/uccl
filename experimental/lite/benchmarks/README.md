@@ -31,6 +31,7 @@ in Git history. Restore those logs before rerunning historical summarizers.
 
 | File | Scope and method |
 | --- | --- |
+| [pro6000_nccl_baselines_cpp_20261116](data/pro6000_nccl_baselines_cpp_20261116/README.md) | Eight RTX PRO 6000 FP32 AR/AG/RS: fresh NCCL default curves, independently recalibrated AllReduce SM/CE baseline, frozen policies, five validation rounds for all curves, and complete raw correctness/transport evidence. |
 | [pro6000_ag_rs_cpp_20261116](data/pro6000_ag_rs_cpp_20261116/README.md) | Eight RTX PRO 6000 FP32 AllGather/ReduceScatter: 1 KiB–1 GiB, independently tuned SM/CE NCCL, frozen policies, five traced and five initialization-only validation rounds, eager/graph/rank-skew correctness on eight PRO 6000s and four L4s, and retained negative experiments. |
 | [nccl_tuned_4l4_20261115](data/nccl_tuned_4l4_20261115/README.md) | Testbed 3 FP32 AR/AG/RS: separately calibrated NCCL CE and SM references, three independent validation runs, complete output checks and verified transport paths. |
 | [nccl_ascending_pro6000_20261115](data/nccl_ascending_pro6000_20261115/README.md) | Two-PRO6000 BF16 AR/AG/RS memcpy tuning with complete 1 KiB→1 GiB ascending sweeps; independent calibration and validation, with a separate purple reference curve. |

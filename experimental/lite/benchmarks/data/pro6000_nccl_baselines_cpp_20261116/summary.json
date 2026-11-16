@@ -1,0 +1,33 @@
+{
+  "policy_sha256": "a8131df284dd76186f392041bc15f25455f2adc9de8b41b0b9ddba06cfb2c6c2",
+  "evidence": {
+    "full_per_rank_checks": 337600,
+    "nccl_rank_logs": 2496,
+    "jobs": {
+      "calibration": 144,
+      "diagnostic": 28,
+      "validation": 305
+    }
+  },
+  "operations": {
+    "allreduce": {
+      "ours_median_wins_vs_tuned": 18,
+      "ours_median_wins_vs_default": 21,
+      "ours_losing_sizes_vs_tuned": [
+        2097152,
+        4194304,
+        8388608
+      ]
+    },
+    "allgather": {
+      "ours_median_wins_vs_tuned": 21,
+      "ours_median_wins_vs_default": 21,
+      "ours_losing_sizes_vs_tuned": []
+    },
+    "reducescatter": {
+      "ours_median_wins_vs_tuned": 21,
+      "ours_median_wins_vs_default": 21,
+      "ours_losing_sizes_vs_tuned": []
+    }
+  }
+}
