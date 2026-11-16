@@ -25,6 +25,7 @@
 #include <sstream>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -69,6 +70,35 @@ struct IpcMappings {
   std::vector<size_t> iov_slots;
   std::unordered_map<std::string_view, size_t> other_handles;
 };
+
+template <typename Descriptor>
+bool remote_extent_fits(size_t size, Descriptor const& descriptor) {
+  // CNRT FIFO metadata describes its staging window, not the payload extent.
+  if constexpr (std::is_same_v<Descriptor, FifoItem> &&
+                uccl::device::Backend::staged_network)
+    return true;
+  size_t advertised_size = descriptor.size;
+  if (unlikely(size > advertised_size)) {
+    UCCL_LOG(ERROR) << "transfer size " << size
+                    << " exceeds advertised remote size " << advertised_size;
+    return false;
+  }
+  return true;
+}
+
+template <typename Descriptor>
+bool remote_extents_fit(std::vector<size_t> const& sizes,
+                        std::vector<Descriptor> const& descriptors,
+                        size_t num_iovs) {
+  if (unlikely(num_iovs > sizes.size() || num_iovs > descriptors.size())) {
+    UCCL_LOG(ERROR) << "transfer vector is shorter than num_iovs";
+    return false;
+  }
+  for (size_t i = 0; i < num_iovs; ++i) {
+    if (!remote_extent_fits(sizes[i], descriptors[i])) return false;
+  }
+  return true;
+}
 
 // Ordinal in this process of the GPU with PCI bus id `bdf`, or -1.
 int visible_ordinal_of_bdf(std::string const& bdf) {
@@ -808,6 +838,7 @@ bool Endpoint::dereg(uint64_t mr_id) {
 
 bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
                     FifoItem const& slot_item) {
+  if (!remote_extent_fits(size, slot_item)) return false;
   UCCL_DCHECK(size <= 0xffffffff) << "size must be < 4 GB";
   if constexpr (uccl::device::Backend::staged_network)
     return staging_.read(conn_id, dst, size, slot_item);
@@ -857,6 +888,7 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
                           size_t size, FifoItem const& slot_item,
                           uint64_t* transfer_id) {
   *transfer_id = 0;
+  if (!remote_extent_fits(size, slot_item)) return false;
   if (size <= kDirectAsyncNetThreshold) {
     auto* conn = get_conn(conn_id);
     if (unlikely(conn == nullptr)) {
@@ -929,6 +961,7 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
                      std::vector<size_t> const& size_v,
                      std::vector<FifoItem> const& slot_item_v,
                      size_t num_iovs) {
+  if (!remote_extents_fit(size_v, slot_item_v, num_iovs)) return false;
   auto* conn = get_conn(conn_id);
   if (unlikely(conn == nullptr)) {
     std::cerr << "[readv] Error: Invalid conn_id " << conn_id << std::endl;
@@ -1053,6 +1086,8 @@ bool Endpoint::readv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                            std::vector<void*> dst_v, std::vector<size_t> size_v,
                            std::vector<FifoItem> slot_item_v, size_t num_iovs,
                            uint64_t* transfer_id) {
+  *transfer_id = 0;
+  if (!remote_extents_fit(size_v, slot_item_v, size_v.size())) return false;
   // Use move semantics to reduce memory copies
   auto task_ptr =
       create_readv_task(conn_id, std::move(dst_v), std::move(size_v),
@@ -1135,6 +1170,7 @@ bool Endpoint::run_raw_one_sided_pipeline(
 
 bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
                      FifoItem const& slot_item) {
+  if (!remote_extent_fits(size, slot_item)) return false;
   UCCL_DCHECK(size <= 0xffffffff) << "size must be < 4 GB";
   if constexpr (uccl::device::Backend::staged_network)
     return staging_.write(conn_id, src, size, slot_item);
@@ -1182,6 +1218,7 @@ bool Endpoint::write_async(uint64_t conn_id, uint64_t mr_id, void* src,
                            size_t size, FifoItem const& slot_item,
                            uint64_t* transfer_id) {
   *transfer_id = 0;
+  if (!remote_extent_fits(size, slot_item)) return false;
   if (size <= kDirectAsyncNetThreshold) {
     auto* conn = get_conn(conn_id);
     if (unlikely(conn == nullptr)) {
@@ -1241,6 +1278,7 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
                       std::vector<size_t> const& size_v,
                       std::vector<FifoItem> const& slot_item_v,
                       size_t num_iovs) {
+  if (!remote_extents_fit(size_v, slot_item_v, num_iovs)) return false;
   auto* conn = get_conn(conn_id);
   if (unlikely(conn == nullptr)) {
     std::cerr << "[writev] Error: Invalid conn_id " << conn_id << std::endl;
@@ -1383,6 +1421,8 @@ bool Endpoint::writev_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                             std::vector<size_t> size_v,
                             std::vector<FifoItem> slot_item_v, size_t num_iovs,
                             uint64_t* transfer_id) {
+  *transfer_id = 0;
+  if (!remote_extents_fit(size_v, slot_item_v, size_v.size())) return false;
   // Use move semantics to reduce memory copies
   auto task_ptr =
       create_writev_task(conn_id, std::move(src_v), std::move(size_v),
@@ -1593,6 +1633,7 @@ got:
 
 bool Endpoint::write_ipc(uint64_t conn_id, void const* data, size_t size,
                          IpcTransferInfo const& info) {
+  if (!remote_extent_fits(size, info)) return false;
   UCCL_CHECK(data != nullptr) << "write_ipc: data pointer is null!";
 
   // Get connection info
@@ -1653,6 +1694,7 @@ bool Endpoint::write_ipc(uint64_t conn_id, void const* data, size_t size,
 
 bool Endpoint::read_ipc(uint64_t conn_id, void* data, size_t size,
                         IpcTransferInfo const& info) {
+  if (!remote_extent_fits(size, info)) return false;
   UCCL_CHECK(data != nullptr) << "read_ipc: data pointer is null!";
 
   // Get connection info
@@ -1715,6 +1757,7 @@ bool Endpoint::writev_ipc(uint64_t conn_id, std::vector<void const*> data_v,
                           std::vector<size_t> size_v,
                           std::vector<IpcTransferInfo> info_v,
                           size_t num_iovs) {
+  if (!remote_extents_fit(size_v, info_v, num_iovs)) return false;
   UCCL_CHECK_EQ(data_v.size(), num_iovs) << "writev_ipc: data_v size mismatch";
   UCCL_CHECK_EQ(size_v.size(), num_iovs) << "writev_ipc: size_v size mismatch";
   UCCL_CHECK_EQ(info_v.size(), num_iovs) << "writev_ipc: info_v size mismatch";
@@ -1786,6 +1829,7 @@ bool Endpoint::writev_ipc(uint64_t conn_id, std::vector<void const*> data_v,
 bool Endpoint::readv_ipc(uint64_t conn_id, std::vector<void*> data_v,
                          std::vector<size_t> size_v,
                          std::vector<IpcTransferInfo> info_v, size_t num_iovs) {
+  if (!remote_extents_fit(size_v, info_v, num_iovs)) return false;
   UCCL_CHECK_EQ(data_v.size(), num_iovs) << "readv_ipc: data_v size mismatch";
   UCCL_CHECK_EQ(size_v.size(), num_iovs) << "readv_ipc: size_v size mismatch";
   UCCL_CHECK_EQ(info_v.size(), num_iovs) << "readv_ipc: info_v size mismatch";
@@ -1857,6 +1901,8 @@ bool Endpoint::readv_ipc(uint64_t conn_id, std::vector<void*> data_v,
 bool Endpoint::write_ipc_async(uint64_t conn_id, void const* data, size_t size,
                                IpcTransferInfo const& info,
                                uint64_t* transfer_id) {
+  *transfer_id = 0;
+  if (!remote_extent_fits(size, info)) return false;
   Conn* conn = get_conn(conn_id);
   if (unlikely(conn == nullptr)) {
     std::cerr << "[write_ipc_async] Error: Invalid conn_id " << conn_id
@@ -1931,6 +1977,8 @@ bool Endpoint::write_ipc_async(uint64_t conn_id, void const* data, size_t size,
 bool Endpoint::read_ipc_async(uint64_t conn_id, void* data, size_t size,
                               IpcTransferInfo const& info,
                               uint64_t* transfer_id) {
+  *transfer_id = 0;
+  if (!remote_extent_fits(size, info)) return false;
   Conn* conn = get_conn(conn_id);
   if (unlikely(conn == nullptr)) {
     std::cerr << "[read_ipc_async] Error: Invalid conn_id " << conn_id
@@ -2006,6 +2054,8 @@ bool Endpoint::writev_ipc_async(uint64_t conn_id,
                                 std::vector<size_t> size_v,
                                 std::vector<IpcTransferInfo> info_v,
                                 size_t num_iovs, uint64_t* transfer_id) {
+  *transfer_id = 0;
+  if (!remote_extents_fit(size_v, info_v, num_iovs)) return false;
   UCCL_CHECK_EQ(data_v.size(), num_iovs)
       << "writev_ipc_async: data_v size mismatch";
   UCCL_CHECK_EQ(size_v.size(), num_iovs)
@@ -2116,6 +2166,8 @@ bool Endpoint::readv_ipc_async(uint64_t conn_id, std::vector<void*> data_v,
                                std::vector<size_t> size_v,
                                std::vector<IpcTransferInfo> info_v,
                                size_t num_iovs, uint64_t* transfer_id) {
+  *transfer_id = 0;
+  if (!remote_extents_fit(size_v, info_v, num_iovs)) return false;
   UCCL_CHECK_EQ(data_v.size(), num_iovs)
       << "readv_ipc_async: data_v size mismatch";
   UCCL_CHECK_EQ(size_v.size(), num_iovs)
