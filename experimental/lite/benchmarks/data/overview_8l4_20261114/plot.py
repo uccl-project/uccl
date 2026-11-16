@@ -1,4 +1,4 @@
-"""Plot six two-panel eight-L4 collective overviews; CE is AllGather-only."""
+"""Plot six four-series, two-panel eight-L4 collective overviews."""
 import argparse
 import csv
 import math
@@ -65,9 +65,6 @@ def make_figure(data, mode, operation, factor):
             ("nccl_ce_median_us", "NCCL CE (tuned)", "#B899C8", "^", (0, (6, 2, 1, 2))),
             ("uccl_median_us", "UCCL Lite", "#0068B5", "o", "-"),
         ):
-            # NCCL's copy engine path only supports AllGather here.
-            if field == "nccl_ce_median_us" and operation != "all_gather":
-                continue
             latencies = [float(data[mode, operation, size][field]) for size in sizes]
             if any(not math.isfinite(us) or us <= 0 for us in latencies):
                 raise ValueError(f"invalid {mode} {operation} timing")

@@ -85,9 +85,6 @@ def make_figure(data, operation, title, factor):
             ("ascending_", "NCCL CE (tuned)", "#B899C8", "^", (0, (6, 2, 1, 2))),
             ("", "UCCL Lite", "#0068B5", "o", "-"),
         ):
-            # NCCL's copy engine path only supports AllGather here.
-            if prefix == "ascending_" and operation != "allgather":
-                continue
             orders = ("run1", "run2") if prefix == "ascending_" else ("forward", "reverse")
             runs = [[float(data[operation, size][f"{prefix}{order}_us"])
                      for order in orders] for size in sizes]
