@@ -2,15 +2,22 @@
 
 Fresh measurements on `wxz-pro6000`, 2026-11-16. This experiment measures
 NCCL SM with the timing contract of the
-[original PRO5000 C++ PCIeCCL harness](../pro6000_original_cpp_latency_20261116/README.md).
-It also freshly reruns that unchanged original PCIeCCL binary during the
+[original PRO5000 C++ UCCL Lite harness](../pro6000_original_cpp_latency_20261116/README.md).
+It also freshly reruns that unchanged original UCCL Lite binary during the
 independent validation window. This does not measure EAT c03 or the earlier
 BF16/Python per-call interface.
 
+The figure and derived tables use **UCCL Lite** as the display name for the
+original standalone implementation recorded as `PCIeCCL` in historical source
+and raw logs. Raw names, source bytes, hashes and measurement values retain
+their original identities.
+
 [Latency comparison](results.md) · [all five-run values and ranges](summary.csv)
 
+![Matched FP32/C++ AllReduce latency](../../../docs/assets/collectives-pro6000x8-allreduce-fp32-cpp-latency.svg)
+
 At 1 KiB, the independently validated median is 18.01 µs for tuned NCCL SM
-versus 9.86 µs for original PCIeCCL. At 64 KiB the values are 19.97 versus
+versus 9.86 µs for original UCCL Lite. At 64 KiB the values are 19.97 versus
 32.08 µs; at 1 MiB, 70.42 versus 73.40 µs. The original implementation wins
 the measured 1–32-KiB points and 512 KiB; the selected NCCL references win
 64–256 KiB and 1 MiB. Both wins and losses remain in the table.
@@ -74,7 +81,7 @@ than replaced or silently retried.
 Each size selects its lowest median calibration latency, then the schedule is
 frozen in `raw/frozen-selection.json` **before** validation. Five independent
 full-grid runs validate every selected fixed configuration plus default NCCL.
-The original unmodified PCIeCCL `-m all` sweep is interleaved once per validation
+The original unmodified UCCL Lite `-m all` sweep is interleaved once per validation
 round, and backend order reverses in alternate rounds. All size orders remain
 ascending, as in the original harness.
 
@@ -85,7 +92,7 @@ ranges are their observed minimum/maximum, not confidence intervals. The
 composite reference uses per-size calibration choices, not a single unchanged
 NCCL communicator policy for the whole curve.
 
-The fresh original PCIeCCL column is the pre-EAT `auto` path: LL through
+The fresh original UCCL Lite column is the pre-EAT `auto` path: LL through
 32 KiB and PUT above that in this size range. Source/binary SHA-256 identities
 are checked. These results cannot quantify EAT improvement or isolate the
 effects of Python enqueue, dtype, graph capture or other timing-scope changes.
@@ -94,7 +101,7 @@ effects of Python enqueue, dtype, graph capture or other timing-scope changes.
 
 - `nccl_sm_latency.cu`: direct NCCL reference, built through the main Makefile.
 - `run.py`: calibration, frozen selection, independent validation, shared-lock
-  checks, process supervision and original-PCIeCCL control jobs.
+  checks, process supervision and original-UCCL Lite control jobs.
 - `raw/`: every calibration/validation output, all rank transport logs (losslessly
   packaged in `debug-logs.tar.gz`), hardware
   identity, build log, source/library/binary hashes, commands and policy records.
@@ -124,3 +131,13 @@ Verify the packaged evidence and regenerate the CSV/table without GPUs:
 ```bash
 make nccl-sm-cpp-latency-summary
 ```
+
+Regenerate the README-style SVG and PNG/PDF previews with:
+
+```bash
+make nccl-sm-cpp-latency-figures
+```
+
+The figure uses the shared collective colors, markers, fonts, legend, grid and
+metric direction. It shows the measured 1-KiB–1-MiB latency range; shading is
+the five-run observed range.

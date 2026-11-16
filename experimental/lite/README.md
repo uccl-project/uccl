@@ -17,6 +17,7 @@
   <tr><td>2</td><td>8 × NVIDIA L4</td><td>Without P2P</td><td>8xL4 SHM: GPU peer transport disabled by policy.</td></tr>
   <tr><td>3</td><td>4 × NVIDIA L4</td><td>With P2P</td><td>PCIe Gen4 dual-socket node; multi-node tests use two such nodes with two NIC rails per node.</td></tr>
   <tr><td>4</td><td>2 × NVIDIA RTX PRO 6000</td><td>With P2P</td><td>BF16 peer path.</td></tr>
+  <tr><td>5</td><td>8 × NVIDIA RTX PRO 6000 Blackwell</td><td>With P2P</td><td>Four GPUs per NUMA node; FP32 in-place AllReduce with C++ batch timing.</td></tr>
 </table>
 
 </div>
@@ -142,6 +143,23 @@ workload from Testbed 1's SGLang serving and DDP/FSDP training.
     <td width="33%"><img src="docs/assets/collectives-pro6000x2-reducescatter-overview.svg" alt="PRO6000 x2 ReduceScatter: UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (default P2P)" width="100%"></td>
   </tr>
 </table>
+
+#### Testbed 5
+
+<table>
+  <tr><th>AllReduce</th><th>AllGather</th><th>ReduceScatter</th></tr>
+  <tr>
+    <td width="33%"><img src="docs/assets/collectives-pro6000x8-allreduce-fp32-cpp-latency.svg" alt="Eight RTX PRO 6000 FP32 AllReduce latency from 1 KiB to 1 MiB, matched C++ batch timing: UCCL Lite, NCCL SM (tuned), NCCL (default)" width="100%"></td>
+    <td width="33%"></td>
+    <td width="33%"></td>
+  </tr>
+</table>
+
+[Measurement protocol and raw data](benchmarks/data/pro6000_nccl_sm_cpp_latency_20261116/README.md):
+FP32 in-place SUM, 10 warmups and 20 continuous calls per timed C++ batch,
+slowest rank, medians of five independent runs. The NCCL SM reference uses
+per-size configurations frozen from separate calibration. This figure measures
+the original standalone UCCL Lite implementation over 1 KiB–1 MiB.
 
 ### Multi-node collectives
 

@@ -1,9 +1,10 @@
-# Original PRO5000 PCIeCCL C++ benchmark rerun on PRO6000
+# Original UCCL Lite C++ benchmark rerun on PRO6000
 
 Measured on `wxz-pro6000`, 2026-11-16, using the **byte-identical original
 standalone CUDA source** from the PRO5000 experiment. This is the pre-EAT
-standalone implementation, not the c03 vLLM extension. The main project README
-remains without Testbed 5.
+standalone implementation, not the c03 vLLM extension. New figures and derived
+tables label this implementation **UCCL Lite**; historical source and raw logs
+retain the recorded `PCIeCCL` name.
 
 [Complete auto-path latency table](results.md) · [all-mode summary CSV](summary.csv)
 

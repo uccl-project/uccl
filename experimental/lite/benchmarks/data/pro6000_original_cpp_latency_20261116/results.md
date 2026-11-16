@@ -1,4 +1,4 @@
-# Original PCIeCCL C++ auto-path latency on eight PRO6000 GPUs
+# Original UCCL Lite C++ auto-path latency on eight PRO6000 GPUs
 
 FP32; original unchanged C++ source; each run uses 10 warmups and 20 continuous timed calls.
 Values are the median and observed range of five independent run means, not confidence intervals.

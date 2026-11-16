@@ -93,8 +93,8 @@ def main():
     table = ["# Matched FP32/C++ batch latency on eight RTX PRO6000 GPUs", "",
              "In-place SUM; 10 warmups and 20 continuous timed calls; C++ host batch timer; slowest rank.",
              "Independent calibration: three sweeps/config. Validation: five fresh sweeps/config; medians below.",
-             "The tuned curve uses per-size choices frozen before validation. Original PCIeCCL is freshly rerun.", "",
-             "| Size | NCCL default SM (µs) | NCCL tuned SM (µs) | Original PCIeCCL auto (µs) | Selected NCCL config |",
+             "The tuned curve uses per-size choices frozen before validation. Original UCCL Lite is freshly rerun.", "",
+             "| Size | NCCL default SM (µs) | NCCL tuned SM (µs) | UCCL Lite (µs) | Selected NCCL config |",
              "| ---: | ---: | ---: | ---: | --- |"]
     for row in rows:
         table.append(f"| {row['bytes'] // 1024} KiB | {row['nccl_default_median_us']:.2f} | "

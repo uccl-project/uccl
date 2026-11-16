@@ -48,7 +48,7 @@ def main():
         writer = csv.DictWriter(stream, fieldnames=list(rows[0]), lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
-    table = ["# Original PCIeCCL C++ auto-path latency on eight PRO6000 GPUs", "",
+    table = ["# Original UCCL Lite C++ auto-path latency on eight PRO6000 GPUs", "",
              "FP32; original unchanged C++ source; each run uses 10 warmups and 20 continuous timed calls.",
              "Values are the median and observed range of five independent run means, not confidence intervals.",
              "The PRO5000 historical column uses a separate host/toolchain/window and is not an EAT before/after comparison.",

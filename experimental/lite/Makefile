@@ -166,6 +166,10 @@ $(BUILD)/uccl_lite_nccl_sm_cpp_latency: benchmarks/data/pro6000_nccl_sm_cpp_late
 nccl-sm-cpp-latency-summary:
 	$(PYTHON) -B benchmarks/data/pro6000_nccl_sm_cpp_latency_20261116/summarize.py
 
+.PHONY: nccl-sm-cpp-latency-figures
+nccl-sm-cpp-latency-figures:
+	$(PYTHON) -B benchmarks/data/pro6000_nccl_sm_cpp_latency_20261116/plot.py --preview
+
 # Host-only Python binding to the same out-of-place NCCL AllReduce API.
 PYBIND11_INC ?= $(shell $(PYTHON) -c 'import torch; print(torch.__path__[0] + "/include")')
 PYTHON_INC = $(shell $(PYTHON) -c 'import sysconfig; print(sysconfig.get_path("include"))')

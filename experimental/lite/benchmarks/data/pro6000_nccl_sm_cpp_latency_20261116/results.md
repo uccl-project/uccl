@@ -2,9 +2,9 @@
 
 In-place SUM; 10 warmups and 20 continuous timed calls; C++ host batch timer; slowest rank.
 Independent calibration: three sweeps/config. Validation: five fresh sweeps/config; medians below.
-The tuned curve uses per-size choices frozen before validation. Original PCIeCCL is freshly rerun.
+The tuned curve uses per-size choices frozen before validation. Original UCCL Lite is freshly rerun.
 
-| Size | NCCL default SM (µs) | NCCL tuned SM (µs) | Original PCIeCCL auto (µs) | Selected NCCL config |
+| Size | NCCL default SM (µs) | NCCL tuned SM (µs) | UCCL Lite (µs) | Selected NCCL config |
 | ---: | ---: | ---: | ---: | --- |
 | 1 KiB | 25.47 | 18.01 | 9.86 | ring-ll |
 | 2 KiB | 25.64 | 18.26 | 9.75 | ring-ll |
