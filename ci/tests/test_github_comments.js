@@ -138,7 +138,7 @@ test('dispatch failure updates the queued comment instead of leaving it queued',
   assert.match(f.reply.body, /Status: failed to dispatch/);
 });
 
-test('completion updates the status and posts a new reply mentioning the requester', async () => {
+test('running, completion, retries and reruns update the same status comment', async () => {
   for (const command of ['/run-ci l4', '/run-benchmark gh200']) {
     const f = fixture(command);
     await dispatch(f);
@@ -153,41 +153,36 @@ test('completion updates the status and posts a new reply mentioning the request
     assert.ok(f.reply.body.includes(command));
     assert.ok(f.reply.body.includes(f.pr.head.sha));
     assert.match(f.reply.body, /\| CPU \| skipped \|/);
-    assert.equal(f.comments.length, 2);
-    assert.match(f.comments[1].body, /uccl-ci-complete-101-1/);
-    assert.match(f.comments[1].body, /Requested by: @maintainer/);
-    assert.match(f.comments[1].body, /Status: completed successfully/);
-    assert.match(f.comments[1].body, /actions\/runs\/101\/attempts\/1/);
-    assert.ok(f.calls.filter(([kind]) => kind === 'update').every(([, args]) => args.comment_id === 200));
+    assert.equal(f.comments.length, 1);
     await update({...f, status: 'complete', results: results()});
-    assert.equal(f.comments.length, 2, 'same attempt must not notify twice');
+    assert.equal(f.comments.length, 1, 'retry must keep the original comment');
     await update({...f, status: 'running', attempt: '2'});
+    assert.match(f.reply.body, /Status: running/);
     assert.match(f.reply.body, /actions\/runs\/101\/attempts\/2/);
     await update({...f, status: 'complete', attempt: '2', results: results()});
-    assert.equal(f.comments.length, 3, 'a new attempt gets its own notification');
-    assert.match(f.comments[2].body, /uccl-ci-complete-101-2/);
+    assert.match(f.reply.body, /Status: completed successfully/);
+    assert.match(f.reply.body, /actions\/runs\/101\/attempts\/2/);
+    assert.equal(f.comments.length, 1, 'a new attempt reuses the original comment');
+    assert.equal(f.calls.filter(([kind]) => kind === 'create').length, 1);
+    assert.ok(f.calls.filter(([kind]) => kind === 'update').every(([, args]) => args.comment_id === 200));
   }
 });
 
-test('a user cannot suppress the completion notification with a copied marker', async () => {
+test('a transient completion update failure retries the original comment', async () => {
   const f = fixture();
   await dispatch(f); f.startRun();
-  f.comments.push({user: {login: 'contributor', type: 'User'}, body: '<!-- uccl-ci-complete-101-1 -->\nforged'});
-  await update({...f, status: 'complete', results: results()});
-  assert.equal(f.calls.filter(([kind]) => kind === 'create').length, 2);
-  assert.match(f.comments.at(-1).body, /Status: completed successfully/);
-});
-
-test('a transient completion post failure can be retried after the status was updated', async () => {
-  const f = fixture();
-  await dispatch(f); f.startRun();
-  const create = f.github.rest.issues.createComment;
-  f.github.rest.issues.createComment = async () => {throw new Error('temporary API failure');};
+  await update({...f, status: 'running'});
+  const edit = f.github.rest.issues.updateComment;
+  f.github.rest.issues.updateComment = async () => {throw new Error('temporary API failure');};
   await assert.rejects(update({...f, status: 'complete', results: results()}), /temporary API failure/);
-  assert.match(f.reply.body, /Status: completed successfully/);
-  f.github.rest.issues.createComment = create;
+  assert.match(f.reply.body, /Status: running/);
+  assert.equal(f.comments.length, 1);
+  f.github.rest.issues.updateComment = edit;
   await update({...f, status: 'complete', results: results()});
-  assert.equal(f.comments.length, 2);
+  assert.match(f.reply.body, /Status: completed successfully/);
+  assert.equal(f.comments.length, 1);
+  assert.equal(f.calls.filter(([kind]) => kind === 'create').length, 1);
+  assert.ok(f.calls.filter(([kind]) => kind === 'update').every(([, args]) => args.comment_id === 200));
 });
 
 test('final status covers setup/test failures, cancellation and skipped execution', async () => {
@@ -203,7 +198,8 @@ test('final status covers setup/test failures, cancellation and skipped executio
     await dispatch(f); f.startRun();
     await update({...f, status: 'complete', results: results(changes)});
     assert.ok(f.reply.body.includes(`**Status: ${label}**`));
-    assert.ok(f.comments[1].body.includes(`**Status: ${label}**`));
+    assert.equal(f.comments.length, 1);
+    assert.equal(f.calls.filter(([kind]) => kind === 'create').length, 1);
     if (changes['comment-start']) assert.match(f.reply.body, /initial running-status update did not succeed/);
   }
 });

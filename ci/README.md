@@ -121,11 +121,11 @@ Supported targets: `all`, `cpu`, `l4`, `gb10`, `gh200`.
 GPU jobs queue per target (up to 100 waiting runs), so newer requests do not
 cancel waiting runs. `CI status` reports job outcomes; cancelled work is incomplete.
 
-Each valid, authorized command creates a status comment, updated from queued to
+Each valid, authorized command creates one status comment, updated from queued to
 running and then completed, failed, cancelled or skipped, with a run/log link.
-Completion also posts a new reply mentioning the requester, once per run attempt,
-so long GPU runs send a completion notification. An initial status-update failure
-is noted separately and does not turn passing CI jobs into a failed test result.
+Completion, retries and reruns update that same comment. An initial status-update
+failure is noted separately and does not turn passing CI jobs into a failed test
+result.
 Malformed commands receive usage feedback only after the same permission check;
 non-maintainers remain silent. Forked PRs use the same permission check and exact
 commit; only separate jobs running trusted workflow code can write comments.

@@ -118,20 +118,6 @@ async function update({github, context, status, results, attempt = process.env.G
   await github.rest.issues.updateComment({
     owner, repo, comment_id, body,
   });
-  if (status === 'complete') {
-    // Editing the original mention does not notify the requester. A new reply
-    // does; deduplicate retries of the same run attempt without trusting users.
-    const marker = `<!-- uccl-ci-complete-${context.runId}-${attempt} -->`;
-    const comments = await github.paginate(github.rest.issues.listComments, {
-      owner, repo, issue_number: Number(inputs.pr), per_page: 100,
-    });
-    if (!comments.some(comment => comment.user?.login === 'github-actions[bot]' &&
-        comment.user?.type === 'Bot' && comment.body?.startsWith(`${marker}\n`))) {
-      await github.rest.issues.createComment({
-        owner, repo, issue_number: Number(inputs.pr), body: `${marker}\n${body}`,
-      });
-    }
-  }
 }
 
 module.exports = {dispatch, update, completionStatus};
