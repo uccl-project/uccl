@@ -152,7 +152,7 @@ test('running, completion, retries and reruns update the same status comment', a
     assert.match(f.reply.body, /Requested by: @maintainer/);
     assert.ok(f.reply.body.includes(command));
     assert.ok(f.reply.body.includes(f.pr.head.sha));
-    assert.match(f.reply.body, /\| CPU \| — Not run \|/);
+    assert.match(f.reply.body, /\| CPU \| — Skipped \|/);
     assert.equal(f.comments.length, 1);
     await update({...f, status: 'complete', results: results()});
     assert.equal(f.comments.length, 1, 'retry must keep the original comment');
@@ -192,7 +192,7 @@ test('final status covers setup/test failures, cancellation and skipped executio
     [{'comment-start': 'failure'}, '✅ Pass'],
     [{'comment-start': 'cancelled'}, '✅ Pass'],
     [{gpu: 'cancelled', status: 'failure'}, '⚠️ Cancelled'],
-    [{cpu: 'skipped', gpu: 'skipped'}, '— Not run'],
+    [{cpu: 'skipped', gpu: 'skipped'}, '— Skipped'],
   ]) {
     const f = fixture();
     await dispatch(f); f.startRun();

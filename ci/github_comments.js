@@ -9,13 +9,13 @@ const STATUS_LABELS = {
   failed: '❌ Failed',
   'failed to dispatch': '⚠️ Failed to dispatch',
   cancelled: '⚠️ Cancelled',
-  skipped: '— Not run',
+  skipped: '— Skipped',
 };
 const RESULT_LABELS = {
   success: '✅ Pass',
   failure: '❌ Failed',
   cancelled: '⚠️ Cancelled',
-  skipped: '— Not run',
+  skipped: '— Skipped',
 };
 
 function runUrl(context, attempt) {
