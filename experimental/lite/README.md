@@ -1,36 +1,24 @@
 <div align="center">
 
-<p align="center"> <img src="./docs/assets/uccl-lite-logo.png" alt="UCCL Lite logo with a navy lightning outline and gold accents" width="300"> </p>
+<p align="center"> <img src="./docs/assets/uccl-lite-logo.png" alt="UCCL Lite logo with a navy lightning outline and gold accents" width="500"> </p>
 
-# UCCL Lite
-
-**Collectives and communication–GEMM fusion for PCIe GPU nodes.**
-
-[Results](#measured-results) · [CPU router](#optional-cpu-router) · [Documentation](#documentation)
+**Efficient Communication Library for PCIe GPU nodes.**
 
 </div>
 
 ## Testbeds
 
-| # | GPUs | GPU P2P |
-| --- | --- | --- |
-| 1 | 8 × NVIDIA L4 | Partial P2P |
-| 2 | 8 × NVIDIA L4 | Without P2P |
-| 3 | 4 × NVIDIA L4 | With P2P |
-| 4 | 2 × NVIDIA RTX PRO 6000 | With P2P |
+<div align="center">
 
-UCCL Lite is an experimental collection of CUDA collective kernels, an
-optional CPU router, fusion kernels, and hardware probes. The direct peer paths
-target **four NVIDIA L4 GPUs on a PCIe Gen4 dual-socket node**; the network
-paths target **two such nodes**, with two NIC rails per node. The CPU router is
-a separate module for 1–32 local GPUs. Most collective and fusion paths
-use MSCCL++; standalone peer AG/RS uses CUDA peer access.
+<table align="center">
+  <tr><th>#</th><th>GPUs</th><th>GPU P2P</th><th>Configuration</th></tr>
+  <tr><td>1</td><td>8 × NVIDIA L4</td><td>Partial P2P</td><td>Four GPUs per NUMA node.</td></tr>
+  <tr><td>2</td><td>8 × NVIDIA L4</td><td>Without P2P</td><td>8xL4 SHM: GPU peer transport disabled by policy.</td></tr>
+  <tr><td>3</td><td>4 × NVIDIA L4</td><td>With P2P</td><td>PCIe Gen4 dual-socket node; multi-node tests use two such nodes with two NIC rails per node.</td></tr>
+  <tr><td>4</td><td>2 × NVIDIA RTX PRO 6000</td><td>With P2P</td><td>BF16 peer path.</td></tr>
+</table>
 
-The eight-L4 results were measured on a separate host with four GPUs per
-NUMA node. A third, **8xL4 SHM**, testbed disables GPU peer transport on
-that host by policy. Fresh four-L4, two-node, and eight-L4 dense fusion
-measurements appear below with their own timing scopes. Small messages
-and small GEMMs can lose to NCCL; negative results are retained.
+</div>
 
 ## What is included
 
@@ -41,12 +29,6 @@ and small GEMMs can lose to NCCL; negative results are retained.
 | [Multi-node collectives](docs/multinode.md) | Collective implementations across nodes using local GPU access and network rails. |
 | [CPU router](docs/cpu-router.md) | Optional NUMA-aware path for local collectives, selected from measured benefit. |
 | [Fusion kernels](docs/fusion.md) | Combine collective communication with GEMM and MoE stages. |
-
-The RTX PRO 6000 BF16 peer path shares inline copy/reduction primitives with
-four-L4 FP32 peer collectives and the eight-L4 BF16 local fallback. One prepared
-peer executor owns the two/four-rank CUDA schedule; the joint layer owns
-validation and calibrated backend selection. See the
-[shared implementation and refactor checks](docs/retained-optimizations.md#shared-collective-components).
 
 ## Measured results
 
