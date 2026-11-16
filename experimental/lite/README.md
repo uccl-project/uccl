@@ -1,5 +1,7 @@
 <div align="center">
 
+<p align="center"> <img src="./docs/assets/uccl-lite-logo.png" alt="UCCL Lite logo with a navy lightning outline and gold accents" width="300"> </p>
+
 # UCCL Lite
 
 **Collectives and communication–GEMM fusion for PCIe GPU nodes.**
