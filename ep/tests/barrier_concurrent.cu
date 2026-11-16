@@ -57,7 +57,10 @@ constexpr int kNumThreads = 128;
 constexpr long long kDelayCycles = 200000;
 
 struct alignas(16) RankBlock {
-  int signal[kMaxRanks];
+  // Match Buffer's signal layout, including the zero-initialized atomic mode.
+  // Otherwise BARRIER_MODE_SLOT aliases arrived[0] and round 1 selects epoch
+  // mode in the middle of the atomic round-pairing test.
+  int signal[NUM_BARRIER_SIGNAL_INTS];
   int arrived[kMaxEpochs + 1];
 };
 
