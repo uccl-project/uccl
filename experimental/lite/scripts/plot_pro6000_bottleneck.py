@@ -9,7 +9,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from figure_style import configure, clean_axis, save, BLUE, TEAL, AMBER, MUTED
+from figure_style import configure, clean_axis, save, BLUE, TEAL, AMBER
 
 
 def main():
@@ -26,8 +26,8 @@ def main():
         ], "Use complete traces from the compatible profiler"
         assert all(len(r["calls"]) == 20 for r in data["ranks"])
     configure(black_axes=True)
-    fig, axes = plt.subplots(1, 2, figsize=(11.5, 5.3))
-    fig.subplots_adjust(left=0.075, right=0.985, bottom=0.31, top=0.75, wspace=0.3)
+    fig, axes = plt.subplots(1, 2, figsize=(11.5, 3.8))
+    fig.subplots_adjust(left=0.075, right=0.985, bottom=0.30, top=0.95, wspace=0.3)
     labels = ["UCCL Lite\nstaged CE", "UCCL Lite\nring CE"]
     for ax in axes:
         clean_axis(ax)
@@ -41,17 +41,6 @@ def main():
         color=AMBER,
         label="Remaining kernel time",
     )
-    for i, (b, s) in enumerate(zip(busy, span)):
-        axes[0].text(
-            i,
-            b / 2,
-            f"{b:.2f} ms",
-            ha="center",
-            va="center",
-            color="white",
-            fontweight="bold",
-        )
-        axes[0].text(i, s + 0.9, f"{s:.2f} ms", ha="center", fontweight="bold")
     axes[0].set_ylim(0, 51)
     axes[0].set_xticks([0, 1], labels)
     axes[0].set_ylabel("Mean per-rank GPU kernel time (ms)")
@@ -88,36 +77,7 @@ def main():
         bbox_to_anchor=(0.5, -0.27),
         frameon=False,
         fontsize=9,
-        ncol=1,
-    )
-    fig.suptitle(
-        "Large-message bottleneck: serialized topology phases",
-        y=0.98,
-        fontsize=16,
-        fontweight="bold",
-    )
-    fig.text(
-        0.5,
-        0.875,
-        "Eight RTX PRO 6000 · FP32 · 1 GiB · Nsight diagnostics of the 20 timed calls",
-        ha="center",
-        fontsize=11,
-    )
-    fig.text(
-        0.5,
-        0.82,
-        "128-CTA staged control vs 2-lane ring · 256-MiB tiles · one copy stream",
-        ha="center",
-        fontsize=9,
-        color=MUTED,
-    )
-    fig.text(
-        0.5,
-        0.035,
-        "Both move 1.75N per rank. Ring uses two directed SYS edges; staged CE uses eight concurrently.",
-        ha="center",
-        fontsize=10,
-        color=MUTED,
+        ncol=2,
     )
     save(fig, "collectives-pro6000x8-allreduce-ce-bottleneck", a.preview)
 

@@ -149,40 +149,11 @@ workload from Testbed 1's SGLang serving and DDP/FSDP training.
 <table>
   <tr><th>AllReduce</th><th>AllGather</th><th>ReduceScatter</th></tr>
   <tr>
-    <td width="33%"><img src="docs/assets/collectives-pro6000x8-allreduce-fp32-cpp-latency.svg" alt="Eight RTX PRO 6000 FP32 AllReduce latency from 1 KiB to 1 MiB, matched C++ batch timing: UCCL Lite, NCCL SM (tuned), NCCL (default)" width="100%"></td>
+    <td width="33%"><a href="benchmarks/data/pro6000_allreduce_ce_ring_cpp_20261116/README.md"><img src="docs/assets/collectives-pro6000x8-allreduce-fp32-ce-ring.svg" alt="Eight RTX PRO 6000 FP32 AllReduce: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite and NCCL CE (tuned)" width="100%"></a></td>
     <td width="33%"></td>
     <td width="33%"></td>
   </tr>
 </table>
-
-[Measurement protocol and raw data](benchmarks/data/pro6000_nccl_sm_cpp_latency_20261116/README.md):
-FP32 in-place SUM, 10 warmups and 20 continuous calls per timed C++ batch,
-slowest rank, medians of five independent runs. The NCCL SM reference uses
-per-size configurations frozen from separate calibration. This figure measures
-the original standalone UCCL Lite implementation over 1 KiB–1 MiB.
-
-![Eight-GPU FP32 AllReduce against tuned NCCL CE](docs/assets/collectives-pro6000x8-allreduce-fp32-ce-optimized.svg)
-
-[Historical staged-CE FP32/C++ comparison](benchmarks/data/pro6000_allreduce_ce_cpp_20261116/README.md)
-(experimental): five independent rounds with frozen per-size policies and
-complete output/guard/reuse checks. A later affinity audit found that the
-runtime expanded some initially requested CPU masks. UCCL Lite wins every paired
-run at 15/21 sizes, from 1 KiB through 16 MiB. **That epoch did not meet the all-size goal:**
-it lost at 32–512 MiB and 1 GiB. At 1 GiB, UCCL Lite reached 41.97 GB/s versus
-50.68 GB/s for tuned NCCL CE. The report retains an initial CE reuse failure,
-its completion-acknowledgement fix, and all failed or slower experiments.
-
-![Latest eight-GPU FP32 AllReduce against tuned NCCL CE](docs/assets/collectives-pro6000x8-allreduce-fp32-ce-ring.svg)
-
-[Profiled CE ring follow-up and complete evidence](benchmarks/data/pro6000_allreduce_ce_ring_cpp_20261116/README.md)
-(experimental): **all 21 sizes win in all five independent validation rounds**,
-with separated observed ranges at every size. The ring spreads cross-socket
-traffic through the operation; separate copy streams let its lanes progress
-independently. Both backends enforce and verify matching worker CPU masks.
-At 1 GiB, UCCL Lite reaches **51.94 GB/s versus 50.69 GB/s** for independently
-tuned NCCL CE; 1-KiB latency remains **9.10 µs**. All 166,800 per-rank
-full-output checks, guards and reuse checks pass. The report retains an earlier
-20/21 ring epoch, the affinity correction, raw GPU traces, and negative probes.
 
 ### Multi-node collectives
 
