@@ -1,0 +1,28 @@
+{
+  "policy_sha256": "bf65382c8ef3d4f5b0195c6cc1482bda190ab5bccde5c6f0da8990ef97c65470",
+  "calibration": {
+    "jobs": 264,
+    "full_checks": 292320,
+    "nccl_rank_logs": 1248
+  },
+  "validation": {
+    "jobs": 195,
+    "full_checks": 204000,
+    "nccl_rank_logs": 680
+  },
+  "logging": "initialization-only",
+  "operations": {
+    "allgather": {
+      "median_wins": 21,
+      "all_round_wins": 21,
+      "separated_range_wins": 21,
+      "losing_sizes": []
+    },
+    "reducescatter": {
+      "median_wins": 21,
+      "all_round_wins": 21,
+      "separated_range_wins": 21,
+      "losing_sizes": []
+    }
+  }
+}

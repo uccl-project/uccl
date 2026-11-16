@@ -1,0 +1,81 @@
+{
+  "schema": 1,
+  "measured_date": "2026-11-16",
+  "host": "wxz-pro6000",
+  "base_git_commit": "805df791fc1f2b664272fc9a89b169f258ea4396",
+  "implementation_state": "Measured worktree sources; exact snapshots and hashes are archived.",
+  "dtype": "FP32",
+  "ranks": 8,
+  "placement": "out-of-place",
+  "bytes": "full AllGather output / full ReduceScatter input per rank",
+  "bus_factor": 0.875,
+  "primary_validation": "final-epoch-v16/init-only-validation",
+  "dispatch_diagnostics": "final-epoch-v16/validation",
+  "calibration": "final-epoch-v16/calibration",
+  "policy_sha256": "bf65382c8ef3d4f5b0195c6cc1482bda190ab5bccde5c6f0da8990ef97c65470",
+  "identities": {
+    "src/collectives/pro6000_ag_rs.cu": "7f1b41a9b0ac23e9b8f4087758c2e32108df8ece0bb35bb3631c2d4ae27b6d2f",
+    "include/uccl_lite/pro6000_ag_rs.cuh": "7189440df0701fe7ae243ba1f70ed2c3ffcd981c5ed54f572ea9751e185755e7",
+    "include/uccl_lite/pro6000_allreduce.cuh": "607bb008e5e559b568907e537e3883519ce24f9881a922b3735efbf8c22cbadf",
+    "include/uccl_lite/allreduce_validation.cuh": "56e69cae5e47809137f31baf36f03484320067be4b38ebba8b32396d29072863",
+    "scripts/run_pro6000_ag_rs.py": "d09717b0836460ced257cd57c1c97d8dec431e433a2266658d855d0ce0152925",
+    "Makefile": "9f1ad6c1556bac583299b5fcf9dcd12e9b3624be98a69d9ef01ca623a6aeb8cd",
+    "build/uccl_lite_pro6000_ag_rs_nccl": "7c36159cf3de72816aee22a4ebeffea7ede1c712761250a7dfc7e22857c52ff1",
+    "build/uccl_lite_pro6000_ag_rs": "a3a871e5d9d5c17db6ffada0dec8a934e36bb06016d85f38bec0ee933d5bda35"
+  },
+  "libraries": {
+    "/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/deps/mscclpp/lib/libmscclpp.so.0": "8c33feaae3d692065bfb3cf5394764e959310766ef52bde88577122c1ef98209",
+    "/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/env/.venv/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2": "1c8618b866734cbdd5401715d6178be763ece283b7f808ecf86dedab211162c1",
+    "/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/deps/cuda133-packages/nvidia/cu13/lib/libcudart.so.13": "9f92e4c3f7e14d0fed69ef876a45d4255a2dc88cb552a673a90ce881c26282fe"
+  },
+  "full_per_rank_checks": {
+    "calibration": 292320,
+    "trace_validation": 204000,
+    "init_only_validation": 204000,
+    "pro6000_correctness": 293632,
+    "four_l4_correctness": 146816,
+    "total": 1140768
+  },
+  "nccl_rank_logs": 2608,
+  "correctness_suites": {
+    "pro6000": 56,
+    "four_l4": 56
+  },
+  "files": {
+    "README.md": "0588c68c64662a57f15f24d58ac542a28fd9fb3bcac0e85cda807771fc43d186",
+    "allgather.csv": "62639db86971414a507c70c60c3180f6665c10f6ca97c05f61c9ca27fa9a5268",
+    "logging-control.csv": "cbee0aaf397ca3ac51486b009e72f983ce8fcd59731b64831d24149661c696c9",
+    "measurements.tar.gz": "21e0cb2654481a76b59e6cc2812d95103f8999eef85000f690d532bb832c27d6",
+    "policy.json": "bf65382c8ef3d4f5b0195c6cc1482bda190ab5bccde5c6f0da8990ef97c65470",
+    "reducescatter.csv": "9e4b22716b74d4b2f63ae11e97e1294680f087de37fabdf0288cac692ab2de9c",
+    "results.md": "689b39ec0bd0e371bc8059aaf251e4ff6ade0ece4f44307440a3d94cce16d0d8",
+    "summary.json": "eb613cc2acc9ca48e94c7da0a0f70b688f7364ca8a9c3fe3643b9b2b69ba9fcd"
+  },
+  "figures": {
+    "docs/assets/collectives-pro6000x8-allgather-fp32.svg": "6096a005ce0183f8e824a1e36d2b292c5fc129bb199232d8f3ae2f72ba8bd3ad",
+    "docs/assets/collectives-pro6000x8-reducescatter-fp32.svg": "40697adf3b368cae46e10ee86e02f1c1d19e685cdd2c703a7e7f2f3cd4dfa1d2"
+  },
+  "analysis_tools": {
+    "scripts/prepare_pro6000_ag_rs.py": "07cc01863c39ecfe595b0b7c3e20d405652ab0527abc5b159f4cb6b774017582",
+    "scripts/run_pro6000_ag_rs_experiment.sh": "ff565828627da9890d6cbc8986395187d5fe66e3356c1465f49c05dabaf5a9f5",
+    "scripts/run_pro6000_ag_rs_init_only.py": "a6281f297ba27a1149a0773e3222755f15e1fa6e4dbda01d5de7c6f6f3fc2a47",
+    "scripts/summarize_pro6000_ag_rs.py": "a8554a411cac0afe8cc7ea7f23bac38e51b7f55d305bd9809e4e213da4d61fe2",
+    "scripts/plot_pro6000_ag_rs.py": "22fa63fde2cf66c0ced485cdad589cec1734889e6ae8295f57f4c4a454fb2ddc",
+    "tests/test_pro6000_ag_rs_evidence.py": "4778db898f3d740878f5c5a754a072bc72c9a3238b2555bc594dc1405166d96a"
+  },
+  "results": {
+    "allgather": {
+      "median_wins": 21,
+      "all_round_wins": 21,
+      "separated_range_wins": 21,
+      "losing_sizes": []
+    },
+    "reducescatter": {
+      "median_wins": 21,
+      "all_round_wins": 21,
+      "separated_range_wins": 21,
+      "losing_sizes": []
+    }
+  },
+  "scope": "Experimental, explicit configuration; no production dispatch, integration, CPU-router, BF16 or multi-node claim."
+}
