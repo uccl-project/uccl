@@ -42,25 +42,25 @@
     "four_l4": 56
   },
   "files": {
-    "README.md": "0588c68c64662a57f15f24d58ac542a28fd9fb3bcac0e85cda807771fc43d186",
+    "README.md": "42496718e02780b268c2cded5962cdaa32a6d3e0935bce6f02d3a55d5b98788f",
     "allgather.csv": "62639db86971414a507c70c60c3180f6665c10f6ca97c05f61c9ca27fa9a5268",
     "logging-control.csv": "cbee0aaf397ca3ac51486b009e72f983ce8fcd59731b64831d24149661c696c9",
-    "measurements.tar.gz": "21e0cb2654481a76b59e6cc2812d95103f8999eef85000f690d532bb832c27d6",
+    "measurements.tar.gz": "c1c4b15ff29ea0786fe1ea961af434d8524c75056873f6b537652240f8fdf55e",
     "policy.json": "bf65382c8ef3d4f5b0195c6cc1482bda190ab5bccde5c6f0da8990ef97c65470",
     "reducescatter.csv": "9e4b22716b74d4b2f63ae11e97e1294680f087de37fabdf0288cac692ab2de9c",
     "results.md": "689b39ec0bd0e371bc8059aaf251e4ff6ade0ece4f44307440a3d94cce16d0d8",
     "summary.json": "eb613cc2acc9ca48e94c7da0a0f70b688f7364ca8a9c3fe3643b9b2b69ba9fcd"
   },
   "figures": {
-    "docs/assets/collectives-pro6000x8-allgather-fp32.svg": "6096a005ce0183f8e824a1e36d2b292c5fc129bb199232d8f3ae2f72ba8bd3ad",
-    "docs/assets/collectives-pro6000x8-reducescatter-fp32.svg": "40697adf3b368cae46e10ee86e02f1c1d19e685cdd2c703a7e7f2f3cd4dfa1d2"
+    "docs/assets/collectives-pro6000x8-allgather-fp32.svg": "923ee2ffecdf0512c20db842b4358eedc603db253994b100ddb2f4112cb6d3ea",
+    "docs/assets/collectives-pro6000x8-reducescatter-fp32.svg": "9735d74fa63f2446b355882926f084d62c6d53802b6b151d5076d09a56632287"
   },
   "analysis_tools": {
     "scripts/prepare_pro6000_ag_rs.py": "07cc01863c39ecfe595b0b7c3e20d405652ab0527abc5b159f4cb6b774017582",
     "scripts/run_pro6000_ag_rs_experiment.sh": "ff565828627da9890d6cbc8986395187d5fe66e3356c1465f49c05dabaf5a9f5",
     "scripts/run_pro6000_ag_rs_init_only.py": "a6281f297ba27a1149a0773e3222755f15e1fa6e4dbda01d5de7c6f6f3fc2a47",
     "scripts/summarize_pro6000_ag_rs.py": "a8554a411cac0afe8cc7ea7f23bac38e51b7f55d305bd9809e4e213da4d61fe2",
-    "scripts/plot_pro6000_ag_rs.py": "22fa63fde2cf66c0ced485cdad589cec1734889e6ae8295f57f4c4a454fb2ddc",
+    "scripts/plot_pro6000_ag_rs.py": "1e256722416c09e72ad56fc697cb2894fdaf735bc9b8423883af7148d0d59fd4",
     "tests/test_pro6000_ag_rs_evidence.py": "4778db898f3d740878f5c5a754a072bc72c9a3238b2555bc594dc1405166d96a"
   },
   "results": {

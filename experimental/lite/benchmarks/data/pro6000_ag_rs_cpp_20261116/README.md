@@ -28,10 +28,9 @@ This remains an experimental, hardware-specific standalone implementation.
 ![FP32 AllGather](../../../docs/assets/collectives-pro6000x8-allgather-fp32.svg)
 ![FP32 ReduceScatter](../../../docs/assets/collectives-pro6000x8-reducescatter-fp32.svg)
 
-Points are medians; bands retain the full observed ranges. The panels use the
-same linear y axes and shared styling as the other collective figures. The
-initialization-only NCCL ReduceScatter data retain a 151.35-µs run at 1 KiB;
-its median is 12.34 µs. No samples are removed.
+Points are medians; blue bands show the UCCL Lite observed ranges. NCCL ranges
+are retained in the linked tables and samples. The initialization-only NCCL
+ReduceScatter data include a 151.35-µs run at 1 KiB; its median is 12.34 µs.
 
 ## Measurement
 

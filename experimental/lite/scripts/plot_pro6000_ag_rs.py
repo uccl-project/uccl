@@ -51,8 +51,9 @@ def main():
                         [n * 0.875 / (v * 1000) for n, v in zip(sizes, high)],
                         [n * 0.875 / (v * 1000) for n, v in zip(sizes, low)],
                     )
-                upper = max(upper, *high)
-                axes[panel].fill_between(sizes, low, high, color=color, alpha=0.12, linewidth=0)
+                upper = max(upper, *(high if key == "ours" else value))
+                if key == "ours":
+                    axes[panel].fill_between(sizes, low, high, color=color, alpha=0.12, linewidth=0)
                 axes[panel].plot(sizes, value, label=name, color=color, marker=marker,
                                  linestyle=style, linewidth=3.6 if key == "ours" else 2.2,
                                  markersize=6.5 if key == "ours" else 5,
