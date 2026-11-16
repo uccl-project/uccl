@@ -1,8 +1,9 @@
 <div align="center">
 
-<p align="center"> <img src="./docs/assets/uccl-lite-logo.png" alt="UCCL Lite logo with a navy lightning outline and gold accents" width="500"> </p>
-
-**Efficient Communication Library for PCIe GPU nodes.**
+<p align="center">
+  <img src="./docs/assets/uccl-lite-logo.png" alt="UCCL Lite logo with a navy lightning outline and gold accents" width="500"><br>
+  <strong>Efficient Communication Library for PCIe GPU nodes.</strong>
+</p>
 
 </div>
 
