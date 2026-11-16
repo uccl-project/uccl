@@ -17,7 +17,7 @@
   <tr><td>2</td><td>8 × NVIDIA L4</td><td>Without P2P</td><td>8xL4 SHM: GPU peer transport disabled by policy.</td></tr>
   <tr><td>3</td><td>4 × NVIDIA L4</td><td>With P2P</td><td>PCIe Gen4 dual-socket node; multi-node tests use two such nodes with two NIC rails per node.</td></tr>
   <tr><td>4</td><td>2 × NVIDIA RTX PRO 6000</td><td>With P2P</td><td>BF16 peer path.</td></tr>
-  <tr><td>5</td><td>8 × NVIDIA RTX PRO 6000 Blackwell</td><td>With P2P</td><td>MiniMax-M2.7 FP8 serving; four GPUs per NUMA node; separate external PCIeCCL experiment.</td></tr>
+  <tr><td>5</td><td>8 × NVIDIA RTX PRO 6000 Blackwell</td><td>With P2P</td><td>Four GPUs per NUMA node; BF16 AllReduce and MiniMax-M2.7 FP8 serving using external PCIeCCL EAT c03.</td></tr>
 </table>
 
 </div>
@@ -164,6 +164,22 @@ best-run selection. The transport follow-up reuses the prior PCIeCCL timings.
     <td width="33%"><img src="docs/assets/collectives-pro6000x2-reducescatter-overview.svg" alt="PRO6000 x2 ReduceScatter: UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (default P2P)" width="100%"></td>
   </tr>
 </table>
+
+#### Testbed 5
+
+<table>
+  <tr><th>AllReduce</th><th>AllGather</th><th>ReduceScatter</th></tr>
+  <tr>
+    <td width="33%"><img src="docs/assets/collectives-pro6000x8-allreduce-overview.svg" alt="Eight RTX PRO 6000 BF16 AllReduce: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, PCIeCCL EAT c03, NCCL CE (tuned), NCCL SM (tuned), NCCL (default)" width="100%"></td>
+    <td width="33%"></td>
+    <td width="33%"></td>
+  </tr>
+</table>
+
+[Measurement protocol and raw data](integration/vllm_pcie/data/pro6000_8gpu_allreduce_20261116/README.md):
+BF16, complete out-of-place AllReduce calls, two size orders and independently
+calibrated NCCL references. The blue curve measures the fixed external EAT c03
+implementation; its serving-quality limitations remain documented above.
 
 ### Multi-node collectives
 

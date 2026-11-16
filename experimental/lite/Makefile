@@ -143,6 +143,18 @@ PYTHON ?= python3
 vllm-pcie-figures:
 	$(PYTHON) integration/vllm_pcie/plot.py --preview
 
+.PHONY: vllm-pcie-collective-figures
+vllm-pcie-collective-figures:
+	$(PYTHON) integration/vllm_pcie/plot_collectives.py --preview
+
+# Host-only Python binding to the same out-of-place NCCL AllReduce API.
+PYBIND11_INC ?= $(shell $(PYTHON) -c 'import torch; print(torch.__path__[0] + "/include")')
+PYTHON_INC = $(shell $(PYTHON) -c 'import sysconfig; print(sysconfig.get_path("include"))')
+.PHONY: vllm-pcie-nccl-reference
+vllm-pcie-nccl-reference: $(BUILD)/_uccl_lite_nccl_reference.so
+$(BUILD)/_uccl_lite_nccl_reference.so: integration/vllm_pcie/nccl_reference.cpp | $(BUILD)
+	$(CXX) -O3 -std=c++17 -shared -fPIC -I$(PYBIND11_INC) -I$(PYTHON_INC) -I$(CUDA_HOME)/include -I$(NCCL_HOME)/include $< -o $@ -L$(NCCL_HOME)/lib -l:libnccl.so.2 -Wl,-rpath,$(NCCL_HOME)/lib
+
 .PHONY: peer-ring-check
 peer-ring-check: $(BUILD)/uccl_lite_peer_ring_check
 $(BUILD)/uccl_lite_peer_ring_check: tests/collectives/peer_ring_check.cu src/collectives/peer_ag_rs.cu | $(BUILD)

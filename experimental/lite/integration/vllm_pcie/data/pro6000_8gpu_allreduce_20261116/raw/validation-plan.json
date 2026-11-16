@@ -1,0 +1,38 @@
+{
+  "started_unix": 1794812194.4347186,
+  "selection_sha256": "ef5abe3d7d4af1c122f3ec89f87f8841915766367d1419aa4518bd90ad2c36e4",
+  "harness_sha256": "d12343b9f5a5556422514dcd23b265089fb575e804fde276ecee82c71d8aa932",
+  "orders": [
+    "forward",
+    "reverse"
+  ],
+  "configs": {
+    "default": {},
+    "sm-p2p": {
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1"
+    },
+    "sm-128": {
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_NTHREADS": "128",
+      "NCCL_BUFFSIZE": "1048576"
+    },
+    "ce-2": {
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_MIN_NCHANNELS": "2",
+      "NCCL_MAX_NCHANNELS": "2"
+    },
+    "ce-8": {
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8",
+      "NCCL_BUFFSIZE": "16777216"
+    },
+    "c03": {}
+  }
+}

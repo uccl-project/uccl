@@ -1,0 +1,38 @@
+{
+  "status": "complete",
+  "dtype": "bf16",
+  "sizes": 21,
+  "orders": 2,
+  "warmups": 10,
+  "repeats": 3,
+  "iterations": 5,
+  "configs": {
+    "default": {},
+    "sm-p2p": {
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1"
+    },
+    "sm-128": {
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_NTHREADS": "128",
+      "NCCL_BUFFSIZE": "1048576"
+    },
+    "ce-2": {
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_MIN_NCHANNELS": "2",
+      "NCCL_MAX_NCHANNELS": "2"
+    },
+    "ce-8": {
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8",
+      "NCCL_BUFFSIZE": "16777216"
+    },
+    "c03": {}
+  }
+}

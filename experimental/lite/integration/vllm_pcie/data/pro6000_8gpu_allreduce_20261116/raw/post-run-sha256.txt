@@ -1,0 +1,3 @@
+ce751fa67339d5163171721a350c09d8edc14876a2e89cb808349ba984f75175  /home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/source/vllm-0.26.0/csrc/pcieccl/pcieccl.cu
+89ebe0c1de86d93f6d92e709fcc2dbf753b46579e5fd588c8e35ae5bd1dc243b  /home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/env/.venv/lib/python3.12/site-packages/vllm/_pcieccl_C.cpython-312-x86_64-linux-gnu.so
+31270f9d2a1b884e3eb7da957290d666b34423d1402b50beaf0b174cf6653fd2  /home/wxzheng/uccl-lite-ar-c03-20261116/build/_uccl_lite_nccl_reference.so

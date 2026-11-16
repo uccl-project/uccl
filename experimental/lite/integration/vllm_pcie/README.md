@@ -6,6 +6,10 @@ met**. These measurements do not validate the current UCCL Lite runtime or
 establish a quality-preserving serving improvement. PCIeCCL is the recorded
 external implementation name; this archive does not install its vLLM hook.
 
+A separate [2026-11-16 BF16 AllReduce measurement](data/pro6000_8gpu_allreduce_20261116/README.md)
+benchmarks the exact frozen c03 extension over 1 KiB–1 GiB, with independently
+calibrated NCCL SM/CE references and the main README's collective figure style.
+
 <table>
   <tr><th>Throughput</th><th>Decode latency</th></tr>
   <tr>
