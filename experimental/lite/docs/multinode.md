@@ -16,25 +16,40 @@ The [NUMA host-router experiment](multinode-host-router.md) evaluates explicit
 D2H aggregation, shared host packets, ready-driven progress, and host RDMA over
 1 MiB–1 GiB complete output per GPU.
 
+## Fresh NCCL SM/CE references
+
+The [November 16 NCCL-only study](../benchmarks/data/nccl_tuned_2x4l4_20261116/README.md)
+adds independently validated **NCCL SM (tuned)** and **NCCL CE (tuned)** to
+AR/AG/RS. Four SM and three CE candidates per collective are searched; one fixed
+configuration per curve is frozen before three fresh
+validation sweeps. There is no per-size best-of envelope. Every call is fully
+checked on both four-L4 hosts. AG retains four MPI processes with two GPUs per
+process; AR/RS retain eight processes with one GPU each. CE transport is verified
+in initialization logs. UCCL Lite is not rerun: the figures preserve its recorded
+points and label the original orange controls **NCCL (prior)**. Historical
+measurement details below still refer to their respective records; the added
+NCCL curves are separate measurement windows, not fresh paired UCCL runs.
+
 ## Current AllReduce: full-range hybrid sweep
 
-![Current two-node FP32 AllReduce: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput](assets/collectives-2x4l4-allreduce-small-fixed.svg)
+![Current two-node FP32 AllReduce: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput](assets/collectives-2x4l4-allreduce-nccl-tuned.svg)
 
-Both panels use the [small-message fix measurements](../benchmarks/data/ar_small_fix_2x4l4_20261115/README.md).
+The UCCL Lite curve in both panels uses the [small-message fix measurements](../benchmarks/data/ar_small_fix_2x4l4_20261115/README.md).
 The explicit path uses single-CTA GPU AllReduce through 256 KiB and GPU
 ReduceScatter + host-packet AllGather above it, avoiding the host handoff for
 small messages. Eight L4 GPUs across two nodes, FP32, eight MPI ranks,
 slowest-rank host enqueue-to-completion timing; three rounds of twenty warmups
-and ten checked calls per size. NCCL reuses the previously recorded control.
+and ten checked calls per size. The prior NCCL curve reuses the previously
+recorded control.
 Host pieces remain fixed at 256 KiB, with the established GPU ReduceScatter
 size policy. The cutoff is fixed, not a measured best-variant-per-size envelope.
 Raw samples, ranges, hashes and reproduction commands remain in the record.
 
 ## Current AllGather: NUMA host router
 
-![Two-node FP32 AllGather: CPU-router latency and bus throughput versus paired NCCL](assets/collectives-2x4l4-allgather-host-router.svg)
+![Two-node FP32 AllGather: CPU-router latency and throughput with prior and tuned NCCL](assets/collectives-2x4l4-allgather-nccl-tuned.svg)
 
-The README AllGather figure uses the
+The UCCL Lite AllGather curve uses the
 [November 15 checked host-router sweep](../benchmarks/data/ag_host_router_2x4l4_20261115/README.md).
 It covers **1 MiB–1 GiB complete output per GPU** on eight FP32 L4 GPUs;
 the latency panel shows 1–8 MiB. Both UCCL Lite and NCCL 2.28.7 Ring+Simple
@@ -53,7 +68,7 @@ experiment; automatic dispatch is unchanged. Regenerate this SVG with
 
 ## Current ReduceScatter: direct medium-message ring
 
-![Current two-node FP32 ReduceScatter latency and bus throughput](assets/collectives-2x4l4-reducescatter-direct-medium.svg)
+![Current two-node FP32 ReduceScatter latency and bus throughput](assets/collectives-2x4l4-reducescatter-nccl-tuned.svg)
 
 The [full-range paired measurements](../benchmarks/data/rs_direct_medium_2x4l4_20261115/README.md)
 compare the candidate against the actual 96-CTA/512-thread/8-MiB-target tuned
@@ -61,8 +76,7 @@ control. Standalone `--rs-auto 1` skips input packing at 8–16 MiB and uses one
 direct-ring piece. Other sizes and hybrid AllReduce's RS selection are preserved.
 Both controls use eight L4 GPUs, eight MPI ranks, FP32 input bytes per GPU,
 slowest-rank host timing, and three alternating rounds of ten warmups plus ten
-checked calls. The figure's NCCL curve reuses the historical November 11 data;
-no new NCCL benchmark is run. The rule is fixed, not a measured variant envelope.
+checked calls. The figure's prior NCCL curve retains the historical November 11 data. The rule is fixed, not a measured variant envelope.
 The [exploratory screen](../benchmarks/data/rs_full_screen_2x4l4_20261115/README.md)
 preserves the rejected launch, larger-piece and fused-forwarding results.
 

@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <stdexcept>
 #include <string>
+#include <vector>
 #include <cuda_runtime.h>
 #include <mpi.h>
 #include <nccl.h>
@@ -45,6 +46,7 @@ struct Cfg {
   Op op = Op::AR;
   size_t begin = 1024, end = 1ull << 30;
   int warm = 5, iters = 10;
+  int gpusPerProcess = 1;
 };
 Cfg parse(int argc, char** argv) {
   Cfg c;
@@ -65,6 +67,8 @@ Cfg parse(int argc, char** argv) {
       c.begin = std::strtoull(value.c_str(), nullptr, 0);
     else if (key == "-e")
       c.end = std::strtoull(value.c_str(), nullptr, 0);
+    else if (key == "--gpus-per-process")
+      c.gpusPerProcess = std::stoi(value);
     else if (key == "-w")
       c.warm = std::atoi(value.c_str());
     else if (key == "-n")
@@ -75,6 +79,9 @@ Cfg parse(int argc, char** argv) {
   if (c.begin < 1024 || c.begin > c.end || c.begin % 512 || c.end % 512 ||
       c.warm < 5 || c.iters < 10)
     throw std::runtime_error("invalid protocol");
+  if (c.gpusPerProcess != 1 &&
+      (c.gpusPerProcess != 2 || c.op != Op::AG))
+    throw std::runtime_error("two GPUs per process requires AllGather");
   return c;
 }
 }  // namespace
@@ -85,22 +92,40 @@ int main(int argc, char** argv) {
     int rank = -1, world = 0;
     mp(MPI_Comm_rank(MPI_COMM_WORLD, &rank));
     mp(MPI_Comm_size(MPI_COMM_WORLD, &world));
-    if (world != kRanks) throw std::runtime_error("requires eight ranks");
+    if (world * cfg.gpusPerProcess != kRanks)
+      throw std::runtime_error("requires eight GPU ranks");
     MPI_Comm local;
     mp(MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, rank,
                            MPI_INFO_NULL, &local));
     int localRank = -1, localSize = 0;
     mp(MPI_Comm_rank(local, &localRank));
     mp(MPI_Comm_size(local, &localSize));
-    if (localSize != 4) throw std::runtime_error("requires four GPUs per node");
-    cc(cudaSetDevice(localRank));
-    cudaStream_t stream;
-    cc(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+    if (localSize * cfg.gpusPerProcess != 4)
+      throw std::runtime_error("requires four GPUs per node");
+    struct Device {
+      int physical, rank;
+      cudaStream_t stream;
+      ncclComm_t comm;
+      float *input, *output;
+      unsigned int* wrong;
+    };
+    std::vector<Device> devices(cfg.gpusPerProcess);
+    for (int gpu = 0; gpu < cfg.gpusPerProcess; ++gpu) {
+      auto& device = devices[gpu];
+      device.physical = localRank * cfg.gpusPerProcess + gpu;
+      device.rank = rank * cfg.gpusPerProcess + gpu;
+      cc(cudaSetDevice(device.physical));
+      cc(cudaStreamCreateWithFlags(&device.stream, cudaStreamNonBlocking));
+    }
     ncclUniqueId id;
     if (rank == 0) nc(ncclGetUniqueId(&id));
     mp(MPI_Bcast(&id, sizeof(id), MPI_BYTE, 0, MPI_COMM_WORLD));
-    ncclComm_t comm;
-    nc(ncclCommInitRank(&comm, kRanks, id, rank));
+    if (cfg.gpusPerProcess > 1) nc(ncclGroupStart());
+    for (auto& device : devices) {
+      cc(cudaSetDevice(device.physical));
+      nc(ncclCommInitRank(&device.comm, kRanks, id, device.rank));
+    }
+    if (cfg.gpusPerProcess > 1) nc(ncclGroupEnd());
     int version = 0;
     nc(ncclGetVersion(&version));
     if (rank == 0) {
@@ -115,51 +140,73 @@ int main(int argc, char** argv) {
       std::printf(
           "# warmups=%d iterations=%d; every invocation fully checked\n",
           cfg.warm, cfg.iters);
+      std::printf("# MPI ranks=%d GPUs/process=%d; bytes=complete tensor/GPU\n",
+                  world, cfg.gpusPerProcess);
       std::puts("backend,phase,iteration,bytes,time_us,wrong");
     }
     for (size_t bytes = cfg.begin; bytes <= cfg.end;) {
       size_t full = bytes / sizeof(float), shard = full / kRanks;
       size_t inputCount = cfg.op == Op::AG ? shard : full;
       size_t outputCount = cfg.op == Op::RS ? shard : full;
-      float *input = nullptr, *output = nullptr;
-      unsigned int* deviceWrong = nullptr;
-      cc(cudaMalloc(&input, inputCount * sizeof(float)));
-      if (cfg.op == Op::AR)
-        output = input;
-      else
-        cc(cudaMalloc(&output, outputCount * sizeof(float)));
-      cc(cudaMalloc(&deviceWrong, sizeof(unsigned int)));
+      for (auto& device : devices) {
+        cc(cudaSetDevice(device.physical));
+        cc(cudaMalloc(&device.input, inputCount * sizeof(float)));
+        if (cfg.op == Op::AR)
+          device.output = device.input;
+        else
+          cc(cudaMalloc(&device.output, outputCount * sizeof(float)));
+        cc(cudaMalloc(&device.wrong, sizeof(unsigned int)));
+      }
       double timedSum = 0;
       for (int i = 0; i < cfg.warm + cfg.iters; ++i) {
         int gen = 10 + i;
-        fill<<<256, 256, 0, stream>>>(input, inputCount, rank, gen);
-        cc(cudaGetLastError());
-        cc(cudaStreamSynchronize(stream));
+        for (auto& device : devices) {
+          cc(cudaSetDevice(device.physical));
+          fill<<<256, 256, 0, device.stream>>>(device.input, inputCount,
+                                              device.rank, gen);
+          cc(cudaGetLastError());
+          cc(cudaStreamSynchronize(device.stream));
+        }
         mp(MPI_Barrier(MPI_COMM_WORLD));
         auto start = std::chrono::steady_clock::now();
-        if (cfg.op == Op::AR)
-          nc(ncclAllReduce(input, output, full, ncclFloat, ncclSum, comm,
-                           stream));
-        else if (cfg.op == Op::AG)
-          nc(ncclAllGather(input, output, shard, ncclFloat, comm, stream));
-        else
-          nc(ncclReduceScatter(input, output, shard, ncclFloat, ncclSum, comm,
-                               stream));
-        cc(cudaStreamSynchronize(stream));
+        if (cfg.gpusPerProcess > 1) nc(ncclGroupStart());
+        for (auto& device : devices) {
+          if (cfg.gpusPerProcess > 1) cc(cudaSetDevice(device.physical));
+          if (cfg.op == Op::AR)
+            nc(ncclAllReduce(device.input, device.output, full, ncclFloat,
+                             ncclSum, device.comm, device.stream));
+          else if (cfg.op == Op::AG)
+            nc(ncclAllGather(device.input, device.output, shard, ncclFloat,
+                             device.comm, device.stream));
+          else
+            nc(ncclReduceScatter(device.input, device.output, shard, ncclFloat,
+                                 ncclSum, device.comm, device.stream));
+        }
+        if (cfg.gpusPerProcess > 1) nc(ncclGroupEnd());
+        for (auto& device : devices) {
+          if (cfg.gpusPerProcess > 1) cc(cudaSetDevice(device.physical));
+          cc(cudaStreamSynchronize(device.stream));
+        }
         auto end = std::chrono::steady_clock::now();
         double localUs =
             std::chrono::duration<double, std::micro>(end - start).count();
         double slowestUs = 0;
         mp(MPI_Allreduce(&localUs, &slowestUs, 1, MPI_DOUBLE, MPI_MAX,
                          MPI_COMM_WORLD));
-        cc(cudaMemsetAsync(deviceWrong, 0, sizeof(unsigned int), stream));
-        check<<<256, 256, 0, stream>>>(output, outputCount, shard, rank, gen,
-                                       cfg.op, deviceWrong);
-        cc(cudaGetLastError());
         unsigned int localWrong = 0, totalWrong = 0;
-        cc(cudaMemcpyAsync(&localWrong, deviceWrong, sizeof(unsigned int),
-                           cudaMemcpyDeviceToHost, stream));
-        cc(cudaStreamSynchronize(stream));
+        for (auto& device : devices) {
+          cc(cudaSetDevice(device.physical));
+          cc(cudaMemsetAsync(device.wrong, 0, sizeof(unsigned int), device.stream));
+          check<<<256, 256, 0, device.stream>>>(device.output, outputCount, shard,
+                                               device.rank, gen, cfg.op,
+                                               device.wrong);
+          cc(cudaGetLastError());
+          unsigned int wrong = 0;
+          cc(cudaMemcpyAsync(&wrong, device.wrong, sizeof(unsigned int),
+                             cudaMemcpyDeviceToHost, device.stream));
+          cc(cudaStreamSynchronize(device.stream));
+          localWrong += wrong;
+        }
         mp(MPI_Allreduce(&localWrong, &totalWrong, 1, MPI_UNSIGNED, MPI_SUM,
                          MPI_COMM_WORLD));
         bool timed = i >= cfg.warm;
@@ -179,14 +226,20 @@ int main(int argc, char** argv) {
                     bytes, timedSum / cfg.iters);
         std::fflush(stdout);
       }
-      cc(cudaFree(deviceWrong));
-      if (cfg.op != Op::AR) cc(cudaFree(output));
-      cc(cudaFree(input));
+      for (auto& device : devices) {
+        cc(cudaSetDevice(device.physical));
+        cc(cudaFree(device.wrong));
+        if (cfg.op != Op::AR) cc(cudaFree(device.output));
+        cc(cudaFree(device.input));
+      }
       if (bytes > cfg.end / 2) break;
       bytes *= 2;
     }
-    nc(ncclCommDestroy(comm));
-    cc(cudaStreamDestroy(stream));
+    for (auto& device : devices) {
+      cc(cudaSetDevice(device.physical));
+      nc(ncclCommDestroy(device.comm));
+      cc(cudaStreamDestroy(device.stream));
+    }
     mp(MPI_Comm_free(&local));
     mp(MPI_Finalize());
     return 0;

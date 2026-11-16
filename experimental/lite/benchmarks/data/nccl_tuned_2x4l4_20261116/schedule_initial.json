@@ -1,0 +1,50 @@
+[
+  {
+    "operation": "allreduce",
+    "family": "sm",
+    "config": "sm_ring_simple",
+    "geometric_mean_us": 757.7848187677984,
+    "environment": {
+      "NCCL_ALGO": "Ring",
+      "NCCL_PROTO": "Simple",
+      "NCCL_P2P_USE_CUDA_MEMCPY": "0",
+      "NCCL_SHM_USE_CUDA_MEMCPY": "0"
+    }
+  },
+  {
+    "operation": "allgather",
+    "family": "sm",
+    "config": "sm_default",
+    "geometric_mean_us": 2092.6241415248955,
+    "environment": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "0",
+      "NCCL_SHM_USE_CUDA_MEMCPY": "0"
+    }
+  },
+  {
+    "operation": "allgather",
+    "family": "ce",
+    "config": "ce_ring_simple",
+    "geometric_mean_us": 2721.983083932184,
+    "environment": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_SHM_USE_CUDA_MEMCPY": "0",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_ALGO": "Ring",
+      "NCCL_PROTO": "Simple"
+    }
+  },
+  {
+    "operation": "reducescatter",
+    "family": "sm",
+    "config": "sm_p2p_ring_simple",
+    "geometric_mean_us": 428.446292363908,
+    "environment": {
+      "NCCL_ALGO": "Ring",
+      "NCCL_PROTO": "Simple",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_P2P_USE_CUDA_MEMCPY": "0",
+      "NCCL_SHM_USE_CUDA_MEMCPY": "0"
+    }
+  }
+]
