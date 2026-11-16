@@ -1,0 +1,25 @@
+{
+  "measurement_date": "2026-11-16",
+  "host": "wxz-pro6000",
+  "remote_directory": "/home/wxzheng/uccl-lite-original-cpp-latency-20261116",
+  "original_source_archive": "/home/wxzheng/Documents/Codex/2026-11-12/explain-the-desing-of-uccl-lite/work/eat-pcieccl-vllm-pro6000-20261115-074910/task/PCIeCCL",
+  "files": {
+    "raw/build.log": "0a597bce92d9de82c639bc8a1100ac507714dbcd3fa38d9c9f31826f946b415a",
+    "raw/compiler.txt": "cf24ed3a2015c6eedbe47a5f86a4387361fc5441b5c242d56ace440d908d209d",
+    "raw/cpu-identity.txt": "cf8c4d4fa523e70b9f1461e4ca2add412e65a94fcf05b983a7519bcc331e308b",
+    "raw/gpu-identity.txt": "0ae4134f6bfc6b0c5d892b219f28f965405574c537c0ee1c79ee3f9b97361a6c",
+    "raw/linked-libraries.txt": "2869aa9297175d54db38ffd302b158c6bfbe29367d89b61e53e9f8ef5eaa6d04",
+    "raw/manifest.json": "7587b12f1d900f78292485e3e11a564ef7b2e09307bba5150236d011501b172d",
+    "raw/run-1.txt": "9ee6bbff28a4cabf8353f6bd47619ca7cb5922ef836d8cf4ff4f2960b5ee3ee9",
+    "raw/run-2.txt": "a4fdae18b0f38e414e685b37838bd7a47f877642c9555d3bd755c63726450c20",
+    "raw/run-3.txt": "9a10f00ac95c1ba77e4c3ba05e0e7d369009d74064d4b93947b489649b84a5c7",
+    "raw/run-4.txt": "21204d9454d2b7cfbf72edddcf9471f58203d0d1bb78a28a1e8bffeff1263793",
+    "raw/run-5.txt": "af3b952d5c00fc703192820a785f12deb56223d26ee454155dc206d980074610",
+    "raw/setup-loader-failure.txt": "95b3537541941a51e9ad6bfa02a719b9b38bb8f999fc8939fdb1d4121ce50fa2",
+    "raw/topology.txt": "ba5bbccd686a7381adfc3352aab7600076c081851d1be498c86ed2771e1ee83d",
+    "measured_source/build.sh": "bdf6c2c5cf299b714743aeaa0856b3555b11bd3f0f80aa5a198bac3a3289453e",
+    "measured_source/mscclpp_allreduce.cu": "80d7cb3d121121468744d872e7cc149ffcf83b7856a19b8059f3370bda0db3bb",
+    "measured_source/run_full.sh": "6db3eb347cc4826abefc4617d7a2982afc38e98fffe2c18e6648b7c73b3489f5",
+    "pro5000_historical.txt": "a2cf5cf9cd5f78b0c370b656170023d418aed8ee8ced8a96ad6261927bd66f87"
+  }
+}

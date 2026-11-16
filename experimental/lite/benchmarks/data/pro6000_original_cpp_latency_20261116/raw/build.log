@@ -1,0 +1,3 @@
+make: Entering directory '/home/wxzheng/uccl-lite-original-cpp-latency-20261116'
+/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/deps/cuda133-packages/nvidia/cu13/bin/nvcc -O3 -std=c++20 -arch=sm_120 -I/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/deps/mscclpp/include -o build/uccl_lite_pcieccl_original_latency benchmarks/data/pro6000_original_cpp_latency_20261116/measured_source/mscclpp_allreduce.cu -L/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/deps/mscclpp/lib -lmscclpp -lcudart -lpthread -Xlinker -rpath=/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/deps/mscclpp/lib
+make: Leaving directory '/home/wxzheng/uccl-lite-original-cpp-latency-20261116'

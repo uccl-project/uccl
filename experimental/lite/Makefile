@@ -147,6 +147,16 @@ vllm-pcie-figures:
 vllm-pcie-collective-figures:
 	$(PYTHON) integration/vllm_pcie/plot_collectives.py --preview
 
+# Byte-identical historical PRO5000 harness, with artifacts kept in build/.
+.PHONY: pcieccl-original-latency
+pcieccl-original-latency: $(BUILD)/uccl_lite_pcieccl_original_latency
+$(BUILD)/uccl_lite_pcieccl_original_latency: benchmarks/data/pro6000_original_cpp_latency_20261116/measured_source/mscclpp_allreduce.cu | $(BUILD)
+	$(NVCC) -O3 -std=c++20 -arch=$(CUDA_ARCH) -I$(MSCCLPP_HOME)/include -o $@ $< -L$(MSCCLPP_HOME)/lib -lmscclpp -lcudart -lpthread -Xlinker -rpath=$(MSCCLPP_HOME)/lib
+
+.PHONY: pcieccl-original-latency-summary
+pcieccl-original-latency-summary:
+	$(PYTHON) -B benchmarks/data/pro6000_original_cpp_latency_20261116/summarize.py
+
 # Host-only Python binding to the same out-of-place NCCL AllReduce API.
 PYBIND11_INC ?= $(shell $(PYTHON) -c 'import torch; print(torch.__path__[0] + "/include")')
 PYTHON_INC = $(shell $(PYTHON) -c 'import sysconfig; print(sysconfig.get_path("include"))')
