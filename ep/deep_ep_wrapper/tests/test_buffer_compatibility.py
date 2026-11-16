@@ -53,6 +53,7 @@ def _load_deep_ep_wrapper(monkeypatch, current_device):
     wrapper_utils.check_nvlink_connections = lambda *args, **kwargs: None
     wrapper_utils.initialize_uccl = lambda *args, **kwargs: None
     wrapper_utils.destroy_uccl = lambda *args, **kwargs: None
+    wrapper_utils.detect_group_topology = lambda *args, **kwargs: None
     wrapper_utils._fp8_e4m3_dtype = object()
 
     monkeypatch.setitem(sys.modules, "torch", torch)
