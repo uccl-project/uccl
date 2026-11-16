@@ -1,0 +1,91 @@
+mibura-sky-test-02:2497097:2497097 [1] NCCL INFO ENV/Plugin: Could not find: libnccl-env.so
+mibura-sky-test-02:2497097:2497097 [1] NCCL INFO NCCL_SOCKET_IFNAME set by environment to ibp55s0f0
+mibura-sky-test-02:2497097:2497097 [0] NCCL INFO NCCL version 2.28.7+cuda12.9
+mibura-sky-test-02:2497098:2497098 [3] NCCL INFO ENV/Plugin: Could not find: libnccl-env.so
+mibura-sky-test-02:2497098:2497098 [2] NCCL INFO NCCL_SOCKET_IFNAME set by environment to ibp55s0f0
+mibura-sky-test-02:2497098:2497098 [2] NCCL INFO NCCL version 2.28.7+cuda12.9
+mibura-sky-test-01:1912485:1912485 [1] NCCL INFO ENV/Plugin: Could not find: libnccl-env.so
+mibura-sky-test-01:1912486:1912486 [3] NCCL INFO ENV/Plugin: Could not find: libnccl-env.so
+mibura-sky-test-01:1912485:1912485 [0] NCCL INFO NCCL_SOCKET_IFNAME set by environment to ibp55s0f0
+mibura-sky-test-01:1912486:1912486 [2] NCCL INFO NCCL_SOCKET_IFNAME set by environment to ibp55s0f0
+mibura-sky-test-01:1912485:1912485 [0] NCCL INFO NCCL version 2.28.7+cuda12.9
+mibura-sky-test-01:1912486:1912486 [2] NCCL INFO NCCL version 2.28.7+cuda12.9
+mibura-sky-test-02:2497097:2497128 [1] NCCL INFO NCCL_SOCKET_IFNAME set by environment to ibp55s0f0
+mibura-sky-test-02:2497097:2497128 [1] NCCL INFO NCCL_IB_HCA set to mlx5_0,mlx5_1
+mibura-sky-test-02:2497098:2497129 [2] NCCL INFO NCCL_SOCKET_IFNAME set by environment to ibp55s0f0
+mibura-sky-test-02:2497098:2497129 [2] NCCL INFO NCCL_IB_HCA set to mlx5_0,mlx5_1
+mibura-sky-test-01:1912485:1912515 [1] NCCL INFO NCCL_SOCKET_IFNAME set by environment to ibp55s0f0
+mibura-sky-test-01:1912485:1912515 [1] NCCL INFO NCCL_IB_HCA set to mlx5_0,mlx5_1
+mibura-sky-test-01:1912486:1912512 [2] NCCL INFO NCCL_SOCKET_IFNAME set by environment to ibp55s0f0
+mibura-sky-test-01:1912486:1912512 [2] NCCL INFO NCCL_IB_HCA set to mlx5_0,mlx5_1
+mibura-sky-test-01:1912486:1912512 [2] NCCL INFO NCCL_P2P_USE_CUDA_MEMCPY set by environment to 0.
+mibura-sky-test-01:1912486:1912512 [2] NCCL INFO NCCL_SHM_USE_CUDA_MEMCPY set by environment to 0.
+mibura-sky-test-02:2497098:2497130 [3] NCCL INFO NCCL_P2P_USE_CUDA_MEMCPY set by environment to 0.
+mibura-sky-test-02:2497098:2497130 [3] NCCL INFO NCCL_SHM_USE_CUDA_MEMCPY set by environment to 0.
+mibura-sky-test-02:2497097:2497128 [1] NCCL INFO NCCL_P2P_USE_CUDA_MEMCPY set by environment to 0.
+mibura-sky-test-02:2497097:2497128 [1] NCCL INFO NCCL_SHM_USE_CUDA_MEMCPY set by environment to 0.
+mibura-sky-test-01:1912485:1912513 [0] NCCL INFO NCCL_P2P_USE_CUDA_MEMCPY set by environment to 0.
+mibura-sky-test-01:1912485:1912513 [0] NCCL INFO NCCL_SHM_USE_CUDA_MEMCPY set by environment to 0.
+mibura-sky-test-02:2497097:2497128 [1] NCCL INFO TUNER/Plugin: Could not find: libnccl-tuner.so
+mibura-sky-test-02:2497097:2497127 [0] NCCL INFO   Algorithm   |                            Tree                  |                            Ring                  |                   CollNetDirect                  |
+mibura-sky-test-02:2497097:2497127 [0] NCCL INFO   Protocol    |             LL |          LL128 |         Simple |             LL |          LL128 |         Simple |             LL |          LL128 |         Simple |
+mibura-sky-test-02:2497097:2497127 [0] NCCL INFO  Max NThreads |            512 |            640 |            512 |            512 |            640 |            512 |              0 |              0 |            640 |
+mibura-sky-test-02:2497097:2497127 [0] NCCL INFO     Broadcast |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |     9.3/  10.0 |    18.0/   0.0 |    22.4/  20.0 |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |
+mibura-sky-test-02:2497097:2497127 [0] NCCL INFO        Reduce |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |     9.3/  10.0 |    18.0/   0.0 |    22.4/  20.0 |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |
+mibura-sky-test-02:2497097:2497127 [0] NCCL INFO     AllGather |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |    15.3/  11.4 |    33.0/   0.0 |    56.6/  22.9 |     2.4/   0.0 |     2.4/   0.0 |    40.8/   0.0 |
+mibura-sky-test-02:2497097:2497127 [0] NCCL INFO ReduceScatter |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |    15.3/  11.4 |    33.0/   0.0 |    56.6/  22.9 |     2.4/   0.0 |     2.4/   0.0 |    40.8/   0.0 |
+mibura-sky-test-02:2497097:2497127 [0] NCCL INFO     AllReduce |    22.8/   1.8 |    42.4/   0.0 |    60.4/   6.9 |    24.0/   5.7 |    52.0/   0.0 |   104.8/  11.4 |     2.4/   0.0 |     2.4/   0.0 |    40.8/   0.0 |
+mibura-sky-test-02:2497097:2497127 [0] NCCL INFO   Algorithm   |                    CollNetChain                  |                            NVLS                  |                        NVLSTree                  |
+mibura-sky-test-02:2497097:2497127 [0] NCCL INFO   Protocol    |             LL |          LL128 |         Simple |             LL |          LL128 |         Simple |             LL |          LL128 |         Simple |
+mibura-sky-test-02:2497097:2497127 [0] NCCL INFO  Max NThreads |              0 |              0 |            640 |              0 |              0 |            640 |              0 |              0 |            640 |
+mibura-sky-test-02:2497097:2497127 [0] NCCL INFO     Broadcast |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |
+mibura-sky-test-02:2497097:2497127 [0] NCCL INFO        Reduce |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |
+mibura-sky-test-02:2497097:2497127 [0] NCCL INFO     AllGather |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |
+mibura-sky-test-02:2497097:2497127 [0] NCCL INFO ReduceScatter |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |
+mibura-sky-test-02:2497097:2497127 [0] NCCL INFO     AllReduce |     0.0/   0.0 |     0.0/   0.0 |    46.8/   0.0 |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |
+mibura-sky-test-02:2497097:2497127 [0] NCCL INFO   Algorithm   |                             PAT                  |
+mibura-sky-test-02:2497097:2497127 [0] NCCL INFO   Protocol    |             LL |          LL128 |         Simple |             LL |          LL128 |         Simple |             LL |          LL128 |         Simple |
+mibura-sky-test-02:2497097:2497127 [0] NCCL INFO  Max NThreads |              0 |              0 |              0 |
+mibura-sky-test-02:2497097:2497127 [0] NCCL INFO     Broadcast |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |
+mibura-sky-test-02:2497097:2497127 [0] NCCL INFO        Reduce |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |
+mibura-sky-test-02:2497097:2497127 [0] NCCL INFO     AllGather |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |
+mibura-sky-test-02:2497097:2497127 [0] NCCL INFO ReduceScatter |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |
+mibura-sky-test-02:2497097:2497127 [0] NCCL INFO     AllReduce |     0.0/   0.0 |     0.0/   0.0 |     0.0/   0.0 |
+mibura-sky-test-02:2497098:2497130 [3] NCCL INFO TUNER/Plugin: Could not find: libnccl-tuner.so
+mibura-sky-test-01:1912486:1912512 [2] NCCL INFO TUNER/Plugin: Could not find: libnccl-tuner.so
+mibura-sky-test-01:1912485:1912513 [0] NCCL INFO TUNER/Plugin: Could not find: libnccl-tuner.so
+# two nodes x four L4; NCCL 22807; float32; AllGather; out-of-place; host enqueue+completion
+# warmups=5 iterations=10; every invocation fully checked
+# MPI ranks=4 GPUs/process=2; bytes=complete tensor/GPU
+backend,phase,iteration,bytes,time_us,wrong
+mibura-sky-test-02:2497097:2497097 [0] NCCL INFO AllGather: 32768 Bytes -> Algo RING proto LL channel{Lo..Hi}={0..1}
+nccl,warmup,1,262144,71791.100,0
+mibura-sky-test-02:2497097:2497097 [0] NCCL INFO AllGather: 32768 Bytes -> Algo RING proto LL channel{Lo..Hi}={0..1}
+nccl,warmup,2,262144,153.582,0
+mibura-sky-test-02:2497097:2497097 [0] NCCL INFO AllGather: 32768 Bytes -> Algo RING proto LL channel{Lo..Hi}={0..1}
+nccl,warmup,3,262144,686.894,0
+mibura-sky-test-02:2497097:2497097 [0] NCCL INFO AllGather: 32768 Bytes -> Algo RING proto LL channel{Lo..Hi}={0..1}
+nccl,warmup,4,262144,111.533,0
+mibura-sky-test-02:2497097:2497097 [0] NCCL INFO AllGather: 32768 Bytes -> Algo RING proto LL channel{Lo..Hi}={0..1}
+nccl,warmup,5,262144,122.852,0
+mibura-sky-test-02:2497097:2497097 [0] NCCL INFO AllGather: 32768 Bytes -> Algo RING proto LL channel{Lo..Hi}={0..1}
+nccl,timed,1,262144,510.209,0
+mibura-sky-test-02:2497097:2497097 [0] NCCL INFO AllGather: 32768 Bytes -> Algo RING proto LL channel{Lo..Hi}={0..1}
+nccl,timed,2,262144,585.996,0
+mibura-sky-test-02:2497097:2497097 [0] NCCL INFO AllGather: 32768 Bytes -> Algo RING proto LL channel{Lo..Hi}={0..1}
+nccl,timed,3,262144,117.433,0
+mibura-sky-test-02:2497097:2497097 [0] NCCL INFO AllGather: 32768 Bytes -> Algo RING proto LL channel{Lo..Hi}={0..1}
+nccl,timed,4,262144,121.887,0
+mibura-sky-test-02:2497097:2497097 [0] NCCL INFO AllGather: 32768 Bytes -> Algo RING proto LL channel{Lo..Hi}={0..1}
+nccl,timed,5,262144,122.609,0
+mibura-sky-test-02:2497097:2497097 [0] NCCL INFO AllGather: 32768 Bytes -> Algo RING proto LL channel{Lo..Hi}={0..1}
+nccl,timed,6,262144,1048.486,0
+mibura-sky-test-02:2497097:2497097 [0] NCCL INFO AllGather: 32768 Bytes -> Algo RING proto LL channel{Lo..Hi}={0..1}
+nccl,timed,7,262144,119.179,0
+mibura-sky-test-02:2497097:2497097 [0] NCCL INFO AllGather: 32768 Bytes -> Algo RING proto LL channel{Lo..Hi}={0..1}
+nccl,timed,8,262144,114.497,0
+mibura-sky-test-02:2497097:2497097 [0] NCCL INFO AllGather: 32768 Bytes -> Algo RING proto LL channel{Lo..Hi}={0..1}
+nccl,timed,9,262144,350.006,0
+mibura-sky-test-02:2497097:2497097 [0] NCCL INFO AllGather: 32768 Bytes -> Algo RING proto LL channel{Lo..Hi}={0..1}
+nccl,timed,10,262144,325.663,0
+# mean,allgather,262144,341.596

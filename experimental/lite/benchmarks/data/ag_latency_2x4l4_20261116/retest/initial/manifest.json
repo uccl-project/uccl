@@ -1,0 +1,48 @@
+{
+  "date": "2026-11-16",
+  "working_tree_head": "833e4ac6c07e80deaae60d09dcc60225887a509e",
+  "source_state": "latest working-tree UCCL host AllGather/common helper, archived verbatim; latest published NCCL control harness",
+  "dtype": "FP32",
+  "hosts": [
+    "mibura-sky-test-02",
+    "mibura-sky-test-01"
+  ],
+  "gpus_per_host": 4,
+  "mpi_processes": 4,
+  "gpus_per_process": 2,
+  "complete_output_bytes": [
+    1024,
+    2048,
+    4096,
+    8192,
+    16384,
+    32768,
+    65536,
+    131072,
+    262144,
+    524288,
+    1048576
+  ],
+  "warmups": 20,
+  "timed_calls_per_size_per_job": 50,
+  "independent_jobs_per_series": 3,
+  "timed_calls_checked": 6600,
+  "aggregation": "median of three independent run means; no per-size best variant",
+  "timing": "slowest-process host submission through GPU completion; verification and MPI max reduction outside interval",
+  "configuration": "fixed shared-ready host router, 256 KiB chunks, SM download/DMA upload, self input bypass, early consumption, shared local exchange, MPI/UCX network",
+  "nccl": "2.28.7; default unforced; SM/CE presets frozen from earlier large-message tuning",
+  "throughput": "historical 1 MiB\u20131 GiB points retained byte-for-byte; not a current-source validation",
+  "binary_sha256": {
+    "build/ag_latency_2x4l4_20261116/uccl_lite_multinode_host_allgather": "014a0397b234e46e283ddf0f2b3cec9173a06a2ac48c95ac4a24bb6b7bbd59ca",
+    "build/ag_latency_2x4l4_20261116/uccl_lite_nccl_2x4l4_baseline": "daa91d9d661e3d19a73d5e919e703b23ddf7f44f3758308448f1b16d3a49af1f"
+  },
+  "source_sha256": {
+    "measured_source/nccl_2x4l4_baseline.cu": "85c5f7507b487950c4d0f4a0e4b958710c5ba325567151ae9ccb8129be00a0a9",
+    "measured_source/multinode_host_allgather.cu": "b9557e16a76042dc37daf5ac5e5b8bd43f84e44e2fad6782385148ab1aced433",
+    "measured_source/include/uccl_lite/multinode_host_common.cuh": "01a3cd8196e7e54e982730c94db1f18d737f95a932fb488178a539cad2952f34"
+  },
+  "ce_transport_verified": true,
+  "all_correctness_checks": "PASS",
+  "historical_throughput_sha256": "746a03914fe67ae2ba5d4300a367eb4c98707c8a030a9e31d886a6c279349634",
+  "figure_sha256": "5a618e8c679d8999598756c58ce31fe7d682c9419c35bf2bc1959683e6623a22"
+}

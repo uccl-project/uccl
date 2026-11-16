@@ -52,9 +52,10 @@ Raw samples, ranges, hashes and reproduction commands remain in the record.
 The **1 KiB–1 MiB latency panel** uses the [fresh checked sweep](../benchmarks/data/ag_latency_2x4l4_20261116/README.md)
 from current source: FP32, two four-L4 hosts, four MPI processes/two GPUs each,
 slowest-process host enqueue-to-completion timing. Three independent rounds use
-20 warmups and 50 measured calls per size, checking every output. The fixed
-shared-ready host router uses 256-KiB chunks; NCCL default and fixed SM/CE
-presets are freshly measured over the same sizes. Points are medians of round
+20 warmups/50 calls for UCCL and CE, and 100 warmups/200 calls for the
+[rechecked default/SM curves](../benchmarks/data/ag_latency_2x4l4_20261116/retest/README.md), checking every output. The host router keeps 256-KiB
+chunks. Default LL-path spikes remain measured; the latency SM tuned curve
+now uses fixed SIMPLE at all sizes. Points are medians of round
 means, not a best-variant-per-size selection.
 
 The **1 MiB–1 GiB throughput panel** retains the [November 15 host-router sweep](../benchmarks/data/ag_host_router_2x4l4_20261115/README.md)

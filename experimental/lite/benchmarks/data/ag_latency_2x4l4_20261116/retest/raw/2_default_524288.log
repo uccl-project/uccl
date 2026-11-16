@@ -1,0 +1,372 @@
+mibura-sky-test-02:2494468:2494468 [1] NCCL INFO ENV/Plugin: Could not find: libnccl-env.so
+mibura-sky-test-02:2494468:2494468 [1] NCCL INFO NCCL_SOCKET_IFNAME set by environment to ibp55s0f0
+mibura-sky-test-02:2494468:2494468 [1] NCCL INFO Bootstrap: Using ibp55s0f0:10.10.55.2<0>
+mibura-sky-test-02:2494468:2494468 [0] NCCL INFO cudaDriverVersion 13020
+mibura-sky-test-02:2494468:2494468 [0] NCCL INFO NCCL version 2.28.7+cuda12.9
+mibura-sky-test-02:2494469:2494469 [3] NCCL INFO ENV/Plugin: Could not find: libnccl-env.so
+mibura-sky-test-02:2494469:2494469 [2] NCCL INFO cudaDriverVersion 13020
+mibura-sky-test-02:2494469:2494469 [2] NCCL INFO NCCL_SOCKET_IFNAME set by environment to ibp55s0f0
+mibura-sky-test-02:2494469:2494469 [2] NCCL INFO Bootstrap: Using ibp55s0f0:10.10.55.2<0>
+mibura-sky-test-02:2494469:2494469 [2] NCCL INFO NCCL version 2.28.7+cuda12.9
+mibura-sky-test-01:1907555:1907555 [3] NCCL INFO ENV/Plugin: Could not find: libnccl-env.so
+mibura-sky-test-01:1907555:1907555 [2] NCCL INFO cudaDriverVersion 13000
+mibura-sky-test-01:1907555:1907555 [2] NCCL INFO NCCL_SOCKET_IFNAME set by environment to ibp55s0f0
+mibura-sky-test-01:1907554:1907554 [1] NCCL INFO ENV/Plugin: Could not find: libnccl-env.so
+mibura-sky-test-01:1907554:1907554 [0] NCCL INFO cudaDriverVersion 13000
+mibura-sky-test-01:1907555:1907555 [2] NCCL INFO Bootstrap: Using ibp55s0f0:10.10.55.1<0>
+mibura-sky-test-01:1907555:1907555 [2] NCCL INFO NCCL version 2.28.7+cuda12.9
+mibura-sky-test-01:1907554:1907554 [0] NCCL INFO NCCL_SOCKET_IFNAME set by environment to ibp55s0f0
+mibura-sky-test-01:1907554:1907554 [0] NCCL INFO Bootstrap: Using ibp55s0f0:10.10.55.1<0>
+mibura-sky-test-01:1907554:1907554 [0] NCCL INFO NCCL version 2.28.7+cuda12.9
+mibura-sky-test-02:2494468:2494498 [0] NCCL INFO NET/Plugin: Could not find: libnccl-net.so
+mibura-sky-test-02:2494468:2494498 [0] NCCL INFO NCCL_SOCKET_IFNAME set by environment to ibp55s0f0
+mibura-sky-test-02:2494468:2494498 [0] NCCL INFO NCCL_IB_HCA set to mlx5_0,mlx5_1
+mibura-sky-test-02:2494469:2494501 [3] NCCL INFO NET/Plugin: Could not find: libnccl-net.so
+mibura-sky-test-02:2494469:2494501 [3] NCCL INFO NCCL_SOCKET_IFNAME set by environment to ibp55s0f0
+mibura-sky-test-02:2494469:2494501 [3] NCCL INFO NCCL_IB_HCA set to mlx5_0,mlx5_1
+mibura-sky-test-02:2494468:2494498 [0] NCCL INFO NET/IB : Using [0]mlx5_0:1/IB [1]mlx5_1:1/IB [RO]; OOB ibp55s0f0:10.10.55.2<0>
+mibura-sky-test-02:2494468:2494498 [0] NCCL INFO Initialized NET plugin IB
+mibura-sky-test-02:2494468:2494498 [0] NCCL INFO Assigned NET plugin IB to comm
+mibura-sky-test-02:2494468:2494498 [0] NCCL INFO Assigned GIN plugin GIN_IB_GDAKI to comm
+mibura-sky-test-02:2494468:2494498 [0] NCCL INFO Using network IB
+mibura-sky-test-02:2494468:2494499 [1] NCCL INFO Initialized NET plugin IB
+mibura-sky-test-02:2494468:2494499 [1] NCCL INFO Assigned NET plugin IB to comm
+mibura-sky-test-02:2494468:2494499 [1] NCCL INFO Assigned GIN plugin GIN_IB_GDAKI to comm
+mibura-sky-test-02:2494468:2494499 [1] NCCL INFO Using network IB
+mibura-sky-test-02:2494469:2494501 [3] NCCL INFO NET/IB : Using [0]mlx5_0:1/IB [1]mlx5_1:1/IB [RO]; OOB ibp55s0f0:10.10.55.2<0>
+mibura-sky-test-02:2494469:2494501 [3] NCCL INFO Initialized NET plugin IB
+mibura-sky-test-02:2494469:2494501 [3] NCCL INFO Assigned NET plugin IB to comm
+mibura-sky-test-02:2494469:2494501 [3] NCCL INFO Assigned GIN plugin GIN_IB_GDAKI to comm
+mibura-sky-test-02:2494469:2494501 [3] NCCL INFO Using network IB
+mibura-sky-test-02:2494469:2494500 [2] NCCL INFO Initialized NET plugin IB
+mibura-sky-test-02:2494469:2494500 [2] NCCL INFO Assigned NET plugin IB to comm
+mibura-sky-test-02:2494469:2494500 [2] NCCL INFO Assigned GIN plugin GIN_IB_GDAKI to comm
+mibura-sky-test-02:2494469:2494500 [2] NCCL INFO Using network IB
+mibura-sky-test-01:1907555:1907580 [2] NCCL INFO NET/Plugin: Could not find: libnccl-net.so
+mibura-sky-test-01:1907555:1907580 [2] NCCL INFO NCCL_SOCKET_IFNAME set by environment to ibp55s0f0
+mibura-sky-test-01:1907555:1907580 [2] NCCL INFO NCCL_IB_HCA set to mlx5_0,mlx5_1
+mibura-sky-test-01:1907554:1907582 [0] NCCL INFO NET/Plugin: Could not find: libnccl-net.so
+mibura-sky-test-01:1907554:1907582 [0] NCCL INFO NCCL_SOCKET_IFNAME set by environment to ibp55s0f0
+mibura-sky-test-01:1907554:1907582 [0] NCCL INFO NCCL_IB_HCA set to mlx5_0,mlx5_1
+mibura-sky-test-01:1907555:1907580 [2] NCCL INFO NET/IB : Using [0]mlx5_0:1/IB [1]mlx5_1:1/IB [RO]; OOB ibp55s0f0:10.10.55.1<0>
+mibura-sky-test-01:1907555:1907580 [2] NCCL INFO Initialized NET plugin IB
+mibura-sky-test-01:1907555:1907580 [2] NCCL INFO Assigned NET plugin IB to comm
+mibura-sky-test-01:1907555:1907580 [2] NCCL INFO Assigned GIN plugin GIN_IB_GDAKI to comm
+mibura-sky-test-01:1907555:1907580 [2] NCCL INFO Using network IB
+mibura-sky-test-01:1907555:1907581 [3] NCCL INFO Initialized NET plugin IB
+mibura-sky-test-01:1907555:1907581 [3] NCCL INFO Assigned NET plugin IB to comm
+mibura-sky-test-01:1907555:1907581 [3] NCCL INFO Assigned GIN plugin GIN_IB_GDAKI to comm
+mibura-sky-test-01:1907555:1907581 [3] NCCL INFO Using network IB
+mibura-sky-test-02:2494468:2494498 [0] NCCL INFO DMA-BUF is available on GPU device 0
+mibura-sky-test-02:2494468:2494499 [1] NCCL INFO DMA-BUF is available on GPU device 1
+mibura-sky-test-02:2494468:2494499 [1] NCCL INFO ncclCommInitRank comm 0x5d270c5f93f0 rank 1 nranks 8 cudaDev 1 nvmlDev 1 busId 61000 commId 0x22ffa28faf96be29 - Init START
+mibura-sky-test-02:2494468:2494498 [0] NCCL INFO ncclCommInitRank comm 0x5d270c4e8140 rank 0 nranks 8 cudaDev 0 nvmlDev 0 busId 4a000 commId 0x22ffa28faf96be29 - Init START
+mibura-sky-test-01:1907554:1907582 [0] NCCL INFO NET/IB : Using [0]mlx5_0:1/IB [1]mlx5_1:1/IB [RO]; OOB ibp55s0f0:10.10.55.1<0>
+mibura-sky-test-01:1907554:1907582 [0] NCCL INFO Initialized NET plugin IB
+mibura-sky-test-01:1907554:1907582 [0] NCCL INFO Assigned NET plugin IB to comm
+mibura-sky-test-01:1907554:1907582 [0] NCCL INFO Assigned GIN plugin GIN_IB_GDAKI to comm
+mibura-sky-test-01:1907554:1907582 [0] NCCL INFO Using network IB
+mibura-sky-test-01:1907554:1907583 [1] NCCL INFO Initialized NET plugin IB
+mibura-sky-test-01:1907554:1907583 [1] NCCL INFO Assigned NET plugin IB to comm
+mibura-sky-test-01:1907554:1907583 [1] NCCL INFO Assigned GIN plugin GIN_IB_GDAKI to comm
+mibura-sky-test-01:1907554:1907583 [1] NCCL INFO Using network IB
+mibura-sky-test-02:2494469:2494501 [3] NCCL INFO DMA-BUF is available on GPU device 3
+mibura-sky-test-02:2494469:2494500 [2] NCCL INFO DMA-BUF is available on GPU device 2
+mibura-sky-test-02:2494469:2494500 [2] NCCL INFO ncclCommInitRank comm 0x62775a24f900 rank 2 nranks 8 cudaDev 2 nvmlDev 2 busId ca000 commId 0x22ffa28faf96be29 - Init START
+mibura-sky-test-02:2494469:2494501 [3] NCCL INFO ncclCommInitRank comm 0x62775a360bb0 rank 3 nranks 8 cudaDev 3 nvmlDev 3 busId e1000 commId 0x22ffa28faf96be29 - Init START
+mibura-sky-test-02:2494468:2494499 [1] NCCL INFO RAS client listening socket at 127.0.0.1<28028>
+mibura-sky-test-02:2494469:2494500 [2] NCCL INFO RAS client listening socket at 127.0.0.1<28028>
+mibura-sky-test-01:1907555:1907581 [3] NCCL INFO ncclCommInitRank comm 0x61fb7ebe3360 rank 7 nranks 8 cudaDev 3 nvmlDev 3 busId e1000 commId 0x22ffa28faf96be29 - Init START
+mibura-sky-test-01:1907555:1907580 [2] NCCL INFO ncclCommInitRank comm 0x61fb7ead2160 rank 6 nranks 8 cudaDev 2 nvmlDev 2 busId ca000 commId 0x22ffa28faf96be29 - Init START
+mibura-sky-test-01:1907555:1907581 [3] NCCL INFO RAS client listening socket at 127.0.0.1<28028>
+mibura-sky-test-01:1907554:1907582 [0] NCCL INFO ncclCommInitRank comm 0x5ac8d76caab0 rank 4 nranks 8 cudaDev 0 nvmlDev 0 busId 4a000 commId 0x22ffa28faf96be29 - Init START
+mibura-sky-test-01:1907554:1907583 [1] NCCL INFO ncclCommInitRank comm 0x5ac8d77dbcb0 rank 5 nranks 8 cudaDev 1 nvmlDev 1 busId 61000 commId 0x22ffa28faf96be29 - Init START
+mibura-sky-test-01:1907554:1907582 [0] NCCL INFO RAS client listening socket at 127.0.0.1<28028>
+mibura-sky-test-02:2494468:2494499 [1] NCCL INFO Bootstrap timings total 0.034662 (create 0.000045, send 0.000162, recv 0.003293, ring 0.030829, delay 0.000000)
+mibura-sky-test-02:2494468:2494498 [0] NCCL INFO Bootstrap timings total 0.034645 (create 0.000030, send 0.000155, recv 0.000309, ring 0.004622, delay 0.000000)
+mibura-sky-test-02:2494469:2494500 [2] NCCL INFO Bootstrap timings total 0.031545 (create 0.000039, send 0.000128, recv 0.000193, ring 0.030874, delay 0.000000)
+mibura-sky-test-02:2494469:2494501 [3] NCCL INFO Bootstrap timings total 0.031543 (create 0.000026, send 0.000128, recv 0.030372, ring 0.000756, delay 0.000001)
+mibura-sky-test-01:1907555:1907581 [3] NCCL INFO Bootstrap timings total 0.005663 (create 0.000050, send 0.000260, recv 0.000323, ring 0.004387, delay 0.000001)
+mibura-sky-test-01:1907555:1907580 [2] NCCL INFO Bootstrap timings total 0.005669 (create 0.000042, send 0.000270, recv 0.000510, ring 0.000470, delay 0.000000)
+mibura-sky-test-01:1907554:1907582 [0] NCCL INFO Bootstrap timings total 0.001483 (create 0.000028, send 0.000260, recv 0.000251, ring 0.000552, delay 0.000001)
+mibura-sky-test-01:1907554:1907583 [1] NCCL INFO Bootstrap timings total 0.001478 (create 0.000035, send 0.000260, recv 0.000494, ring 0.000480, delay 0.000000)
+mibura-sky-test-02:2494468:2494499 [1] NCCL INFO ncclTopoGetCpuAffinity: Affinity for GPU 1 is 0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46. (GPU affinity = 0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46 ; CPU affinity = 0-47).
+mibura-sky-test-02:2494468:2494498 [0] NCCL INFO ncclTopoGetCpuAffinity: Affinity for GPU 0 is 0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46. (GPU affinity = 0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46 ; CPU affinity = 0-47).
+mibura-sky-test-02:2494468:2494499 [1] NCCL INFO NVLS multicast support is not available on dev 1 (NVLS_NCHANNELS 0)
+mibura-sky-test-02:2494468:2494498 [0] NCCL INFO NVLS multicast support is not available on dev 0 (NVLS_NCHANNELS 0)
+mibura-sky-test-02:2494469:2494500 [2] NCCL INFO ncclTopoGetCpuAffinity: Affinity for GPU 2 is 1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31,33,35,37,39,41,43,45,47. (GPU affinity = 1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31,33,35,37,39,41,43,45,47 ; CPU affinity = 0-47).
+mibura-sky-test-02:2494469:2494501 [3] NCCL INFO ncclTopoGetCpuAffinity: Affinity for GPU 3 is 1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31,33,35,37,39,41,43,45,47. (GPU affinity = 1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31,33,35,37,39,41,43,45,47 ; CPU affinity = 0-47).
+mibura-sky-test-02:2494469:2494500 [2] NCCL INFO NVLS multicast support is not available on dev 2 (NVLS_NCHANNELS 0)
+mibura-sky-test-02:2494469:2494501 [3] NCCL INFO NVLS multicast support is not available on dev 3 (NVLS_NCHANNELS 0)
+mibura-sky-test-01:1907554:1907582 [0] NCCL INFO ncclTopoGetCpuAffinity: Affinity for GPU 0 is 0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46. (GPU affinity = 0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46 ; CPU affinity = 0-47).
+mibura-sky-test-01:1907554:1907582 [0] NCCL INFO NVLS multicast support is not available on dev 0 (NVLS_NCHANNELS 0)
+mibura-sky-test-01:1907555:1907581 [3] NCCL INFO ncclTopoGetCpuAffinity: Affinity for GPU 3 is 1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31,33,35,37,39,41,43,45,47. (GPU affinity = 1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31,33,35,37,39,41,43,45,47 ; CPU affinity = 0-47).
+mibura-sky-test-01:1907555:1907581 [3] NCCL INFO NVLS multicast support is not available on dev 3 (NVLS_NCHANNELS 0)
+mibura-sky-test-01:1907555:1907580 [2] NCCL INFO ncclTopoGetCpuAffinity: Affinity for GPU 2 is 1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31,33,35,37,39,41,43,45,47. (GPU affinity = 1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31,33,35,37,39,41,43,45,47 ; CPU affinity = 0-47).
+mibura-sky-test-01:1907555:1907580 [2] NCCL INFO NVLS multicast support is not available on dev 2 (NVLS_NCHANNELS 0)
+mibura-sky-test-01:1907554:1907583 [1] NCCL INFO ncclTopoGetCpuAffinity: Affinity for GPU 1 is 0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46. (GPU affinity = 0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46 ; CPU affinity = 0-47).
+mibura-sky-test-01:1907554:1907583 [1] NCCL INFO NVLS multicast support is not available on dev 1 (NVLS_NCHANNELS 0)
+mibura-sky-test-02:2494469:2494501 [3] NCCL INFO comm 0x62775a360bb0 rank 3 nRanks 8 nNodes 2 localRanks 4 localRank 3 MNNVL 0
+mibura-sky-test-02:2494469:2494501 [3] NCCL INFO Trees [0] 1/-1/-1->3->2 [1] 1/-1/-1->3->2
+mibura-sky-test-02:2494469:2494501 [3] NCCL INFO P2P Chunksize set to 131072
+mibura-sky-test-02:2494469:2494500 [2] NCCL INFO comm 0x62775a24f900 rank 2 nRanks 8 nNodes 2 localRanks 4 localRank 2 MNNVL 0
+mibura-sky-test-02:2494469:2494500 [2] NCCL INFO Trees [0] 3/-1/-1->2->0 [1] 3/-1/-1->2->0
+mibura-sky-test-02:2494469:2494500 [2] NCCL INFO P2P Chunksize set to 131072
+mibura-sky-test-02:2494468:2494499 [1] NCCL INFO comm 0x5d270c5f93f0 rank 1 nRanks 8 nNodes 2 localRanks 4 localRank 1 MNNVL 0
+mibura-sky-test-02:2494468:2494498 [0] NCCL INFO comm 0x5d270c4e8140 rank 0 nRanks 8 nNodes 2 localRanks 4 localRank 0 MNNVL 0
+mibura-sky-test-02:2494468:2494499 [1] NCCL INFO Trees [0] -1/-1/-1->1->3 [1] -1/-1/-1->1->3
+mibura-sky-test-02:2494468:2494499 [1] NCCL INFO P2P Chunksize set to 131072
+mibura-sky-test-02:2494468:2494498 [0] NCCL INFO Channel 00/02 : 0 1 2 3 4 5 6 7
+mibura-sky-test-02:2494468:2494498 [0] NCCL INFO Channel 01/02 : 0 1 2 3 4 5 6 7
+mibura-sky-test-02:2494468:2494498 [0] NCCL INFO Trees [0] 2/4/-1->0->-1 [1] 2/-1/-1->0->4
+mibura-sky-test-02:2494468:2494498 [0] NCCL INFO P2P Chunksize set to 131072
+mibura-sky-test-02:2494469:2494501 [3] NCCL INFO PROFILER/Plugin: Could not find: libnccl-profiler.so
+mibura-sky-test-02:2494469:2494501 [3] NCCL INFO Check P2P Type isAllDirectP2p 0 directMode 1 isAllCudaP2p 1
+mibura-sky-test-01:1907555:1907581 [3] NCCL INFO comm 0x61fb7ebe3360 rank 7 nRanks 8 nNodes 2 localRanks 4 localRank 3 MNNVL 0
+mibura-sky-test-01:1907555:1907580 [2] NCCL INFO comm 0x61fb7ead2160 rank 6 nRanks 8 nNodes 2 localRanks 4 localRank 2 MNNVL 0
+mibura-sky-test-02:2494468:2494499 [1] NCCL INFO PROFILER/Plugin: Could not find: libnccl-profiler.so
+mibura-sky-test-02:2494468:2494499 [1] NCCL INFO Check P2P Type isAllDirectP2p 0 directMode 1 isAllCudaP2p 1
+mibura-sky-test-01:1907554:1907582 [0] NCCL INFO comm 0x5ac8d76caab0 rank 4 nRanks 8 nNodes 2 localRanks 4 localRank 0 MNNVL 0
+mibura-sky-test-01:1907555:1907581 [3] NCCL INFO Trees [0] 5/-1/-1->7->6 [1] 5/-1/-1->7->6
+mibura-sky-test-01:1907555:1907581 [3] NCCL INFO P2P Chunksize set to 131072
+mibura-sky-test-02:2494469:2494500 [2] NCCL INFO PROFILER/Plugin: Could not find: libnccl-profiler.so
+mibura-sky-test-02:2494469:2494500 [2] NCCL INFO Check P2P Type isAllDirectP2p 0 directMode 1 isAllCudaP2p 1
+mibura-sky-test-02:2494468:2494508 [0] NCCL INFO [Proxy Service] Device 1 CPU core 42
+mibura-sky-test-02:2494468:2494498 [0] NCCL INFO PROFILER/Plugin: Could not find: libnccl-profiler.so
+mibura-sky-test-02:2494468:2494498 [0] NCCL INFO Check P2P Type isAllDirectP2p 0 directMode 1 isAllCudaP2p 1
+mibura-sky-test-01:1907554:1907583 [1] NCCL INFO comm 0x5ac8d77dbcb0 rank 5 nRanks 8 nNodes 2 localRanks 4 localRank 1 MNNVL 0
+mibura-sky-test-01:1907554:1907582 [0] NCCL INFO Trees [0] 6/-1/-1->4->0 [1] 6/0/-1->4->-1
+mibura-sky-test-01:1907554:1907582 [0] NCCL INFO P2P Chunksize set to 131072
+mibura-sky-test-01:1907554:1907583 [1] NCCL INFO Trees [0] -1/-1/-1->5->7 [1] -1/-1/-1->5->7
+mibura-sky-test-01:1907554:1907583 [1] NCCL INFO P2P Chunksize set to 131072
+mibura-sky-test-01:1907555:1907580 [2] NCCL INFO Trees [0] 7/-1/-1->6->4 [1] 7/-1/-1->6->4
+mibura-sky-test-01:1907555:1907580 [2] NCCL INFO P2P Chunksize set to 131072
+mibura-sky-test-01:1907555:1907581 [3] NCCL INFO PROFILER/Plugin: Could not find: libnccl-profiler.so
+mibura-sky-test-01:1907555:1907581 [3] NCCL INFO Check P2P Type isAllDirectP2p 0 directMode 1 isAllCudaP2p 1
+mibura-sky-test-01:1907554:1907582 [0] NCCL INFO PROFILER/Plugin: Could not find: libnccl-profiler.so
+mibura-sky-test-01:1907554:1907582 [0] NCCL INFO Check P2P Type isAllDirectP2p 0 directMode 1 isAllCudaP2p 1
+mibura-sky-test-01:1907555:1907580 [2] NCCL INFO PROFILER/Plugin: Could not find: libnccl-profiler.so
+mibura-sky-test-01:1907555:1907580 [2] NCCL INFO Check P2P Type isAllDirectP2p 0 directMode 1 isAllCudaP2p 1
+mibura-sky-test-02:2494469:2494509 [0] NCCL INFO [Proxy Service] Device 3 CPU core 25
+mibura-sky-test-02:2494468:2494511 [0] NCCL INFO [Proxy Service UDS] Device 1 CPU core 26
+mibura-sky-test-02:2494468:2494514 [0] NCCL INFO [Proxy Service] Device 0 CPU core 4
+mibura-sky-test-02:2494469:2494510 [0] NCCL INFO [Proxy Service] Device 2 CPU core 43
+mibura-sky-test-01:1907554:1907583 [1] NCCL INFO PROFILER/Plugin: Could not find: libnccl-profiler.so
+mibura-sky-test-01:1907554:1907583 [1] NCCL INFO Check P2P Type isAllDirectP2p 0 directMode 1 isAllCudaP2p 1
+mibura-sky-test-02:2494468:2494515 [0] NCCL INFO [Proxy Service UDS] Device 0 CPU core 8
+mibura-sky-test-01:1907555:1907590 [0] NCCL INFO [Proxy Service] Device 3 CPU core 27
+mibura-sky-test-02:2494469:2494512 [0] NCCL INFO [Proxy Service UDS] Device 3 CPU core 3
+mibura-sky-test-01:1907555:1907591 [0] NCCL INFO [Proxy Service] Device 2 CPU core 17
+mibura-sky-test-01:1907554:1907593 [0] NCCL INFO [Proxy Service] Device 0 CPU core 28
+mibura-sky-test-02:2494469:2494513 [0] NCCL INFO [Proxy Service UDS] Device 2 CPU core 5
+mibura-sky-test-01:1907555:1907592 [0] NCCL INFO [Proxy Service UDS] Device 3 CPU core 35
+mibura-sky-test-01:1907555:1907595 [0] NCCL INFO [Proxy Service UDS] Device 2 CPU core 39
+mibura-sky-test-01:1907554:1907594 [0] NCCL INFO [Proxy Service] Device 1 CPU core 8
+mibura-sky-test-01:1907554:1907596 [0] NCCL INFO [Proxy Service UDS] Device 0 CPU core 10
+mibura-sky-test-01:1907554:1907597 [0] NCCL INFO [Proxy Service UDS] Device 1 CPU core 12
+mibura-sky-test-02:2494468:2494498 [0] NCCL INFO TUNER/Plugin: Could not find: libnccl-tuner.so
+mibura-sky-test-02:2494468:2494499 [1] NCCL INFO threadThresholds 8/8/64 | 64/8/64 | 512 | 512
+mibura-sky-test-02:2494468:2494499 [1] NCCL INFO 2 coll channels, 2 collnet channels, 0 nvls channels, 2 p2p channels, 1 p2p channels per peer
+mibura-sky-test-02:2494469:2494500 [2] NCCL INFO TUNER/Plugin: Could not find: libnccl-tuner.so
+mibura-sky-test-02:2494469:2494500 [2] NCCL INFO threadThresholds 8/8/64 | 64/8/64 | 512 | 512
+mibura-sky-test-02:2494469:2494500 [2] NCCL INFO 2 coll channels, 2 collnet channels, 0 nvls channels, 2 p2p channels, 1 p2p channels per peer
+mibura-sky-test-02:2494469:2494501 [3] NCCL INFO threadThresholds 8/8/64 | 64/8/64 | 512 | 512
+mibura-sky-test-02:2494468:2494498 [0] NCCL INFO threadThresholds 8/8/64 | 64/8/64 | 512 | 512
+mibura-sky-test-02:2494468:2494498 [0] NCCL INFO 2 coll channels, 2 collnet channels, 0 nvls channels, 2 p2p channels, 1 p2p channels per peer
+mibura-sky-test-02:2494469:2494501 [3] NCCL INFO 2 coll channels, 2 collnet channels, 0 nvls channels, 2 p2p channels, 1 p2p channels per peer
+mibura-sky-test-01:1907555:1907581 [3] NCCL INFO TUNER/Plugin: Could not find: libnccl-tuner.so
+mibura-sky-test-01:1907555:1907581 [3] NCCL INFO threadThresholds 8/8/64 | 64/8/64 | 512 | 512
+mibura-sky-test-01:1907555:1907581 [3] NCCL INFO 2 coll channels, 2 collnet channels, 0 nvls channels, 2 p2p channels, 1 p2p channels per peer
+mibura-sky-test-01:1907555:1907580 [2] NCCL INFO threadThresholds 8/8/64 | 64/8/64 | 512 | 512
+mibura-sky-test-01:1907555:1907580 [2] NCCL INFO 2 coll channels, 2 collnet channels, 0 nvls channels, 2 p2p channels, 1 p2p channels per peer
+mibura-sky-test-01:1907554:1907582 [0] NCCL INFO TUNER/Plugin: Could not find: libnccl-tuner.so
+mibura-sky-test-01:1907554:1907582 [0] NCCL INFO threadThresholds 8/8/64 | 64/8/64 | 512 | 512
+mibura-sky-test-01:1907554:1907582 [0] NCCL INFO 2 coll channels, 2 collnet channels, 0 nvls channels, 2 p2p channels, 1 p2p channels per peer
+mibura-sky-test-01:1907554:1907583 [1] NCCL INFO threadThresholds 8/8/64 | 64/8/64 | 512 | 512
+mibura-sky-test-01:1907554:1907583 [1] NCCL INFO 2 coll channels, 2 collnet channels, 0 nvls channels, 2 p2p channels, 1 p2p channels per peer
+mibura-sky-test-02:2494468:2494498 [0] NCCL INFO CC Off, workFifoBytes 1048576
+mibura-sky-test-02:2494469:2494500 [2] NCCL INFO ncclCommInitRank comm 0x62775a24f900 rank 2 nranks 8 cudaDev 2 nvmlDev 2 busId ca000 commId 0x22ffa28faf96be29 - Init COMPLETE
+mibura-sky-test-02:2494469:2494500 [2] NCCL INFO Init timings - ncclCommInitRank: rank 2 nranks 8 total 0.28 (kernels 0.19, alloc 0.04, bootstrap 0.03, allgathers 0.01, topo 0.02, graphs 0.00, connections 0.00, rest 0.00)
+mibura-sky-test-02:2494468:2494498 [0] NCCL INFO ncclCommInitRank comm 0x5d270c4e8140 rank 0 nranks 8 cudaDev 0 nvmlDev 0 busId 4a000 commId 0x22ffa28faf96be29 - Init COMPLETE
+mibura-sky-test-02:2494468:2494498 [0] NCCL INFO Init timings - ncclCommInitRank: rank 0 nranks 8 total 0.29 (kernels 0.19, alloc 0.04, bootstrap 0.03, allgathers 0.01, topo 0.01, graphs 0.00, connections 0.00, rest 0.00)
+mibura-sky-test-02:2494468:2494499 [1] NCCL INFO ncclCommInitRank comm 0x5d270c5f93f0 rank 1 nranks 8 cudaDev 1 nvmlDev 1 busId 61000 commId 0x22ffa28faf96be29 - Init COMPLETE
+mibura-sky-test-02:2494468:2494499 [1] NCCL INFO Init timings - ncclCommInitRank: rank 1 nranks 8 total 0.29 (kernels 0.19, alloc 0.04, bootstrap 0.03, allgathers 0.01, topo 0.01, graphs 0.00, connections 0.00, rest 0.00)
+mibura-sky-test-02:2494469:2494501 [3] NCCL INFO ncclCommInitRank comm 0x62775a360bb0 rank 3 nranks 8 cudaDev 3 nvmlDev 3 busId e1000 commId 0x22ffa28faf96be29 - Init COMPLETE
+mibura-sky-test-02:2494469:2494501 [3] NCCL INFO Init timings - ncclCommInitRank: rank 3 nranks 8 total 0.28 (kernels 0.19, alloc 0.04, bootstrap 0.03, allgathers 0.01, topo 0.02, graphs 0.00, connections 0.00, rest 0.00)
+# two nodes x four L4; NCCL 22807; float32; AllGather; out-of-place; host enqueue+completion
+# warmups=20 iterations=100; every invocation fully checked
+# MPI ranks=4 GPUs/process=2; bytes=complete tensor/GPU
+backend,phase,iteration,bytes,time_us,wrong
+mibura-sky-test-01:1907554:1907582 [0] NCCL INFO ncclCommInitRank comm 0x5ac8d76caab0 rank 4 nranks 8 cudaDev 0 nvmlDev 0 busId 4a000 commId 0x22ffa28faf96be29 - Init COMPLETE
+mibura-sky-test-01:1907554:1907582 [0] NCCL INFO Init timings - ncclCommInitRank: rank 4 nranks 8 total 0.27 (kernels 0.19, alloc 0.05, bootstrap 0.00, allgathers 0.00, topo 0.02, graphs 0.00, connections 0.00, rest 0.00)
+mibura-sky-test-01:1907555:1907580 [2] NCCL INFO ncclCommInitRank comm 0x61fb7ead2160 rank 6 nranks 8 cudaDev 2 nvmlDev 2 busId ca000 commId 0x22ffa28faf96be29 - Init COMPLETE
+mibura-sky-test-01:1907555:1907580 [2] NCCL INFO Init timings - ncclCommInitRank: rank 6 nranks 8 total 0.27 (kernels 0.18, alloc 0.05, bootstrap 0.01, allgathers 0.00, topo 0.02, graphs 0.00, connections 0.00, rest 0.00)
+mibura-sky-test-01:1907555:1907581 [3] NCCL INFO ncclCommInitRank comm 0x61fb7ebe3360 rank 7 nranks 8 cudaDev 3 nvmlDev 3 busId e1000 commId 0x22ffa28faf96be29 - Init COMPLETE
+mibura-sky-test-01:1907555:1907581 [3] NCCL INFO Init timings - ncclCommInitRank: rank 7 nranks 8 total 0.27 (kernels 0.18, alloc 0.05, bootstrap 0.01, allgathers 0.00, topo 0.02, graphs 0.00, connections 0.00, rest 0.00)
+mibura-sky-test-01:1907554:1907583 [1] NCCL INFO ncclCommInitRank comm 0x5ac8d77dbcb0 rank 5 nranks 8 cudaDev 1 nvmlDev 1 busId 61000 commId 0x22ffa28faf96be29 - Init COMPLETE
+mibura-sky-test-01:1907554:1907583 [1] NCCL INFO Init timings - ncclCommInitRank: rank 5 nranks 8 total 0.27 (kernels 0.19, alloc 0.05, bootstrap 0.00, allgathers 0.00, topo 0.02, graphs 0.00, connections 0.00, rest 0.00)
+mibura-sky-test-02:2494469:2494518 [2] NCCL INFO Channel 00 : 2[2] -> 3[3] via SHM/direct/direct
+mibura-sky-test-02:2494469:2494518 [2] NCCL INFO Channel 01 : 2[2] -> 3[3] via SHM/direct/direct
+mibura-sky-test-01:1907555:1907601 [2] NCCL INFO Channel 00 : 6[2] -> 7[3] via SHM/direct/direct
+mibura-sky-test-01:1907555:1907601 [2] NCCL INFO Channel 01 : 6[2] -> 7[3] via SHM/direct/direct
+mibura-sky-test-02:2494468:2494517 [1] NCCL INFO Channel 00 : 1[1] -> 2[2] via SHM/direct/direct
+mibura-sky-test-02:2494468:2494517 [1] NCCL INFO Channel 01 : 1[1] -> 2[2] via SHM/direct/direct
+mibura-sky-test-01:1907554:1907598 [1] NCCL INFO Channel 00 : 5[1] -> 6[2] via SHM/direct/direct
+mibura-sky-test-01:1907554:1907598 [1] NCCL INFO Channel 01 : 5[1] -> 6[2] via SHM/direct/direct
+mibura-sky-test-02:2494468:2494520 [0] NCCL INFO [Proxy Progress] Device 0 CPU core 40
+mibura-sky-test-02:2494468:2494519 [0] NCCL INFO Channel 00/0 : 7[3] -> 0[0] [receive] via NET/IB/0
+mibura-sky-test-02:2494468:2494519 [0] NCCL INFO Channel 01/0 : 7[3] -> 0[0] [receive] via NET/IB/0
+mibura-sky-test-02:2494468:2494519 [0] NCCL INFO Channel 00 : 0[0] -> 1[1] via SHM/direct/direct
+mibura-sky-test-02:2494468:2494519 [0] NCCL INFO Channel 01 : 0[0] -> 1[1] via SHM/direct/direct
+mibura-sky-test-01:1907554:1907602 [0] NCCL INFO [Proxy Progress] Device 0 CPU core 30
+mibura-sky-test-01:1907554:1907599 [0] NCCL INFO Channel 00/0 : 3[3] -> 4[0] [receive] via NET/IB/0
+mibura-sky-test-01:1907554:1907599 [0] NCCL INFO Channel 01/0 : 3[3] -> 4[0] [receive] via NET/IB/0
+mibura-sky-test-01:1907554:1907599 [0] NCCL INFO Channel 00 : 4[0] -> 5[1] via SHM/direct/direct
+mibura-sky-test-01:1907554:1907599 [0] NCCL INFO Channel 01 : 4[0] -> 5[1] via SHM/direct/direct
+mibura-sky-test-02:2494469:2494521 [0] NCCL INFO [Proxy Progress] Device 3 CPU core 7
+mibura-sky-test-02:2494469:2494516 [3] NCCL INFO Channel 00/0 : 3[3] -> 4[0] [send] via NET/IB/0
+mibura-sky-test-02:2494469:2494516 [3] NCCL INFO Channel 01/0 : 3[3] -> 4[0] [send] via NET/IB/0
+mibura-sky-test-01:1907555:1907603 [0] NCCL INFO [Proxy Progress] Device 3 CPU core 5
+mibura-sky-test-01:1907555:1907600 [3] NCCL INFO Channel 00/0 : 7[3] -> 0[0] [send] via NET/IB/0
+mibura-sky-test-01:1907555:1907600 [3] NCCL INFO Channel 01/0 : 7[3] -> 0[0] [send] via NET/IB/0
+mibura-sky-test-02:2494469:2494516 [3] NCCL INFO Connected all rings, use ring PXN 0 GDR 0
+mibura-sky-test-02:2494469:2494518 [2] NCCL INFO Connected all rings, use ring PXN 0 GDR 0
+mibura-sky-test-02:2494468:2494517 [1] NCCL INFO Connected all rings, use ring PXN 0 GDR 0
+mibura-sky-test-02:2494468:2494519 [0] NCCL INFO Connected all rings, use ring PXN 0 GDR 0
+mibura-sky-test-01:1907554:1907599 [0] NCCL INFO Connected all rings, use ring PXN 0 GDR 0
+mibura-sky-test-01:1907554:1907598 [1] NCCL INFO Connected all rings, use ring PXN 0 GDR 0
+mibura-sky-test-01:1907555:1907600 [3] NCCL INFO Connected all rings, use ring PXN 0 GDR 0
+mibura-sky-test-01:1907555:1907601 [2] NCCL INFO Connected all rings, use ring PXN 0 GDR 0
+nccl,warmup,1,524288,74230.621,0
+nccl,warmup,2,524288,219.347,0
+nccl,warmup,3,524288,149.711,0
+nccl,warmup,4,524288,143.646,0
+nccl,warmup,5,524288,139.818,0
+nccl,warmup,6,524288,142.648,0
+nccl,warmup,7,524288,153.437,0
+nccl,warmup,8,524288,147.190,0
+nccl,warmup,9,524288,150.856,0
+nccl,warmup,10,524288,143.552,0
+nccl,warmup,11,524288,148.100,0
+nccl,warmup,12,524288,141.161,0
+nccl,warmup,13,524288,140.761,0
+nccl,warmup,14,524288,140.572,0
+nccl,warmup,15,524288,154.173,0
+nccl,warmup,16,524288,139.912,0
+nccl,warmup,17,524288,139.452,0
+nccl,warmup,18,524288,149.043,0
+nccl,warmup,19,524288,142.096,0
+nccl,warmup,20,524288,139.938,0
+nccl,timed,1,524288,143.014,0
+nccl,timed,2,524288,145.991,0
+nccl,timed,3,524288,145.423,0
+nccl,timed,4,524288,144.477,0
+nccl,timed,5,524288,148.990,0
+nccl,timed,6,524288,945.607,0
+nccl,timed,7,524288,367.488,0
+nccl,timed,8,524288,1117.144,0
+nccl,timed,9,524288,1241.386,0
+nccl,timed,10,524288,773.251,0
+nccl,timed,11,524288,1436.017,0
+nccl,timed,12,524288,1429.972,0
+nccl,timed,13,524288,1929.635,0
+nccl,timed,14,524288,1843.954,0
+nccl,timed,15,524288,1852.006,0
+nccl,timed,16,524288,1753.096,0
+nccl,timed,17,524288,1094.824,0
+nccl,timed,18,524288,1741.502,0
+nccl,timed,19,524288,1820.178,0
+nccl,timed,20,524288,1885.538,0
+nccl,timed,21,524288,1425.237,0
+nccl,timed,22,524288,1807.720,0
+nccl,timed,23,524288,1967.130,0
+nccl,timed,24,524288,1640.926,0
+nccl,timed,25,524288,1793.094,0
+nccl,timed,26,524288,1625.101,0
+nccl,timed,27,524288,1764.889,0
+nccl,timed,28,524288,1749.795,0
+nccl,timed,29,524288,1993.224,0
+nccl,timed,30,524288,1455.498,0
+nccl,timed,31,524288,1753.455,0
+nccl,timed,32,524288,1824.954,0
+nccl,timed,33,524288,1551.913,0
+nccl,timed,34,524288,1837.885,0
+nccl,timed,35,524288,1842.554,0
+nccl,timed,36,524288,596.988,0
+nccl,timed,37,524288,1861.226,0
+nccl,timed,38,524288,1900.471,0
+nccl,timed,39,524288,1989.586,0
+nccl,timed,40,524288,1744.117,0
+nccl,timed,41,524288,1863.291,0
+nccl,timed,42,524288,1793.055,0
+nccl,timed,43,524288,1849.361,0
+nccl,timed,44,524288,1813.468,0
+nccl,timed,45,524288,1308.780,0
+nccl,timed,46,524288,1872.807,0
+nccl,timed,47,524288,1967.420,0
+nccl,timed,48,524288,1757.827,0
+nccl,timed,49,524288,1986.863,0
+nccl,timed,50,524288,1776.170,0
+nccl,timed,51,524288,1781.407,0
+nccl,timed,52,524288,1809.111,0
+nccl,timed,53,524288,1385.196,0
+nccl,timed,54,524288,1759.934,0
+nccl,timed,55,524288,1463.208,0
+nccl,timed,56,524288,1234.173,0
+nccl,timed,57,524288,1722.368,0
+nccl,timed,58,524288,1817.928,0
+nccl,timed,59,524288,1850.543,0
+nccl,timed,60,524288,1374.342,0
+nccl,timed,61,524288,2004.068,0
+nccl,timed,62,524288,1460.126,0
+nccl,timed,63,524288,1958.023,0
+nccl,timed,64,524288,1757.100,0
+nccl,timed,65,524288,1720.640,0
+nccl,timed,66,524288,1722.881,0
+nccl,timed,67,524288,1802.207,0
+nccl,timed,68,524288,1868.020,0
+nccl,timed,69,524288,1863.290,0
+nccl,timed,70,524288,1793.810,0
+nccl,timed,71,524288,1747.365,0
+nccl,timed,72,524288,1915.245,0
+nccl,timed,73,524288,1838.009,0
+nccl,timed,74,524288,1813.713,0
+nccl,timed,75,524288,1877.542,0
+nccl,timed,76,524288,1756.537,0
+nccl,timed,77,524288,1953.825,0
+nccl,timed,78,524288,1865.066,0
+nccl,timed,79,524288,1798.755,0
+nccl,timed,80,524288,1843.311,0
+nccl,timed,81,524288,1874.735,0
+nccl,timed,82,524288,1834.791,0
+nccl,timed,83,524288,1765.938,0
+nccl,timed,84,524288,1740.713,0
+nccl,timed,85,524288,1938.216,0
+nccl,timed,86,524288,1789.627,0
+nccl,timed,87,524288,1760.522,0
+nccl,timed,88,524288,1783.847,0
+nccl,timed,89,524288,1921.464,0
+nccl,timed,90,524288,1234.627,0
+nccl,timed,91,524288,1894.502,0
+nccl,timed,92,524288,1856.513,0
+nccl,timed,93,524288,1759.864,0
+nccl,timed,94,524288,1947.147,0
+nccl,timed,95,524288,1883.684,0
+nccl,timed,96,524288,1910.845,0
+nccl,timed,97,524288,1913.160,0
+nccl,timed,98,524288,1807.655,0
+nccl,timed,99,524288,1680.244,0
+nccl,timed,100,524288,1381.006,0
+# mean,allgather,524288,1623.111
+mibura-sky-test-02:2494468:2494468 [0] NCCL INFO comm 0x5d270c4e8140 rank 0 nranks 8 cudaDev 0 busId 4a000 - Destroy COMPLETE
+mibura-sky-test-01:1907554:1907554 [0] NCCL INFO comm 0x5ac8d76caab0 rank 4 nranks 8 cudaDev 0 busId 4a000 - Destroy COMPLETE
+mibura-sky-test-02:2494469:2494469 [2] NCCL INFO comm 0x62775a24f900 rank 2 nranks 8 cudaDev 2 busId ca000 - Destroy COMPLETE
+mibura-sky-test-01:1907555:1907555 [2] NCCL INFO comm 0x61fb7ead2160 rank 6 nranks 8 cudaDev 2 busId ca000 - Destroy COMPLETE
+mibura-sky-test-02:2494469:2494469 [3] NCCL INFO comm 0x62775a360bb0 rank 3 nranks 8 cudaDev 3 busId e1000 - Destroy COMPLETE
+mibura-sky-test-01:1907555:1907555 [3] NCCL INFO comm 0x61fb7ebe3360 rank 7 nranks 8 cudaDev 3 busId e1000 - Destroy COMPLETE
+mibura-sky-test-02:2494468:2494468 [1] NCCL INFO comm 0x5d270c5f93f0 rank 1 nranks 8 cudaDev 1 busId 61000 - Destroy COMPLETE
+mibura-sky-test-01:1907554:1907554 [1] NCCL INFO comm 0x5ac8d77dbcb0 rank 5 nranks 8 cudaDev 1 busId 61000 - Destroy COMPLETE
+mibura-sky-test-01:1907555:1907555 [3] NCCL INFO ENV/Plugin: Closing env plugin ncclEnvDefault
+mibura-sky-test-01:1907554:1907554 [1] NCCL INFO ENV/Plugin: Closing env plugin ncclEnvDefault
+mibura-sky-test-02:2494469:2494469 [3] NCCL INFO ENV/Plugin: Closing env plugin ncclEnvDefault
+mibura-sky-test-02:2494468:2494468 [1] NCCL INFO ENV/Plugin: Closing env plugin ncclEnvDefault

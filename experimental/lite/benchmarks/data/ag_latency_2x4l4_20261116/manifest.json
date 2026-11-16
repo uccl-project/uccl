@@ -23,14 +23,13 @@
     524288,
     1048576
   ],
-  "warmups": 20,
-  "timed_calls_per_size_per_job": 50,
+  "warmups": "see per_series_protocol",
+  "timed_calls_per_size_per_job": "see per_series_protocol",
   "independent_jobs_per_series": 3,
-  "timed_calls_checked": 6600,
   "aggregation": "median of three independent run means; no per-size best variant",
   "timing": "slowest-process host submission through GPU completion; verification and MPI max reduction outside interval",
   "configuration": "fixed shared-ready host router, 256 KiB chunks, SM download/DMA upload, self input bypass, early consumption, shared local exchange, MPI/UCX network",
-  "nccl": "2.28.7; default unforced; SM/CE presets frozen from earlier large-message tuning",
+  "nccl": "2.28.7; default remains unforced; latency SM is fixed NCCL_PROTO=Simple with P2P/SHM CE disabled; CE unchanged",
   "throughput": "historical 1 MiB\u20131 GiB points retained byte-for-byte; not a current-source validation",
   "binary_sha256": {
     "build/ag_latency_2x4l4_20261116/uccl_lite_multinode_host_allgather": "014a0397b234e46e283ddf0f2b3cec9173a06a2ac48c95ac4a24bb6b7bbd59ca",
@@ -44,5 +43,22 @@
   "ce_transport_verified": true,
   "all_correctness_checks": "PASS",
   "historical_throughput_sha256": "746a03914fe67ae2ba5d4300a367eb4c98707c8a030a9e31d886a6c279349634",
-  "figure_sha256": "5a618e8c679d8999598756c58ce31fe7d682c9419c35bf2bc1959683e6623a22"
+  "figure_sha256": "58dccedb9c0f7a754ef5e1c09d42235ab8afb615aaf88dd781956624e82ef101",
+  "initial_timed_calls_checked": 6600,
+  "plotted_timed_calls_checked": 16500,
+  "per_series_protocol": {
+    "uccl_ce": {
+      "warmups": 20,
+      "iterations": 50,
+      "jobs": 3,
+      "source": "raw/"
+    },
+    "default_sm": {
+      "warmups": 100,
+      "iterations": 200,
+      "jobs": 3,
+      "source": "retest/refresh/raw/"
+    }
+  },
+  "spike_diagnosis": "RING/LL observed at 256/512 KiB, RING/SIMPLE at 1 MiB. Isolated runs, 100 warmups and one GPU/process still reproduce the spike; forcing Simple removes it. Default curve retains measured spikes."
 }
