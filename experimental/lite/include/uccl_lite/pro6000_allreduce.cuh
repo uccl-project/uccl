@@ -438,6 +438,85 @@ struct ChunkChannels {
   PortChan rs[3], ag[3];
   Chan ack[3];
 };
+
+// Gray-code ring: every edge is an existing XOR-1/2/4 connection. Only one
+// directed edge per socket crosses SYS, spreading inter-socket traffic across
+// the operation instead of concentrating it into two collective-wide phases.
+__host__ __device__ inline int ringRank(int position) {
+  return position ^ (position >> 1);
+}
+__host__ __device__ inline int ringPosition(int rank) {
+  int position = rank;
+  for (int shift = 1; shift < kRanks; shift <<= 1)
+    position ^= position >> shift;
+  return position;
+}
+__host__ __device__ inline int ringLevel(int rank, int direction) {
+  int peer = ringRank((ringPosition(rank) + direction + kRanks) % kRanks);
+  int level = 0;
+  while ((1 << level) != (rank ^ peer)) ++level;
+  return level;
+}
+
+struct RingChannels {
+  PortChan first, reduced, gather, incoming;
+  Chan acknowledge, drained;
+};
+
+// Each lane owns disjoint tensor tiles. RS receives each shard once into recv,
+// and writes its partial sum into a distinct position of send[1]. Those source
+// positions stay immutable until the call completes. AG forwards completed
+// shards directly from data. The final acknowledgement proves every outgoing
+// copy drained before the next invocation can overwrite data or scratch.
+__global__ void arRingCE(RingChannels const* channels, char* base, int rank,
+                         size_t nelem, size_t tileElems, Layout layout,
+                         mscclpp::DeviceSyncer* syncers, int workers) {
+  int lane = blockIdx.x / workers, lanes = gridDim.x / workers;
+  int tid = (blockIdx.x % workers) * blockDim.x + threadIdx.x;
+  int nth = blockDim.x * workers;
+  auto ch = channels[lane];
+  int position = ringPosition(rank);
+  float* data = reinterpret_cast<float*>(base + layout.data);
+  float* partial = reinterpret_cast<float*>(base + layout.send[1]);
+  float* recv = reinterpret_cast<float*>(base + layout.recv[0]);
+  for (size_t offset = lane * tileElems; offset < nelem;
+       offset += lanes * tileElems) {
+    size_t shard = min(tileElems, nelem - offset) / kRanks;
+    for (int step = 0; step < kRanks - 1; ++step) {
+      int sendShard = (position - step + kRanks) % kRanks;
+      int recvShard = (sendShard - 1 + kRanks) % kRanks;
+      __threadfence_system();
+      syncers[lane].sync(workers);
+      if (tid == 0) {
+        auto port = step == 0 ? ch.first : ch.reduced;
+        size_t send = (offset + sendShard * shard) * sizeof(float);
+        port.putWithSignal(send, send, shard * sizeof(float));
+        ch.incoming.wait();
+      }
+      syncers[lane].sync(workers);
+      size_t keep = offset + recvShard * shard;
+      float* dst = step == kRanks - 2 ? data : partial;
+      addOut(dst + keep, data + keep, recv + keep, shard, tid, nth);
+    }
+    // Publish the last reduction once. AG only forwards CE-written bytes, so
+    // the leader can advance its seven receives without waking every CTA or
+    // flushing SM stores again between steps.
+    __threadfence_system();
+    syncers[lane].sync(workers);
+    if (tid == 0) {
+      for (int step = 0; step < kRanks - 1; ++step) {
+        int sendShard = (position + 1 - step + kRanks) % kRanks;
+        size_t send = (offset + sendShard * shard) * sizeof(float);
+        ch.gather.putWithSignal(send, send, shard * sizeof(float));
+        ch.incoming.wait();
+      }
+      ch.acknowledge.signal();
+      ch.drained.wait();
+    }
+    syncers[lane].sync(workers);
+  }
+}
+
 // Independent lanes pipeline contiguous tiles through the topology. RS sends
 // the discarded half and reduces the kept half in place. AG writes directly
 // into data. A peer GPU acknowledgement after each receive proves the source
@@ -506,6 +585,27 @@ __global__ void arHostPhase(Chan channel, float* data, float const* scratch,
   syncer->sync(gridDim.x);
   if (reduce)
     addInto(data + keep, scratch + keep, count, tid, gridDim.x * blockDim.x);
+}
+
+// Host-queued ring control: the preceding CE transfer is complete on this
+// stream. GPU signals replace proxy-issued tiny H2D signal copies. All kernels,
+// transfers, and stream joins belong to the completed-call timing interval.
+__global__ void arRingHostPhase(Chan next, Chan prev, float* data,
+                                float* partial, float const* recv, size_t keep,
+                                size_t count, bool reduce, bool lastReduce,
+                                mscclpp::DeviceSyncer* syncer) {
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  if (tid == 0) {
+    next.signal();
+    prev.wait();
+  }
+  if (!reduce) return;
+  syncer->sync(gridDim.x);
+  if (reduce) {
+    float* dst = lastReduce ? data : partial;
+    addOut(dst + keep, data + keep, recv + keep, count, tid,
+           gridDim.x * blockDim.x);
+  }
 }
 
 }  // namespace uccl_lite

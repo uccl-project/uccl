@@ -254,3 +254,13 @@ pro6000-ar-summary:
 	$(PYTHON) -B scripts/summarize_pro6000_allreduce.py --input benchmarks/data/pro6000_allreduce_ce_cpp_20261116/measurements.tar.gz --output $(BUILD)/pro6000-ar-report
 pro6000-ar-figures: pro6000-ar-summary
 	MPLCONFIGDIR=$(abspath $(BUILD)/mplconfig) $(PYTHON) -B scripts/plot_pro6000_allreduce.py --summary $(BUILD)/pro6000-ar-report/summary.csv --preview
+
+.PHONY: pro6000-ar-large-summary pro6000-ar-large-traces pro6000-ar-large-figures
+pro6000-ar-large-summary:
+	$(PYTHON) -B scripts/summarize_pro6000_allreduce.py --input benchmarks/data/pro6000_allreduce_ce_ring_cpp_20261116/measurements.tar.gz --output $(BUILD)/pro6000-ar-large-report
+pro6000-ar-large-traces: pro6000-ar-large-summary
+	$(PYTHON) -B scripts/audit_pro6000_profiles.py --input $(BUILD)/pro6000-ar-large-report/extracted
+	$(PYTHON) -B scripts/summarize_pro6000_allreduce.py --input $(BUILD)/pro6000-ar-large-report/extracted/previous-epoch --output $(BUILD)/pro6000-ar-large-report/previous-epoch
+pro6000-ar-large-figures: pro6000-ar-large-traces
+	MPLCONFIGDIR=$(abspath $(BUILD)/mplconfig) $(PYTHON) -B scripts/plot_pro6000_allreduce.py --summary $(BUILD)/pro6000-ar-large-report/summary.csv --name collectives-pro6000x8-allreduce-fp32-ce-ring --preview
+	MPLCONFIGDIR=$(abspath $(BUILD)/mplconfig) $(PYTHON) -B scripts/plot_pro6000_bottleneck.py --staged $(BUILD)/pro6000-ar-large-report/extracted/profiles/profile-final-staged/compact-analysis.json --ring $(BUILD)/pro6000-ar-large-report/extracted/profiles/profile-final-ring/compact-analysis.json --preview

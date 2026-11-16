@@ -8,10 +8,12 @@ import os
 from pathlib import Path
 import signal
 import subprocess
+import time
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument("--lock", type=Path, required=True)
 p.add_argument("--output", type=Path, required=True)
+p.add_argument("--cases", help="Comma-separated suites; default runs every suite")
 a = p.parse_args()
 root = Path(__file__).resolve().parents[1]
 binary = root / "build/uccl_lite_pro6000_ar"
@@ -67,6 +69,72 @@ cases = {
         "--tile",
         str(64 << 20),
     ],
+    "ring-single": [
+        "--mode",
+        "ring-ce",
+        "--blocks",
+        "1",
+        "--workers",
+        "128",
+        "--tile",
+        str(1 << 30),
+    ],
+    "ring-pipeline": [
+        "--mode",
+        "ring-ce",
+        "--blocks",
+        "4",
+        "--workers",
+        "32",
+        "--tile",
+        str(32 << 20),
+    ],
+    "ring-wide": [
+        "--mode",
+        "ring-ce",
+        "--blocks",
+        "1",
+        "--workers",
+        "32",
+        "--threads",
+        "1024",
+        "--tile",
+        str(256 << 20),
+    ],
+    "ring-host-single": [
+        "--mode",
+        "ring-host-ce",
+        "--blocks",
+        "1",
+        "--workers",
+        "32",
+        "--threads",
+        "1024",
+        "--tile",
+        str(1 << 30),
+    ],
+    "ring-host-pipeline": [
+        "--mode",
+        "ring-host-ce",
+        "--blocks",
+        "4",
+        "--workers",
+        "32",
+        "--tile",
+        str(32 << 20),
+    ],
+    "ring-separate-streams": [
+        "--mode",
+        "ring-ce",
+        "--blocks",
+        "2",
+        "--workers",
+        "64",
+        "--streams",
+        "2",
+        "--tile",
+        str(32 << 20),
+    ],
 }
 manifest = {
     "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
@@ -76,6 +144,24 @@ manifest = {
     },
     "runs": [],
 }
+sources = [
+    root / "src/collectives/pro6000_allreduce.cu",
+    root / "include/uccl_lite/pro6000_allreduce.cuh",
+    root / "include/uccl_lite/allreduce_validation.cuh",
+]
+manifest["source_sha256"] = {
+    str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
+    for path in sources
+}
+for path in sources:
+    target = a.output / "measured_source" / path.relative_to(root)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(path.read_bytes())
+if a.cases:
+    names = a.cases.split(",")
+    if len(set(names)) != len(names) or not set(names) <= set(cases):
+        raise ValueError("Unknown or duplicate suite")
+    cases = {name: cases[name] for name in names}
 with a.lock.open("a") as lock:
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     for name, cmd in {
@@ -86,10 +172,15 @@ with a.lock.open("a") as lock:
     }.items():
         (a.output / (name + ".txt")).write_bytes(subprocess.check_output(cmd))
     for name, args in cases.items():
-        active = subprocess.check_output(
-            ["nvidia-smi", "--query-compute-apps=pid", "--format=csv,noheader"],
-            text=True,
-        )
+        for attempt in range(11):
+            active = subprocess.check_output(
+                ["nvidia-smi", "--query-compute-apps=pid", "--format=csv,noheader"],
+                text=True,
+            )
+            if not active.strip():
+                break
+            if attempt < 10:
+                time.sleep(0.2)
         if active.strip():
             raise RuntimeError("GPU busy")
         cmd = [str(binary), "--seed", "3001", *args]

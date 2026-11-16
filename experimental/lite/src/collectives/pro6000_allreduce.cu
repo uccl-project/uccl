@@ -39,6 +39,7 @@ struct Config {
 struct PeerContext {
   std::unique_ptr<mscclpp::Communicator> comm;
   std::array<std::unique_ptr<mscclpp::Communicator>, 3> transportComms;
+  std::array<std::unique_ptr<mscclpp::Communicator>, 2> ringComms;
   std::array<mscclpp::Communicator*, 3> transport;
   std::shared_ptr<mscclpp::ProxyService> proxy;
   std::vector<std::unique_ptr<mscclpp::MemoryChannel>> memory;
@@ -46,6 +47,7 @@ struct PeerContext {
   std::array<Chan, 3> mem{};
   std::array<PortChan, 3> rs{}, ag{};
   ChunkChannels* device = nullptr;
+  RingChannels* ring = nullptr;
   mscclpp::DeviceSyncer* syncers = nullptr;
   Layout layout{};
   size_t packetBase, packetSlot;
@@ -115,7 +117,7 @@ struct PeerContext {
           sem[l], remoteFull[l], full, buffer));
     }
     for (int l = 0; l < kLevels; ++l) mem[l] = memory[l]->deviceHandle();
-    if (cfg.mode == "host-ce") {
+    if (cfg.mode == "host-ce" || cfg.mode == "ring-host-ce") {
       hostChannels.resize(cfg.blocks);
       streams.resize(cfg.blocks);
       done.resize(cfg.blocks);
@@ -140,7 +142,7 @@ struct PeerContext {
       return;
     }
     bool ce = cfg.mode == "drained-ce" || cfg.mode == "staged-ce" ||
-              cfg.mode == "chunk-ce";
+              cfg.mode == "chunk-ce" || cfg.mode == "ring-ce";
     if (!ce) return;
     proxy = std::make_shared<mscclpp::ProxyService>();
     std::array<mscclpp::MemoryId, 7> localId;
@@ -154,7 +156,57 @@ struct PeerContext {
           proxy->portChannel(sid, remoteId[l][dst], localId[src])));
       return ports.back()->deviceHandle();
     };
-    if (cfg.mode == "drained-ce" || cfg.mode == "staged-ce") {
+    if (cfg.mode == "ring-ce") {
+      std::vector<RingChannels> handles(cfg.blocks);
+      int next = ringLevel(rank, 1), prev = ringLevel(rank, -1);
+      std::array<std::array<mscclpp::Connection, 3>, 2> ringConnections;
+      if (cfg.streams == 2) {
+        // The runtime has one copy stream per Context. Alternating lanes
+        // between two Contexts lets signal transfers overlap peer payloads.
+        for (int context = 0; context < 2; ++context) {
+          ringComms[context] =
+              std::make_unique<mscclpp::Communicator>(bootstrap);
+          std::array<std::shared_future<mscclpp::Connection>, 3> futures;
+          for (int l = 0; l < kLevels; ++l)
+            futures[l] = ringComms[context]->connect(
+                mscclpp::EndpointConfig(mscclpp::Transport::CudaIpc),
+                rank ^ (1 << l), 200 + context * 3 + l);
+          for (int l = 0; l < kLevels; ++l)
+            ringConnections[context][l] = futures[l].get();
+        }
+      }
+      for (int lane = 0; lane < cfg.blocks; ++lane) {
+        for (int l = 0; l < kLevels; ++l) {
+          auto sid =
+              cfg.streams == 2
+                  ? proxy->buildAndAddSemaphore(*ringComms[lane % 2],
+                                                ringConnections[lane % 2][l])
+                  : proxy->buildAndAddSemaphore(*transport[l], connections[l]);
+          auto sem =
+              comm->buildSemaphore(connections[l], rank ^ (1 << l)).get();
+          memory.push_back(std::make_unique<mscclpp::MemoryChannel>(
+              sem, remoteFull[l], full, buffer));
+          if (l == next) {
+            handles[lane].first = port(sid, l, 4, 0);
+            handles[lane].reduced = port(sid, l, 4, 1);
+            handles[lane].gather = port(sid, l, 0, 0);
+            handles[lane].drained = memory.back()->deviceHandle();
+          }
+          if (l == prev) {
+            handles[lane].incoming = port(sid, l, 0, 0);
+            handles[lane].acknowledge = memory.back()->deviceHandle();
+          }
+        }
+      }
+      checkCuda(
+          cudaMalloc(&syncers, cfg.blocks * sizeof(mscclpp::DeviceSyncer)));
+      checkCuda(
+          cudaMemset(syncers, 0, cfg.blocks * sizeof(mscclpp::DeviceSyncer)));
+      checkCuda(cudaMalloc(&ring, handles.size() * sizeof(RingChannels)));
+      checkCuda(cudaMemcpy(ring, handles.data(),
+                           handles.size() * sizeof(RingChannels),
+                           cudaMemcpyHostToDevice));
+    } else if (cfg.mode == "drained-ce" || cfg.mode == "staged-ce") {
       if (kRanks != 8) std::exit(2);
       for (int l = 0; l < kLevels; ++l) {
         auto sid = proxy->buildAndAddSemaphore(*transport[l], connections[l]);
@@ -200,6 +252,34 @@ struct PeerContext {
          offset += tile, ++index) {
       int lane = index % lanes;
       auto work = streams[lane];
+      if (cfg.mode == "ring-host-ce") {
+        int position = ringPosition(rank);
+        auto next = hostChannels[lane][ringLevel(rank, 1)];
+        auto prev = hostChannels[lane][ringLevel(rank, -1)];
+        char* remote = static_cast<char*>(next.dst_);
+        size_t shard = tile / kRanks;
+        for (int phase = 0; phase < 2 * (kRanks - 1); ++phase) {
+          bool rs = phase < kRanks - 1;
+          int step = rs ? phase : phase - (kRanks - 1);
+          int sendShard = (position + (rs ? 0 : 1) - step + kRanks) % kRanks;
+          int recvShard = (sendShard - 1 + kRanks) % kRanks;
+          size_t send = offset + sendShard * shard;
+          size_t keep = offset + recvShard * shard;
+          size_t src = rs && step ? layout.send[1] : layout.data;
+          size_t dst = rs ? layout.recv[0] : layout.data;
+          checkCuda(cudaMemcpyAsync(remote + dst + send * sizeof(float),
+                                    buffer + src + send * sizeof(float),
+                                    shard * sizeof(float),
+                                    cudaMemcpyDeviceToDevice, work));
+          arRingHostPhase<<<rs ? cfg.workers : 1, rs ? cfg.threads : 32, 0,
+                            work>>>(
+              next, prev, reinterpret_cast<float*>(buffer + layout.data),
+              reinterpret_cast<float*>(buffer + layout.send[1]),
+              reinterpret_cast<float*>(buffer + layout.recv[0]), keep, shard,
+              rs, step == kRanks - 2, syncers + lane);
+        }
+        continue;
+      }
       size_t segBase = offset, segN = tile;
       for (int phase = 0; phase < 2 * kLevels; ++phase) {
         bool rs = phase < kLevels;
@@ -251,6 +331,7 @@ struct PeerContext {
     for (auto event : done) checkCuda(cudaEventDestroy(event));
     if (ready) checkCuda(cudaEventDestroy(ready));
     if (device) checkCuda(cudaFree(device));
+    if (ring) checkCuda(cudaFree(ring));
     if (syncers) checkCuda(cudaFree(syncers));
     // Registrations and IPC mappings are destroyed before their backing memory.
     ports.clear();
@@ -259,6 +340,7 @@ struct PeerContext {
     regions.clear();
     comm.reset();
     for (auto& transportComm : transportComms) transportComm.reset();
+    for (auto& ringComm : ringComms) ringComm.reset();
     checkCuda(cudaFree(allocation));
   }
 };
@@ -297,9 +379,17 @@ static void runRank(int rank, mscclpp::UniqueId id, Config cfg) {
   cudaDeviceProp property;
   checkCuda(cudaGetDeviceProperties(&property, rank));
   int grid = cfg.blocks;
-  if (cfg.mode == "chunk-ce") {
+  if (cfg.mode == "ring-ce") {
+    checkCuda(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&active, arRingCE,
+                                                            cfg.threads, 0));
+    grid *= cfg.workers;
+  } else if (cfg.mode == "chunk-ce") {
     checkCuda(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&active, arChunkCE,
                                                             cfg.threads, 0));
+    grid *= cfg.workers;
+  } else if (cfg.mode == "ring-host-ce") {
+    checkCuda(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+        &active, arRingHostPhase, cfg.threads, 0));
     grid *= cfg.workers;
   } else if (cfg.mode == "host-ce") {
     checkCuda(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
@@ -332,7 +422,13 @@ static void runRank(int rank, mscclpp::UniqueId id, Config cfg) {
   auto verifyGuards = [&](size_t bytes) { return peer.verifyGuards(bytes); };
   auto launch = [&](size_t count) {
     auto l = peer.packets(flag);
-    if (cfg.mode == "host-ce") {
+    if (cfg.mode == "ring-ce") {
+      size_t tile = std::min(cfg.tile / 4, count);
+      int lanes = std::min<size_t>(cfg.blocks, count / tile);
+      arRingCE<<<lanes * cfg.workers, cfg.threads, 0, stream>>>(
+          peer.ring, peer.buffer, rank, count, tile, l, peer.syncers,
+          cfg.workers);
+    } else if (cfg.mode == "host-ce" || cfg.mode == "ring-host-ce") {
       peer.hostLaunch(count, rank, cfg, stream);
     } else if (cfg.mode == "ll") {
       int blocks = std::min<size_t>(cfg.blocks, count / (kRanks * 2));
@@ -410,11 +506,13 @@ static void runRank(int rank, mscclpp::UniqueId id, Config cfg) {
     bootstrap->barrier();
     for (int i = 0; i < cfg.warmups; ++i) launch(count);
     checkCuda(cudaStreamSynchronize(stream));
+    uccl_lite::rankThreadPlacement(rank, true, bytes == cfg.begin);
     bootstrap->barrier();
     auto start = std::chrono::steady_clock::now();
     for (int i = 0; i < cfg.iterations; ++i) launch(count);
     checkCuda(cudaStreamSynchronize(stream));
     auto stop = std::chrono::steady_clock::now();
+    uccl_lite::rankThreadPlacement(rank, false, false);
     double us =
         std::chrono::duration<double, std::micro>(stop - start).count() /
         cfg.iterations;
@@ -503,14 +601,16 @@ int main(int argc, char** argv) {
   if (!pow2(cfg.begin) || !pow2(cfg.end) || !pow2(cfg.tile) ||
       !pow2(cfg.blocks) || cfg.begin < 1024 || cfg.end > cfg.capacity ||
       cfg.begin > cfg.end || cfg.tile < 1024 || cfg.blocks > 128 ||
-      (cfg.streams != 1 && cfg.streams != 3) || !pow2(cfg.workers) ||
+      (cfg.streams != 1 && cfg.streams != 2 && cfg.streams != 3) ||
+      (cfg.streams == 2 && cfg.mode != "ring-ce") || !pow2(cfg.workers) ||
       cfg.blocks * cfg.workers > 128 || cfg.threads < 32 ||
       cfg.threads > 1024 || cfg.threads % 32 || cfg.seed < 0 ||
       cfg.seed > 100000)
     return 2;
   if (cfg.mode != "ll" && cfg.mode != "put" && cfg.mode != "drained-ce" &&
       cfg.mode != "chunk-ce" && cfg.mode != "staged-ce" &&
-      cfg.mode != "host-ce")
+      cfg.mode != "host-ce" && cfg.mode != "ring-ce" &&
+      cfg.mode != "ring-host-ce")
     return 2;
   auto id = mscclpp::TcpBootstrap::createUniqueId();
   std::vector<pid_t> children;
@@ -519,7 +619,8 @@ int main(int argc, char** argv) {
     if (!pid) {
       runRank(rank, id, cfg);
       std::fflush(stdout);
-      _exit(0);
+      // Allow CUDA/profiler atexit handlers to flush child-process traces.
+      return 0;
     }
     if (pid < 0) return 1;
     children.push_back(pid);

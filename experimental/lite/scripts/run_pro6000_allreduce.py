@@ -53,6 +53,17 @@ for channels in (4, 8):
         "NCCL_BUFFSIZE": str(64 << 20),
     }
 
+# Extend the earlier CE search around its large-message optimum. These are
+# calibrated independently of UCCL; no validation measurements select policy.
+for channels, buffer in ((1, 16), (2, 32), (2, 64), (4, 32), (8, 32), (6, 16), (6, 32)):
+    NCCL[f"ce-ring-ch{channels}-b{buffer}m"] = {
+        **CE,
+        "NCCL_ALGO": "Ring",
+        "NCCL_MIN_NCHANNELS": str(channels),
+        "NCCL_MAX_NCHANNELS": str(channels),
+        "NCCL_BUFFSIZE": str(buffer << 20),
+    }
+
 OURS = {}
 for blocks in (1, 4, 16, 32):
     for threads in (256, 1024):
@@ -128,6 +139,67 @@ OURS["drained-ce-128"] = dict(mode="drained-ce", blocks=128, threads=512, begin=
 for config in OURS.values():
     if config["mode"] in ("drained-ce", "staged-ce"):
         config["begin"] = 1024
+
+for lanes, workers in ((1, 128), (2, 64), (4, 32), (8, 16)):
+    for tile in (32, 128, 256, 1024):
+        OURS[f"ring-ce-{lanes}-{tile}m"] = dict(
+            mode="ring-ce",
+            blocks=lanes,
+            workers=workers,
+            threads=256,
+            tile=tile << 20,
+            begin=1024,
+        )
+
+for lanes, workers in ((1, 128), (2, 64), (4, 32)):
+    for tile in (8, 16, 32, 64, 256):
+        for threads in (512, 1024):
+            OURS[f"ring-ce-{lanes}-{tile}m-t{threads}"] = dict(
+                mode="ring-ce",
+                blocks=lanes,
+                workers=workers,
+                threads=threads,
+                tile=tile << 20,
+                begin=1024,
+            )
+
+for lanes, workers in ((1, 128), (2, 64), (4, 32)):
+    for tile in (32, 128, 256, 1024):
+        OURS[f"ring-host-ce-{lanes}-{tile}m"] = dict(
+            mode="ring-host-ce",
+            blocks=lanes,
+            workers=workers,
+            threads=256,
+            tile=tile << 20,
+            begin=1024,
+        )
+
+for mode in ("ring-ce", "ring-host-ce"):
+    for workers in (16, 32, 64, 128):
+        for threads in (256, 512, 1024):
+            OURS[f"{mode}-1-1024m-w{workers}-t{threads}"] = dict(
+                mode=mode,
+                blocks=1,
+                workers=workers,
+                threads=threads,
+                tile=1 << 30,
+                begin=1024,
+            )
+
+
+for name in (
+    "ring-ce-2-8m-t512",
+    "ring-ce-2-8m-t1024",
+    "ring-ce-2-16m-t512",
+    "ring-ce-2-16m-t1024",
+    "ring-ce-2-32m",
+    "ring-ce-2-32m-t512",
+    "ring-ce-2-32m-t1024",
+    "ring-ce-2-64m-t512",
+    "ring-ce-2-256m",
+    "ring-ce-4-32m",
+):
+    OURS[name + "-s2"] = {**OURS[name], "streams": 2}
 
 
 def now():
@@ -208,6 +280,25 @@ def transport(debug, label, sizes):
     }
 
 
+def placement_audit(log, width):
+    rows = re.findall(
+        r"AFFINITY rank=(\d+) tid=(\d+) before_cpus=(\d+) matched_cpus=(\d+)", log
+    )
+    if {int(r[0]) for r in rows} != set(range(8)):
+        raise ValueError("Missing rank thread-affinity audit")
+    if any(int(r[3]) != width for r in rows):
+        raise ValueError("Incorrect enforced thread-affinity width")
+    if len({(r[0], r[1]) for r in rows}) != len(rows):
+        raise ValueError("Duplicate thread-affinity record")
+    return {
+        "threads_per_rank": {
+            str(rank): sum(int(r[0]) == rank for r in rows) for rank in range(8)
+        },
+        "before_cpu_counts": sorted({int(r[2]) for r in rows}),
+        "matched_cpu_count": width,
+    }
+
+
 class Runner:
     def __init__(self, output, placement):
         self.out = output
@@ -265,13 +356,24 @@ class Runner:
             "warmups": 10,
             "continuous_calls": 20,
             "capacity": 1 << 30,
+            "thread_placement": "enforced after warmup; verified after each timed batch",
         }
         self.platform_sha256 = hashlib.sha256(
             json.dumps(self.platform, sort_keys=True).encode()
         ).hexdigest()
         self.records = []
 
-    def run(self, label, backend, name, begin=None, end=None, seed=1, profile=False):
+    def run(
+        self,
+        label,
+        backend,
+        name,
+        begin=None,
+        end=None,
+        seed=1,
+        profile=False,
+        launcher=None,
+    ):
         if (self.out / f"{label}.json").exists():
             raise ValueError("Refusing to overwrite " + label)
         active = subprocess.check_output(
@@ -314,6 +416,8 @@ class Runner:
                     command += ["--" + k, str(v)]
             if profile:
                 command += ["--profile", "1"]
+        if launcher:
+            command = [*launcher, *command]
         for p, identity in self.identities.items():
             if sha(ROOT / p) != identity:
                 raise RuntimeError("Source/binary changed during run: " + p)
@@ -363,6 +467,10 @@ class Runner:
             if status:
                 raise ValueError("process return code " + str(status))
             values = parse((self.out / f"{label}.txt").read_text(), sizes)
+            rec["placement_audit"] = placement_audit(
+                (self.out / f"{label}.txt").read_text(),
+                4 if self.env["UCCL_LITE_PLACEMENT"] == "local-four" else 1,
+            )
             if backend == "nccl":
                 rec["transport"] = transport(self.out / "debug", label, sizes)
             rec["values"] = {str(k): v for k, v in values.items()}

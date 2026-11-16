@@ -1,0 +1,2096 @@
+{
+  "created": "2026-11-16T10:52:45.958013+00:00",
+  "policy": {
+    "ours": {
+      "1024": "ll-32-256",
+      "2048": "ll-4-256",
+      "4096": "ll-4-256",
+      "8192": "ll-32-256",
+      "16384": "ll-32-256",
+      "32768": "ll-32-256",
+      "65536": "ll-32-256",
+      "131072": "ll-32-256",
+      "262144": "ll-32-1024",
+      "524288": "put-64",
+      "1048576": "put-64",
+      "2097152": "put-16",
+      "4194304": "staged-ce-64",
+      "8388608": "staged-ce-64",
+      "16777216": "ring-ce-2-8m-t512-s2",
+      "33554432": "ring-ce-2-16m-t512-s2",
+      "67108864": "ring-ce-2-32m-t512-s2",
+      "134217728": "ring-ce-2-64m-t512-s2",
+      "268435456": "ring-host-ce-4-128m",
+      "536870912": "ring-ce-2-64m-t512-s2",
+      "1073741824": "ring-ce-2-64m-t512-s2"
+    },
+    "nccl": {
+      "1024": "ce-ring-ch4-b16m",
+      "2048": "ce-ring-ch4-t128",
+      "4096": "ce-ring-ch4-b1m",
+      "8192": "ce-ring-ch2-b64m",
+      "16384": "ce-ring-ch1-b16m",
+      "32768": "ce-ring-ch1-b16m",
+      "65536": "ce-ring-ch1",
+      "131072": "ce-ring-ch1",
+      "262144": "ce-ring-ch1-b16m",
+      "524288": "ce-ring-ch1",
+      "1048576": "ce-ring-ch1",
+      "2097152": "ce-ring-ch2",
+      "4194304": "ce-ring-ch2-b16m",
+      "8388608": "ce-ring-ch2-b32m",
+      "16777216": "ce-ring-ch2-b64m",
+      "33554432": "ce-ring-ch2-b32m",
+      "67108864": "ce-ring-ch2-b64m",
+      "134217728": "ce-ring-ch4-b16m",
+      "268435456": "ce-ring-ch4-b16m",
+      "536870912": "ce-ring-ch4-b16m",
+      "1073741824": "ce-ring-ch4-b32m"
+    }
+  },
+  "identities": {
+    "build/uccl_lite_pro6000_ar": "c2b87c9278e26a1e1b05dc6e2ae947da146f3e6ffc3d0f5916102f654e4bcf24",
+    "build/uccl_lite_pro6000_ar_nccl": "951a7043881acd32d3ab64eae4d92b63d4bb5e8dc1060d91da1e6917f3d89602",
+    "src/collectives/pro6000_allreduce.cu": "2468c7d9ff84c7a7a83f66f12c71b5e3184bcbbb636a101518a9deca8c74dda2",
+    "include/uccl_lite/pro6000_allreduce.cuh": "607bb008e5e559b568907e537e3883519ce24f9881a922b3735efbf8c22cbadf",
+    "include/uccl_lite/allreduce_validation.cuh": "56e69cae5e47809137f31baf36f03484320067be4b38ebba8b32396d29072863"
+  },
+  "placement": "local-four",
+  "platform": {
+    "gpu_identity": "0, NVIDIA RTX PRO 6000 Blackwell Server Edition, GPU-6abab0bc-276e-afcf-1767-ef32e6f2f08e, 00000000:05:00.0, 580.178.04\n1, NVIDIA RTX PRO 6000 Blackwell Server Edition, GPU-232a1b58-d532-a4ae-20d4-1a93970343ea, 00000000:06:00.0, 580.178.04\n2, NVIDIA RTX PRO 6000 Blackwell Server Edition, GPU-b6be3df3-a733-0a0a-1431-15153988fd63, 00000000:0A:00.0, 580.178.04\n3, NVIDIA RTX PRO 6000 Blackwell Server Edition, GPU-0612c62a-6e7b-abcd-da0b-e3b96ed02851, 00000000:0B:00.0, 580.178.04\n4, NVIDIA RTX PRO 6000 Blackwell Server Edition, GPU-90129106-1aef-ab36-fe51-c8a7d4bfca1b, 00000000:84:00.0, 580.178.04\n5, NVIDIA RTX PRO 6000 Blackwell Server Edition, GPU-4bfa2c93-d647-6a75-d28f-97b41d43a76e, 00000000:85:00.0, 580.178.04\n6, NVIDIA RTX PRO 6000 Blackwell Server Edition, GPU-3bced1fe-eab0-de91-f981-dc0add143eab, 00000000:89:00.0, 580.178.04\n7, NVIDIA RTX PRO 6000 Blackwell Server Edition, GPU-74c7b00a-d022-d649-f4fc-584f0d29d36a, 00000000:8A:00.0, 580.178.04\n",
+    "topology": "\t\u001b[4mGPU0\tGPU1\tGPU2\tGPU3\tGPU4\tGPU5\tGPU6\tGPU7\tCPU Affinity\tNUMA Affinity\tGPU NUMA ID\u001b[0m\nGPU0\t X \tPIX\tNODE\tNODE\tSYS\tSYS\tSYS\tSYS\t0-95,192-287\t0\t\tN/A\nGPU1\tPIX\t X \tNODE\tNODE\tSYS\tSYS\tSYS\tSYS\t0-95,192-287\t0\t\tN/A\nGPU2\tNODE\tNODE\t X \tPIX\tSYS\tSYS\tSYS\tSYS\t0-95,192-287\t0\t\tN/A\nGPU3\tNODE\tNODE\tPIX\t X \tSYS\tSYS\tSYS\tSYS\t0-95,192-287\t0\t\tN/A\nGPU4\tSYS\tSYS\tSYS\tSYS\t X \tPIX\tNODE\tNODE\t96-191,288-383\t1\t\tN/A\nGPU5\tSYS\tSYS\tSYS\tSYS\tPIX\t X \tNODE\tNODE\t96-191,288-383\t1\t\tN/A\nGPU6\tSYS\tSYS\tSYS\tSYS\tNODE\tNODE\t X \tPIX\t96-191,288-383\t1\t\tN/A\nGPU7\tSYS\tSYS\tSYS\tSYS\tNODE\tNODE\tPIX\t X \t96-191,288-383\t1\t\tN/A\n\nLegend:\n\n  X    = Self\n  SYS  = Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)\n  NODE = Connection traversing PCIe as well as the interconnect between PCIe Host Bridges within a NUMA node\n  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)\n  PXB  = Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)\n  PIX  = Connection traversing at most a single PCIe bridge\n  NV#  = Connection traversing a bonded set of # NVLinks\n",
+    "cpu_topology": "# The following is the parsable format, which can be fed to other\n# programs. Each different item in every column has an unique ID\n# starting usually from zero.\n# CPU,Socket,Node\n0,0,0\n1,0,0\n2,0,0\n3,0,0\n4,0,0\n5,0,0\n6,0,0\n7,0,0\n8,0,0\n9,0,0\n10,0,0\n11,0,0\n12,0,0\n13,0,0\n14,0,0\n15,0,0\n16,0,0\n17,0,0\n18,0,0\n19,0,0\n20,0,0\n21,0,0\n22,0,0\n23,0,0\n24,0,0\n25,0,0\n26,0,0\n27,0,0\n28,0,0\n29,0,0\n30,0,0\n31,0,0\n32,0,0\n33,0,0\n34,0,0\n35,0,0\n36,0,0\n37,0,0\n38,0,0\n39,0,0\n40,0,0\n41,0,0\n42,0,0\n43,0,0\n44,0,0\n45,0,0\n46,0,0\n47,0,0\n48,0,0\n49,0,0\n50,0,0\n51,0,0\n52,0,0\n53,0,0\n54,0,0\n55,0,0\n56,0,0\n57,0,0\n58,0,0\n59,0,0\n60,0,0\n61,0,0\n62,0,0\n63,0,0\n64,0,0\n65,0,0\n66,0,0\n67,0,0\n68,0,0\n69,0,0\n70,0,0\n71,0,0\n72,0,0\n73,0,0\n74,0,0\n75,0,0\n76,0,0\n77,0,0\n78,0,0\n79,0,0\n80,0,0\n81,0,0\n82,0,0\n83,0,0\n84,0,0\n85,0,0\n86,0,0\n87,0,0\n88,0,0\n89,0,0\n90,0,0\n91,0,0\n92,0,0\n93,0,0\n94,0,0\n95,0,0\n96,1,1\n97,1,1\n98,1,1\n99,1,1\n100,1,1\n101,1,1\n102,1,1\n103,1,1\n104,1,1\n105,1,1\n106,1,1\n107,1,1\n108,1,1\n109,1,1\n110,1,1\n111,1,1\n112,1,1\n113,1,1\n114,1,1\n115,1,1\n116,1,1\n117,1,1\n118,1,1\n119,1,1\n120,1,1\n121,1,1\n122,1,1\n123,1,1\n124,1,1\n125,1,1\n126,1,1\n127,1,1\n128,1,1\n129,1,1\n130,1,1\n131,1,1\n132,1,1\n133,1,1\n134,1,1\n135,1,1\n136,1,1\n137,1,1\n138,1,1\n139,1,1\n140,1,1\n141,1,1\n142,1,1\n143,1,1\n144,1,1\n145,1,1\n146,1,1\n147,1,1\n148,1,1\n149,1,1\n150,1,1\n151,1,1\n152,1,1\n153,1,1\n154,1,1\n155,1,1\n156,1,1\n157,1,1\n158,1,1\n159,1,1\n160,1,1\n161,1,1\n162,1,1\n163,1,1\n164,1,1\n165,1,1\n166,1,1\n167,1,1\n168,1,1\n169,1,1\n170,1,1\n171,1,1\n172,1,1\n173,1,1\n174,1,1\n175,1,1\n176,1,1\n177,1,1\n178,1,1\n179,1,1\n180,1,1\n181,1,1\n182,1,1\n183,1,1\n184,1,1\n185,1,1\n186,1,1\n187,1,1\n188,1,1\n189,1,1\n190,1,1\n191,1,1\n192,0,0\n193,0,0\n194,0,0\n195,0,0\n196,0,0\n197,0,0\n198,0,0\n199,0,0\n200,0,0\n201,0,0\n202,0,0\n203,0,0\n204,0,0\n205,0,0\n206,0,0\n207,0,0\n208,0,0\n209,0,0\n210,0,0\n211,0,0\n212,0,0\n213,0,0\n214,0,0\n215,0,0\n216,0,0\n217,0,0\n218,0,0\n219,0,0\n220,0,0\n221,0,0\n222,0,0\n223,0,0\n224,0,0\n225,0,0\n226,0,0\n227,0,0\n228,0,0\n229,0,0\n230,0,0\n231,0,0\n232,0,0\n233,0,0\n234,0,0\n235,0,0\n236,0,0\n237,0,0\n238,0,0\n239,0,0\n240,0,0\n241,0,0\n242,0,0\n243,0,0\n244,0,0\n245,0,0\n246,0,0\n247,0,0\n248,0,0\n249,0,0\n250,0,0\n251,0,0\n252,0,0\n253,0,0\n254,0,0\n255,0,0\n256,0,0\n257,0,0\n258,0,0\n259,0,0\n260,0,0\n261,0,0\n262,0,0\n263,0,0\n264,0,0\n265,0,0\n266,0,0\n267,0,0\n268,0,0\n269,0,0\n270,0,0\n271,0,0\n272,0,0\n273,0,0\n274,0,0\n275,0,0\n276,0,0\n277,0,0\n278,0,0\n279,0,0\n280,0,0\n281,0,0\n282,0,0\n283,0,0\n284,0,0\n285,0,0\n286,0,0\n287,0,0\n288,1,1\n289,1,1\n290,1,1\n291,1,1\n292,1,1\n293,1,1\n294,1,1\n295,1,1\n296,1,1\n297,1,1\n298,1,1\n299,1,1\n300,1,1\n301,1,1\n302,1,1\n303,1,1\n304,1,1\n305,1,1\n306,1,1\n307,1,1\n308,1,1\n309,1,1\n310,1,1\n311,1,1\n312,1,1\n313,1,1\n314,1,1\n315,1,1\n316,1,1\n317,1,1\n318,1,1\n319,1,1\n320,1,1\n321,1,1\n322,1,1\n323,1,1\n324,1,1\n325,1,1\n326,1,1\n327,1,1\n328,1,1\n329,1,1\n330,1,1\n331,1,1\n332,1,1\n333,1,1\n334,1,1\n335,1,1\n336,1,1\n337,1,1\n338,1,1\n339,1,1\n340,1,1\n341,1,1\n342,1,1\n343,1,1\n344,1,1\n345,1,1\n346,1,1\n347,1,1\n348,1,1\n349,1,1\n350,1,1\n351,1,1\n352,1,1\n353,1,1\n354,1,1\n355,1,1\n356,1,1\n357,1,1\n358,1,1\n359,1,1\n360,1,1\n361,1,1\n362,1,1\n363,1,1\n364,1,1\n365,1,1\n366,1,1\n367,1,1\n368,1,1\n369,1,1\n370,1,1\n371,1,1\n372,1,1\n373,1,1\n374,1,1\n375,1,1\n376,1,1\n377,1,1\n378,1,1\n379,1,1\n380,1,1\n381,1,1\n382,1,1\n383,1,1\n",
+    "mscclpp_sha256": "8c33feaae3d692065bfb3cf5394764e959310766ef52bde88577122c1ef98209",
+    "nccl_sha256": "1c8618b866734cbdd5401715d6178be763ece283b7f808ecf86dedab211162c1",
+    "dtype": "FP32",
+    "operation": "in-place SUM",
+    "ranks": 8,
+    "warmups": 10,
+    "continuous_calls": 20,
+    "capacity": 1073741824,
+    "thread_placement": "enforced after warmup; verified after each timed batch"
+  },
+  "platform_sha256": "871f2d19322efe10e793b57d49687edec54505dc403e56c6edf72cea1bf44679",
+  "nccl_candidates": {
+    "ce-auto": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple"
+    },
+    "ce-ring": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring"
+    },
+    "ce-tree": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Tree"
+    },
+    "ce-ring-ch1": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "1",
+      "NCCL_MAX_NCHANNELS": "1"
+    },
+    "ce-ring-ch2": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "2",
+      "NCCL_MAX_NCHANNELS": "2"
+    },
+    "ce-ring-ch4": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "4",
+      "NCCL_MAX_NCHANNELS": "4"
+    },
+    "ce-ring-ch8": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8"
+    },
+    "ce-ring-ch16": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "16",
+      "NCCL_MAX_NCHANNELS": "16"
+    },
+    "ce-ring-ch2-b1m": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "2",
+      "NCCL_MAX_NCHANNELS": "2",
+      "NCCL_BUFFSIZE": "1048576"
+    },
+    "ce-ring-ch2-b16m": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "2",
+      "NCCL_MAX_NCHANNELS": "2",
+      "NCCL_BUFFSIZE": "16777216"
+    },
+    "ce-ring-ch4-b1m": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "4",
+      "NCCL_MAX_NCHANNELS": "4",
+      "NCCL_BUFFSIZE": "1048576"
+    },
+    "ce-ring-ch4-b16m": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "4",
+      "NCCL_MAX_NCHANNELS": "4",
+      "NCCL_BUFFSIZE": "16777216"
+    },
+    "ce-ring-ch8-b1m": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8",
+      "NCCL_BUFFSIZE": "1048576"
+    },
+    "ce-ring-ch8-b16m": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8",
+      "NCCL_BUFFSIZE": "16777216"
+    },
+    "ce-ring-ch2-t128": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "2",
+      "NCCL_MAX_NCHANNELS": "2",
+      "NCCL_NTHREADS": "128"
+    },
+    "ce-ring-ch4-t128": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "4",
+      "NCCL_MAX_NCHANNELS": "4",
+      "NCCL_NTHREADS": "128"
+    },
+    "ce-ring-ch8-t128": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8",
+      "NCCL_NTHREADS": "128"
+    },
+    "ce-ring-ch4-b64m": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "4",
+      "NCCL_MAX_NCHANNELS": "4",
+      "NCCL_BUFFSIZE": "67108864"
+    },
+    "ce-ring-ch8-b64m": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8",
+      "NCCL_BUFFSIZE": "67108864"
+    },
+    "ce-ring-ch1-b16m": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "1",
+      "NCCL_MAX_NCHANNELS": "1",
+      "NCCL_BUFFSIZE": "16777216"
+    },
+    "ce-ring-ch2-b32m": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "2",
+      "NCCL_MAX_NCHANNELS": "2",
+      "NCCL_BUFFSIZE": "33554432"
+    },
+    "ce-ring-ch2-b64m": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "2",
+      "NCCL_MAX_NCHANNELS": "2",
+      "NCCL_BUFFSIZE": "67108864"
+    },
+    "ce-ring-ch4-b32m": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "4",
+      "NCCL_MAX_NCHANNELS": "4",
+      "NCCL_BUFFSIZE": "33554432"
+    },
+    "ce-ring-ch8-b32m": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "8",
+      "NCCL_MAX_NCHANNELS": "8",
+      "NCCL_BUFFSIZE": "33554432"
+    },
+    "ce-ring-ch6-b16m": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "6",
+      "NCCL_MAX_NCHANNELS": "6",
+      "NCCL_BUFFSIZE": "16777216"
+    },
+    "ce-ring-ch6-b32m": {
+      "NCCL_P2P_USE_CUDA_MEMCPY": "1",
+      "NCCL_P2P_LEVEL": "SYS",
+      "NCCL_SHM_DISABLE": "1",
+      "NCCL_PROTO": "Simple",
+      "NCCL_ALGO": "Ring",
+      "NCCL_MIN_NCHANNELS": "6",
+      "NCCL_MAX_NCHANNELS": "6",
+      "NCCL_BUFFSIZE": "33554432"
+    }
+  },
+  "ours_candidates": {
+    "ll-1-256": {
+      "mode": "ll",
+      "blocks": 1,
+      "threads": 256,
+      "end": 4194304
+    },
+    "ll-1-1024": {
+      "mode": "ll",
+      "blocks": 1,
+      "threads": 1024,
+      "end": 4194304
+    },
+    "ll-4-256": {
+      "mode": "ll",
+      "blocks": 4,
+      "threads": 256,
+      "end": 4194304
+    },
+    "ll-4-1024": {
+      "mode": "ll",
+      "blocks": 4,
+      "threads": 1024,
+      "end": 4194304
+    },
+    "ll-16-256": {
+      "mode": "ll",
+      "blocks": 16,
+      "threads": 256,
+      "end": 4194304
+    },
+    "ll-16-1024": {
+      "mode": "ll",
+      "blocks": 16,
+      "threads": 1024,
+      "end": 4194304
+    },
+    "ll-32-256": {
+      "mode": "ll",
+      "blocks": 32,
+      "threads": 256,
+      "end": 4194304
+    },
+    "ll-32-1024": {
+      "mode": "ll",
+      "blocks": 32,
+      "threads": 1024,
+      "end": 4194304
+    },
+    "put-4": {
+      "mode": "put",
+      "blocks": 4,
+      "threads": 256
+    },
+    "put-16": {
+      "mode": "put",
+      "blocks": 16,
+      "threads": 256
+    },
+    "put-64": {
+      "mode": "put",
+      "blocks": 64,
+      "threads": 256
+    },
+    "drained-ce-16": {
+      "mode": "drained-ce",
+      "blocks": 16,
+      "threads": 512,
+      "begin": 1024
+    },
+    "drained-ce-64": {
+      "mode": "drained-ce",
+      "blocks": 64,
+      "threads": 512,
+      "begin": 1024
+    },
+    "chunk-ce-1-1m": {
+      "mode": "chunk-ce",
+      "blocks": 1,
+      "threads": 512,
+      "tile": 1048576,
+      "begin": 1048576
+    },
+    "chunk-ce-1-4m": {
+      "mode": "chunk-ce",
+      "blocks": 1,
+      "threads": 512,
+      "tile": 4194304,
+      "begin": 1048576
+    },
+    "chunk-ce-1-16m": {
+      "mode": "chunk-ce",
+      "blocks": 1,
+      "threads": 512,
+      "tile": 16777216,
+      "begin": 1048576
+    },
+    "chunk-ce-1-64m": {
+      "mode": "chunk-ce",
+      "blocks": 1,
+      "threads": 512,
+      "tile": 67108864,
+      "begin": 1048576
+    },
+    "chunk-ce-4-1m": {
+      "mode": "chunk-ce",
+      "blocks": 4,
+      "threads": 512,
+      "tile": 1048576,
+      "begin": 1048576
+    },
+    "chunk-ce-4-4m": {
+      "mode": "chunk-ce",
+      "blocks": 4,
+      "threads": 512,
+      "tile": 4194304,
+      "begin": 1048576
+    },
+    "chunk-ce-4-16m": {
+      "mode": "chunk-ce",
+      "blocks": 4,
+      "threads": 512,
+      "tile": 16777216,
+      "begin": 1048576
+    },
+    "chunk-ce-4-64m": {
+      "mode": "chunk-ce",
+      "blocks": 4,
+      "threads": 512,
+      "tile": 67108864,
+      "begin": 1048576
+    },
+    "chunk-ce-16-1m": {
+      "mode": "chunk-ce",
+      "blocks": 16,
+      "threads": 512,
+      "tile": 1048576,
+      "begin": 1048576
+    },
+    "chunk-ce-16-4m": {
+      "mode": "chunk-ce",
+      "blocks": 16,
+      "threads": 512,
+      "tile": 4194304,
+      "begin": 1048576
+    },
+    "chunk-ce-16-16m": {
+      "mode": "chunk-ce",
+      "blocks": 16,
+      "threads": 512,
+      "tile": 16777216,
+      "begin": 1048576
+    },
+    "chunk-ce-16-64m": {
+      "mode": "chunk-ce",
+      "blocks": 16,
+      "threads": 512,
+      "tile": 67108864,
+      "begin": 1048576
+    },
+    "chunk-ce-1-4m-w4": {
+      "mode": "chunk-ce",
+      "blocks": 1,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 4,
+      "begin": 1048576
+    },
+    "chunk-ce-1-4m-w8": {
+      "mode": "chunk-ce",
+      "blocks": 1,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "chunk-ce-1-16m-w4": {
+      "mode": "chunk-ce",
+      "blocks": 1,
+      "threads": 256,
+      "tile": 16777216,
+      "workers": 4,
+      "begin": 1048576
+    },
+    "chunk-ce-1-16m-w8": {
+      "mode": "chunk-ce",
+      "blocks": 1,
+      "threads": 256,
+      "tile": 16777216,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "chunk-ce-1-64m-w4": {
+      "mode": "chunk-ce",
+      "blocks": 1,
+      "threads": 256,
+      "tile": 67108864,
+      "workers": 4,
+      "begin": 1048576
+    },
+    "chunk-ce-1-64m-w8": {
+      "mode": "chunk-ce",
+      "blocks": 1,
+      "threads": 256,
+      "tile": 67108864,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "chunk-ce-4-4m-w4": {
+      "mode": "chunk-ce",
+      "blocks": 4,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 4,
+      "begin": 1048576
+    },
+    "chunk-ce-4-4m-w8": {
+      "mode": "chunk-ce",
+      "blocks": 4,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "chunk-ce-4-16m-w4": {
+      "mode": "chunk-ce",
+      "blocks": 4,
+      "threads": 256,
+      "tile": 16777216,
+      "workers": 4,
+      "begin": 1048576
+    },
+    "chunk-ce-4-16m-w8": {
+      "mode": "chunk-ce",
+      "blocks": 4,
+      "threads": 256,
+      "tile": 16777216,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "chunk-ce-4-64m-w4": {
+      "mode": "chunk-ce",
+      "blocks": 4,
+      "threads": 256,
+      "tile": 67108864,
+      "workers": 4,
+      "begin": 1048576
+    },
+    "chunk-ce-4-64m-w8": {
+      "mode": "chunk-ce",
+      "blocks": 4,
+      "threads": 256,
+      "tile": 67108864,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "chunk-ce-8-4m-w4": {
+      "mode": "chunk-ce",
+      "blocks": 8,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 4,
+      "begin": 1048576
+    },
+    "chunk-ce-8-4m-w8": {
+      "mode": "chunk-ce",
+      "blocks": 8,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "chunk-ce-8-16m-w4": {
+      "mode": "chunk-ce",
+      "blocks": 8,
+      "threads": 256,
+      "tile": 16777216,
+      "workers": 4,
+      "begin": 1048576
+    },
+    "chunk-ce-8-16m-w8": {
+      "mode": "chunk-ce",
+      "blocks": 8,
+      "threads": 256,
+      "tile": 16777216,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "chunk-ce-8-64m-w4": {
+      "mode": "chunk-ce",
+      "blocks": 8,
+      "threads": 256,
+      "tile": 67108864,
+      "workers": 4,
+      "begin": 1048576
+    },
+    "chunk-ce-8-64m-w8": {
+      "mode": "chunk-ce",
+      "blocks": 8,
+      "threads": 256,
+      "tile": 67108864,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "chunk-ce-16-4m-w4": {
+      "mode": "chunk-ce",
+      "blocks": 16,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 4,
+      "begin": 1048576
+    },
+    "chunk-ce-16-4m-w8": {
+      "mode": "chunk-ce",
+      "blocks": 16,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "chunk-ce-16-16m-w4": {
+      "mode": "chunk-ce",
+      "blocks": 16,
+      "threads": 256,
+      "tile": 16777216,
+      "workers": 4,
+      "begin": 1048576
+    },
+    "chunk-ce-16-16m-w8": {
+      "mode": "chunk-ce",
+      "blocks": 16,
+      "threads": 256,
+      "tile": 16777216,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "chunk-ce-16-64m-w4": {
+      "mode": "chunk-ce",
+      "blocks": 16,
+      "threads": 256,
+      "tile": 67108864,
+      "workers": 4,
+      "begin": 1048576
+    },
+    "chunk-ce-16-64m-w8": {
+      "mode": "chunk-ce",
+      "blocks": 16,
+      "threads": 256,
+      "tile": 67108864,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "chunk-ce-1-4m-s3": {
+      "mode": "chunk-ce",
+      "blocks": 1,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 8,
+      "streams": 3,
+      "begin": 1048576
+    },
+    "chunk-ce-1-16m-s3": {
+      "mode": "chunk-ce",
+      "blocks": 1,
+      "threads": 256,
+      "tile": 16777216,
+      "workers": 8,
+      "streams": 3,
+      "begin": 1048576
+    },
+    "chunk-ce-1-64m-s3": {
+      "mode": "chunk-ce",
+      "blocks": 1,
+      "threads": 256,
+      "tile": 67108864,
+      "workers": 8,
+      "streams": 3,
+      "begin": 1048576
+    },
+    "chunk-ce-4-4m-s3": {
+      "mode": "chunk-ce",
+      "blocks": 4,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 8,
+      "streams": 3,
+      "begin": 1048576
+    },
+    "chunk-ce-4-16m-s3": {
+      "mode": "chunk-ce",
+      "blocks": 4,
+      "threads": 256,
+      "tile": 16777216,
+      "workers": 8,
+      "streams": 3,
+      "begin": 1048576
+    },
+    "chunk-ce-4-64m-s3": {
+      "mode": "chunk-ce",
+      "blocks": 4,
+      "threads": 256,
+      "tile": 67108864,
+      "workers": 8,
+      "streams": 3,
+      "begin": 1048576
+    },
+    "chunk-ce-8-4m-s3": {
+      "mode": "chunk-ce",
+      "blocks": 8,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 8,
+      "streams": 3,
+      "begin": 1048576
+    },
+    "chunk-ce-8-16m-s3": {
+      "mode": "chunk-ce",
+      "blocks": 8,
+      "threads": 256,
+      "tile": 16777216,
+      "workers": 8,
+      "streams": 3,
+      "begin": 1048576
+    },
+    "chunk-ce-8-64m-s3": {
+      "mode": "chunk-ce",
+      "blocks": 8,
+      "threads": 256,
+      "tile": 67108864,
+      "workers": 8,
+      "streams": 3,
+      "begin": 1048576
+    },
+    "chunk-ce-16-4m-s3": {
+      "mode": "chunk-ce",
+      "blocks": 16,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 8,
+      "streams": 3,
+      "begin": 1048576
+    },
+    "chunk-ce-16-16m-s3": {
+      "mode": "chunk-ce",
+      "blocks": 16,
+      "threads": 256,
+      "tile": 16777216,
+      "workers": 8,
+      "streams": 3,
+      "begin": 1048576
+    },
+    "chunk-ce-16-64m-s3": {
+      "mode": "chunk-ce",
+      "blocks": 16,
+      "threads": 256,
+      "tile": 67108864,
+      "workers": 8,
+      "streams": 3,
+      "begin": 1048576
+    },
+    "host-ce-1-4m": {
+      "mode": "host-ce",
+      "blocks": 1,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "host-ce-1-16m": {
+      "mode": "host-ce",
+      "blocks": 1,
+      "threads": 256,
+      "tile": 16777216,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "host-ce-1-64m": {
+      "mode": "host-ce",
+      "blocks": 1,
+      "threads": 256,
+      "tile": 67108864,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "host-ce-1-256m": {
+      "mode": "host-ce",
+      "blocks": 1,
+      "threads": 256,
+      "tile": 268435456,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "host-ce-4-4m": {
+      "mode": "host-ce",
+      "blocks": 4,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "host-ce-4-16m": {
+      "mode": "host-ce",
+      "blocks": 4,
+      "threads": 256,
+      "tile": 16777216,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "host-ce-4-64m": {
+      "mode": "host-ce",
+      "blocks": 4,
+      "threads": 256,
+      "tile": 67108864,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "host-ce-4-256m": {
+      "mode": "host-ce",
+      "blocks": 4,
+      "threads": 256,
+      "tile": 268435456,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "host-ce-8-4m": {
+      "mode": "host-ce",
+      "blocks": 8,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "host-ce-8-16m": {
+      "mode": "host-ce",
+      "blocks": 8,
+      "threads": 256,
+      "tile": 16777216,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "host-ce-8-64m": {
+      "mode": "host-ce",
+      "blocks": 8,
+      "threads": 256,
+      "tile": 67108864,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "host-ce-8-256m": {
+      "mode": "host-ce",
+      "blocks": 8,
+      "threads": 256,
+      "tile": 268435456,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "host-ce-16-4m": {
+      "mode": "host-ce",
+      "blocks": 16,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "host-ce-16-16m": {
+      "mode": "host-ce",
+      "blocks": 16,
+      "threads": 256,
+      "tile": 16777216,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "host-ce-16-64m": {
+      "mode": "host-ce",
+      "blocks": 16,
+      "threads": 256,
+      "tile": 67108864,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "host-ce-16-256m": {
+      "mode": "host-ce",
+      "blocks": 16,
+      "threads": 256,
+      "tile": 268435456,
+      "workers": 8,
+      "begin": 1048576
+    },
+    "chunk-ce-8-1m-w4-s3": {
+      "mode": "chunk-ce",
+      "blocks": 8,
+      "threads": 256,
+      "tile": 1048576,
+      "workers": 4,
+      "streams": 3,
+      "begin": 1048576
+    },
+    "chunk-ce-8-4m-w4-s3": {
+      "mode": "chunk-ce",
+      "blocks": 8,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 4,
+      "streams": 3,
+      "begin": 1048576
+    },
+    "chunk-ce-16-1m-w4-s3": {
+      "mode": "chunk-ce",
+      "blocks": 16,
+      "threads": 256,
+      "tile": 1048576,
+      "workers": 4,
+      "streams": 3,
+      "begin": 1048576
+    },
+    "chunk-ce-16-4m-w4-s3": {
+      "mode": "chunk-ce",
+      "blocks": 16,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 4,
+      "streams": 3,
+      "begin": 1048576
+    },
+    "chunk-ce-32-1m-w4-s3": {
+      "mode": "chunk-ce",
+      "blocks": 32,
+      "threads": 256,
+      "tile": 1048576,
+      "workers": 4,
+      "streams": 3,
+      "begin": 1048576
+    },
+    "chunk-ce-32-4m-w4-s3": {
+      "mode": "chunk-ce",
+      "blocks": 32,
+      "threads": 256,
+      "tile": 4194304,
+      "workers": 4,
+      "streams": 3,
+      "begin": 1048576
+    },
+    "staged-ce-32": {
+      "mode": "staged-ce",
+      "blocks": 32,
+      "threads": 512,
+      "begin": 1024
+    },
+    "staged-ce-64": {
+      "mode": "staged-ce",
+      "blocks": 64,
+      "threads": 512,
+      "begin": 1024
+    },
+    "staged-ce-128": {
+      "mode": "staged-ce",
+      "blocks": 128,
+      "threads": 512,
+      "begin": 1024
+    },
+    "drained-ce-128": {
+      "mode": "drained-ce",
+      "blocks": 128,
+      "threads": 512,
+      "begin": 1024
+    },
+    "ring-ce-1-32m": {
+      "mode": "ring-ce",
+      "blocks": 1,
+      "workers": 128,
+      "threads": 256,
+      "tile": 33554432,
+      "begin": 1024
+    },
+    "ring-ce-1-128m": {
+      "mode": "ring-ce",
+      "blocks": 1,
+      "workers": 128,
+      "threads": 256,
+      "tile": 134217728,
+      "begin": 1024
+    },
+    "ring-ce-1-256m": {
+      "mode": "ring-ce",
+      "blocks": 1,
+      "workers": 128,
+      "threads": 256,
+      "tile": 268435456,
+      "begin": 1024
+    },
+    "ring-ce-1-1024m": {
+      "mode": "ring-ce",
+      "blocks": 1,
+      "workers": 128,
+      "threads": 256,
+      "tile": 1073741824,
+      "begin": 1024
+    },
+    "ring-ce-2-32m": {
+      "mode": "ring-ce",
+      "blocks": 2,
+      "workers": 64,
+      "threads": 256,
+      "tile": 33554432,
+      "begin": 1024
+    },
+    "ring-ce-2-128m": {
+      "mode": "ring-ce",
+      "blocks": 2,
+      "workers": 64,
+      "threads": 256,
+      "tile": 134217728,
+      "begin": 1024
+    },
+    "ring-ce-2-256m": {
+      "mode": "ring-ce",
+      "blocks": 2,
+      "workers": 64,
+      "threads": 256,
+      "tile": 268435456,
+      "begin": 1024
+    },
+    "ring-ce-2-1024m": {
+      "mode": "ring-ce",
+      "blocks": 2,
+      "workers": 64,
+      "threads": 256,
+      "tile": 1073741824,
+      "begin": 1024
+    },
+    "ring-ce-4-32m": {
+      "mode": "ring-ce",
+      "blocks": 4,
+      "workers": 32,
+      "threads": 256,
+      "tile": 33554432,
+      "begin": 1024
+    },
+    "ring-ce-4-128m": {
+      "mode": "ring-ce",
+      "blocks": 4,
+      "workers": 32,
+      "threads": 256,
+      "tile": 134217728,
+      "begin": 1024
+    },
+    "ring-ce-4-256m": {
+      "mode": "ring-ce",
+      "blocks": 4,
+      "workers": 32,
+      "threads": 256,
+      "tile": 268435456,
+      "begin": 1024
+    },
+    "ring-ce-4-1024m": {
+      "mode": "ring-ce",
+      "blocks": 4,
+      "workers": 32,
+      "threads": 256,
+      "tile": 1073741824,
+      "begin": 1024
+    },
+    "ring-ce-8-32m": {
+      "mode": "ring-ce",
+      "blocks": 8,
+      "workers": 16,
+      "threads": 256,
+      "tile": 33554432,
+      "begin": 1024
+    },
+    "ring-ce-8-128m": {
+      "mode": "ring-ce",
+      "blocks": 8,
+      "workers": 16,
+      "threads": 256,
+      "tile": 134217728,
+      "begin": 1024
+    },
+    "ring-ce-8-256m": {
+      "mode": "ring-ce",
+      "blocks": 8,
+      "workers": 16,
+      "threads": 256,
+      "tile": 268435456,
+      "begin": 1024
+    },
+    "ring-ce-8-1024m": {
+      "mode": "ring-ce",
+      "blocks": 8,
+      "workers": 16,
+      "threads": 256,
+      "tile": 1073741824,
+      "begin": 1024
+    },
+    "ring-ce-1-8m-t512": {
+      "mode": "ring-ce",
+      "blocks": 1,
+      "workers": 128,
+      "threads": 512,
+      "tile": 8388608,
+      "begin": 1024
+    },
+    "ring-ce-1-8m-t1024": {
+      "mode": "ring-ce",
+      "blocks": 1,
+      "workers": 128,
+      "threads": 1024,
+      "tile": 8388608,
+      "begin": 1024
+    },
+    "ring-ce-1-16m-t512": {
+      "mode": "ring-ce",
+      "blocks": 1,
+      "workers": 128,
+      "threads": 512,
+      "tile": 16777216,
+      "begin": 1024
+    },
+    "ring-ce-1-16m-t1024": {
+      "mode": "ring-ce",
+      "blocks": 1,
+      "workers": 128,
+      "threads": 1024,
+      "tile": 16777216,
+      "begin": 1024
+    },
+    "ring-ce-1-32m-t512": {
+      "mode": "ring-ce",
+      "blocks": 1,
+      "workers": 128,
+      "threads": 512,
+      "tile": 33554432,
+      "begin": 1024
+    },
+    "ring-ce-1-32m-t1024": {
+      "mode": "ring-ce",
+      "blocks": 1,
+      "workers": 128,
+      "threads": 1024,
+      "tile": 33554432,
+      "begin": 1024
+    },
+    "ring-ce-1-64m-t512": {
+      "mode": "ring-ce",
+      "blocks": 1,
+      "workers": 128,
+      "threads": 512,
+      "tile": 67108864,
+      "begin": 1024
+    },
+    "ring-ce-1-64m-t1024": {
+      "mode": "ring-ce",
+      "blocks": 1,
+      "workers": 128,
+      "threads": 1024,
+      "tile": 67108864,
+      "begin": 1024
+    },
+    "ring-ce-1-256m-t512": {
+      "mode": "ring-ce",
+      "blocks": 1,
+      "workers": 128,
+      "threads": 512,
+      "tile": 268435456,
+      "begin": 1024
+    },
+    "ring-ce-1-256m-t1024": {
+      "mode": "ring-ce",
+      "blocks": 1,
+      "workers": 128,
+      "threads": 1024,
+      "tile": 268435456,
+      "begin": 1024
+    },
+    "ring-ce-2-8m-t512": {
+      "mode": "ring-ce",
+      "blocks": 2,
+      "workers": 64,
+      "threads": 512,
+      "tile": 8388608,
+      "begin": 1024
+    },
+    "ring-ce-2-8m-t1024": {
+      "mode": "ring-ce",
+      "blocks": 2,
+      "workers": 64,
+      "threads": 1024,
+      "tile": 8388608,
+      "begin": 1024
+    },
+    "ring-ce-2-16m-t512": {
+      "mode": "ring-ce",
+      "blocks": 2,
+      "workers": 64,
+      "threads": 512,
+      "tile": 16777216,
+      "begin": 1024
+    },
+    "ring-ce-2-16m-t1024": {
+      "mode": "ring-ce",
+      "blocks": 2,
+      "workers": 64,
+      "threads": 1024,
+      "tile": 16777216,
+      "begin": 1024
+    },
+    "ring-ce-2-32m-t512": {
+      "mode": "ring-ce",
+      "blocks": 2,
+      "workers": 64,
+      "threads": 512,
+      "tile": 33554432,
+      "begin": 1024
+    },
+    "ring-ce-2-32m-t1024": {
+      "mode": "ring-ce",
+      "blocks": 2,
+      "workers": 64,
+      "threads": 1024,
+      "tile": 33554432,
+      "begin": 1024
+    },
+    "ring-ce-2-64m-t512": {
+      "mode": "ring-ce",
+      "blocks": 2,
+      "workers": 64,
+      "threads": 512,
+      "tile": 67108864,
+      "begin": 1024
+    },
+    "ring-ce-2-64m-t1024": {
+      "mode": "ring-ce",
+      "blocks": 2,
+      "workers": 64,
+      "threads": 1024,
+      "tile": 67108864,
+      "begin": 1024
+    },
+    "ring-ce-2-256m-t512": {
+      "mode": "ring-ce",
+      "blocks": 2,
+      "workers": 64,
+      "threads": 512,
+      "tile": 268435456,
+      "begin": 1024
+    },
+    "ring-ce-2-256m-t1024": {
+      "mode": "ring-ce",
+      "blocks": 2,
+      "workers": 64,
+      "threads": 1024,
+      "tile": 268435456,
+      "begin": 1024
+    },
+    "ring-ce-4-8m-t512": {
+      "mode": "ring-ce",
+      "blocks": 4,
+      "workers": 32,
+      "threads": 512,
+      "tile": 8388608,
+      "begin": 1024
+    },
+    "ring-ce-4-8m-t1024": {
+      "mode": "ring-ce",
+      "blocks": 4,
+      "workers": 32,
+      "threads": 1024,
+      "tile": 8388608,
+      "begin": 1024
+    },
+    "ring-ce-4-16m-t512": {
+      "mode": "ring-ce",
+      "blocks": 4,
+      "workers": 32,
+      "threads": 512,
+      "tile": 16777216,
+      "begin": 1024
+    },
+    "ring-ce-4-16m-t1024": {
+      "mode": "ring-ce",
+      "blocks": 4,
+      "workers": 32,
+      "threads": 1024,
+      "tile": 16777216,
+      "begin": 1024
+    },
+    "ring-ce-4-32m-t512": {
+      "mode": "ring-ce",
+      "blocks": 4,
+      "workers": 32,
+      "threads": 512,
+      "tile": 33554432,
+      "begin": 1024
+    },
+    "ring-ce-4-32m-t1024": {
+      "mode": "ring-ce",
+      "blocks": 4,
+      "workers": 32,
+      "threads": 1024,
+      "tile": 33554432,
+      "begin": 1024
+    },
+    "ring-ce-4-64m-t512": {
+      "mode": "ring-ce",
+      "blocks": 4,
+      "workers": 32,
+      "threads": 512,
+      "tile": 67108864,
+      "begin": 1024
+    },
+    "ring-ce-4-64m-t1024": {
+      "mode": "ring-ce",
+      "blocks": 4,
+      "workers": 32,
+      "threads": 1024,
+      "tile": 67108864,
+      "begin": 1024
+    },
+    "ring-ce-4-256m-t512": {
+      "mode": "ring-ce",
+      "blocks": 4,
+      "workers": 32,
+      "threads": 512,
+      "tile": 268435456,
+      "begin": 1024
+    },
+    "ring-ce-4-256m-t1024": {
+      "mode": "ring-ce",
+      "blocks": 4,
+      "workers": 32,
+      "threads": 1024,
+      "tile": 268435456,
+      "begin": 1024
+    },
+    "ring-host-ce-1-32m": {
+      "mode": "ring-host-ce",
+      "blocks": 1,
+      "workers": 128,
+      "threads": 256,
+      "tile": 33554432,
+      "begin": 1024
+    },
+    "ring-host-ce-1-128m": {
+      "mode": "ring-host-ce",
+      "blocks": 1,
+      "workers": 128,
+      "threads": 256,
+      "tile": 134217728,
+      "begin": 1024
+    },
+    "ring-host-ce-1-256m": {
+      "mode": "ring-host-ce",
+      "blocks": 1,
+      "workers": 128,
+      "threads": 256,
+      "tile": 268435456,
+      "begin": 1024
+    },
+    "ring-host-ce-1-1024m": {
+      "mode": "ring-host-ce",
+      "blocks": 1,
+      "workers": 128,
+      "threads": 256,
+      "tile": 1073741824,
+      "begin": 1024
+    },
+    "ring-host-ce-2-32m": {
+      "mode": "ring-host-ce",
+      "blocks": 2,
+      "workers": 64,
+      "threads": 256,
+      "tile": 33554432,
+      "begin": 1024
+    },
+    "ring-host-ce-2-128m": {
+      "mode": "ring-host-ce",
+      "blocks": 2,
+      "workers": 64,
+      "threads": 256,
+      "tile": 134217728,
+      "begin": 1024
+    },
+    "ring-host-ce-2-256m": {
+      "mode": "ring-host-ce",
+      "blocks": 2,
+      "workers": 64,
+      "threads": 256,
+      "tile": 268435456,
+      "begin": 1024
+    },
+    "ring-host-ce-2-1024m": {
+      "mode": "ring-host-ce",
+      "blocks": 2,
+      "workers": 64,
+      "threads": 256,
+      "tile": 1073741824,
+      "begin": 1024
+    },
+    "ring-host-ce-4-32m": {
+      "mode": "ring-host-ce",
+      "blocks": 4,
+      "workers": 32,
+      "threads": 256,
+      "tile": 33554432,
+      "begin": 1024
+    },
+    "ring-host-ce-4-128m": {
+      "mode": "ring-host-ce",
+      "blocks": 4,
+      "workers": 32,
+      "threads": 256,
+      "tile": 134217728,
+      "begin": 1024
+    },
+    "ring-host-ce-4-256m": {
+      "mode": "ring-host-ce",
+      "blocks": 4,
+      "workers": 32,
+      "threads": 256,
+      "tile": 268435456,
+      "begin": 1024
+    },
+    "ring-host-ce-4-1024m": {
+      "mode": "ring-host-ce",
+      "blocks": 4,
+      "workers": 32,
+      "threads": 256,
+      "tile": 1073741824,
+      "begin": 1024
+    },
+    "ring-ce-1-1024m-w16-t256": {
+      "mode": "ring-ce",
+      "blocks": 1,
+      "workers": 16,
+      "threads": 256,
+      "tile": 1073741824,
+      "begin": 1024
+    },
+    "ring-ce-1-1024m-w16-t512": {
+      "mode": "ring-ce",
+      "blocks": 1,
+      "workers": 16,
+      "threads": 512,
+      "tile": 1073741824,
+      "begin": 1024
+    },
+    "ring-ce-1-1024m-w16-t1024": {
+      "mode": "ring-ce",
+      "blocks": 1,
+      "workers": 16,
+      "threads": 1024,
+      "tile": 1073741824,
+      "begin": 1024
+    },
+    "ring-ce-1-1024m-w32-t256": {
+      "mode": "ring-ce",
+      "blocks": 1,
+      "workers": 32,
+      "threads": 256,
+      "tile": 1073741824,
+      "begin": 1024
+    },
+    "ring-ce-1-1024m-w32-t512": {
+      "mode": "ring-ce",
+      "blocks": 1,
+      "workers": 32,
+      "threads": 512,
+      "tile": 1073741824,
+      "begin": 1024
+    },
+    "ring-ce-1-1024m-w32-t1024": {
+      "mode": "ring-ce",
+      "blocks": 1,
+      "workers": 32,
+      "threads": 1024,
+      "tile": 1073741824,
+      "begin": 1024
+    },
+    "ring-ce-1-1024m-w64-t256": {
+      "mode": "ring-ce",
+      "blocks": 1,
+      "workers": 64,
+      "threads": 256,
+      "tile": 1073741824,
+      "begin": 1024
+    },
+    "ring-ce-1-1024m-w64-t512": {
+      "mode": "ring-ce",
+      "blocks": 1,
+      "workers": 64,
+      "threads": 512,
+      "tile": 1073741824,
+      "begin": 1024
+    },
+    "ring-ce-1-1024m-w64-t1024": {
+      "mode": "ring-ce",
+      "blocks": 1,
+      "workers": 64,
+      "threads": 1024,
+      "tile": 1073741824,
+      "begin": 1024
+    },
+    "ring-ce-1-1024m-w128-t256": {
+      "mode": "ring-ce",
+      "blocks": 1,
+      "workers": 128,
+      "threads": 256,
+      "tile": 1073741824,
+      "begin": 1024
+    },
+    "ring-ce-1-1024m-w128-t512": {
+      "mode": "ring-ce",
+      "blocks": 1,
+      "workers": 128,
+      "threads": 512,
+      "tile": 1073741824,
+      "begin": 1024
+    },
+    "ring-ce-1-1024m-w128-t1024": {
+      "mode": "ring-ce",
+      "blocks": 1,
+      "workers": 128,
+      "threads": 1024,
+      "tile": 1073741824,
+      "begin": 1024
+    },
+    "ring-host-ce-1-1024m-w16-t256": {
+      "mode": "ring-host-ce",
+      "blocks": 1,
+      "workers": 16,
+      "threads": 256,
+      "tile": 1073741824,
+      "begin": 1024
+    },
+    "ring-host-ce-1-1024m-w16-t512": {
+      "mode": "ring-host-ce",
+      "blocks": 1,
+      "workers": 16,
+      "threads": 512,
+      "tile": 1073741824,
+      "begin": 1024
+    },
+    "ring-host-ce-1-1024m-w16-t1024": {
+      "mode": "ring-host-ce",
+      "blocks": 1,
+      "workers": 16,
+      "threads": 1024,
+      "tile": 1073741824,
+      "begin": 1024
+    },
+    "ring-host-ce-1-1024m-w32-t256": {
+      "mode": "ring-host-ce",
+      "blocks": 1,
+      "workers": 32,
+      "threads": 256,
+      "tile": 1073741824,
+      "begin": 1024
+    },
+    "ring-host-ce-1-1024m-w32-t512": {
+      "mode": "ring-host-ce",
+      "blocks": 1,
+      "workers": 32,
+      "threads": 512,
+      "tile": 1073741824,
+      "begin": 1024
+    },
+    "ring-host-ce-1-1024m-w32-t1024": {
+      "mode": "ring-host-ce",
+      "blocks": 1,
+      "workers": 32,
+      "threads": 1024,
+      "tile": 1073741824,
+      "begin": 1024
+    },
+    "ring-host-ce-1-1024m-w64-t256": {
+      "mode": "ring-host-ce",
+      "blocks": 1,
+      "workers": 64,
+      "threads": 256,
+      "tile": 1073741824,
+      "begin": 1024
+    },
+    "ring-host-ce-1-1024m-w64-t512": {
+      "mode": "ring-host-ce",
+      "blocks": 1,
+      "workers": 64,
+      "threads": 512,
+      "tile": 1073741824,
+      "begin": 1024
+    },
+    "ring-host-ce-1-1024m-w64-t1024": {
+      "mode": "ring-host-ce",
+      "blocks": 1,
+      "workers": 64,
+      "threads": 1024,
+      "tile": 1073741824,
+      "begin": 1024
+    },
+    "ring-host-ce-1-1024m-w128-t256": {
+      "mode": "ring-host-ce",
+      "blocks": 1,
+      "workers": 128,
+      "threads": 256,
+      "tile": 1073741824,
+      "begin": 1024
+    },
+    "ring-host-ce-1-1024m-w128-t512": {
+      "mode": "ring-host-ce",
+      "blocks": 1,
+      "workers": 128,
+      "threads": 512,
+      "tile": 1073741824,
+      "begin": 1024
+    },
+    "ring-host-ce-1-1024m-w128-t1024": {
+      "mode": "ring-host-ce",
+      "blocks": 1,
+      "workers": 128,
+      "threads": 1024,
+      "tile": 1073741824,
+      "begin": 1024
+    },
+    "ring-ce-2-8m-t512-s2": {
+      "mode": "ring-ce",
+      "blocks": 2,
+      "workers": 64,
+      "threads": 512,
+      "tile": 8388608,
+      "begin": 1024,
+      "streams": 2
+    },
+    "ring-ce-2-8m-t1024-s2": {
+      "mode": "ring-ce",
+      "blocks": 2,
+      "workers": 64,
+      "threads": 1024,
+      "tile": 8388608,
+      "begin": 1024,
+      "streams": 2
+    },
+    "ring-ce-2-16m-t512-s2": {
+      "mode": "ring-ce",
+      "blocks": 2,
+      "workers": 64,
+      "threads": 512,
+      "tile": 16777216,
+      "begin": 1024,
+      "streams": 2
+    },
+    "ring-ce-2-16m-t1024-s2": {
+      "mode": "ring-ce",
+      "blocks": 2,
+      "workers": 64,
+      "threads": 1024,
+      "tile": 16777216,
+      "begin": 1024,
+      "streams": 2
+    },
+    "ring-ce-2-32m-s2": {
+      "mode": "ring-ce",
+      "blocks": 2,
+      "workers": 64,
+      "threads": 256,
+      "tile": 33554432,
+      "begin": 1024,
+      "streams": 2
+    },
+    "ring-ce-2-32m-t512-s2": {
+      "mode": "ring-ce",
+      "blocks": 2,
+      "workers": 64,
+      "threads": 512,
+      "tile": 33554432,
+      "begin": 1024,
+      "streams": 2
+    },
+    "ring-ce-2-32m-t1024-s2": {
+      "mode": "ring-ce",
+      "blocks": 2,
+      "workers": 64,
+      "threads": 1024,
+      "tile": 33554432,
+      "begin": 1024,
+      "streams": 2
+    },
+    "ring-ce-2-64m-t512-s2": {
+      "mode": "ring-ce",
+      "blocks": 2,
+      "workers": 64,
+      "threads": 512,
+      "tile": 67108864,
+      "begin": 1024,
+      "streams": 2
+    },
+    "ring-ce-2-256m-s2": {
+      "mode": "ring-ce",
+      "blocks": 2,
+      "workers": 64,
+      "threads": 256,
+      "tile": 268435456,
+      "begin": 1024,
+      "streams": 2
+    },
+    "ring-ce-4-32m-s2": {
+      "mode": "ring-ce",
+      "blocks": 4,
+      "workers": 32,
+      "threads": 256,
+      "tile": 33554432,
+      "begin": 1024,
+      "streams": 2
+    }
+  },
+  "calibration_hashes": {
+    "calibrate-3-ours-put-64.txt": "1f35efc8edea5ef323b62be4a413f6c7d061504d5ec70076345e9671cbdf537f",
+    "calibrate-3-ours-ring-host-ce-2-256m.json": "9fd6136af8cbf48ee39a514b412e33726cf61e3937e96b8f54bf2bda4c7ff420",
+    "calibrate-3-ours-ring-ce-2-32m-t1024.json": "0992a4319ec08b618104323f0563879440ea53364c52804d75d363d0fbc30ecb",
+    "calibrate-3-ours-put-64.json": "f9194f49dd56f771d98f1fdcb715b67b472a80d7af45d6030421fea6fa1e7321",
+    "calibrate-2-nccl-ce-ring.txt": "8a7c30a1a50e48dab0548f417d1b7d349f27e5719333afc1857b06ca453b5cf7",
+    "calibrate-1-nccl-ce-ring-ch1.txt": "758fe3ca0c0a46d2da476956d293b948b86cfa2a243eccc36f8234450b6ede06",
+    "calibrate-3-nccl-ce-ring-ch4-b1m.txt": "9706007605375bed998e8c9441751a65f3fb0ccd51524d120f13be83092df6c2",
+    "calibrate-2-ours-put-64.txt": "c7af17a9796f150dfba45a85a99b4a1dc271fc35f8ce17fe9ac99c2cdb4171ec",
+    "calibrate-1-ours-ring-ce-2-64m-t512.txt": "72ceff52ce22e5da25c9fc1508756801f27f1e0e5ed760f240186d14d88c316c",
+    "calibrate-1-ours-ring-ce-2-32m-t1024.json": "4350451307f5acdf3e6daea469a70882a35175a98c3989122e6e28ff0926aafe",
+    "calibrate-1-ours-ring-ce-2-8m-t1024-s2.txt": "6d7ced441f80c95f6987710db120b5400a7eca565e50269324f33405ebc0456c",
+    "calibrate-2-ours-put-4.json": "46c7971fb909aa48c3dd21dfd44e617f894d460fea3fbb0f0a3680a02e7c38b0",
+    "calibrate-3-nccl-ce-ring-ch8-b16m.txt": "3c78abce1aee0a2897da568d6dd94e4e8def999aa7e8203420406d9950bed31d",
+    "calibrate-2-nccl-ce-ring-ch8.json": "c00dc4506529ff0ab9538faff3d50cf5736347ea113d1dd41985a4d320ffc4fd",
+    "calibrate-2-ours-ring-ce-2-64m-t512.txt": "d8c08e940d9e9a568681f2ad0c7c6ba77455fea7fb9d3069cb8867ed1b2143b0",
+    "calibrate-1-nccl-ce-ring-ch2-b64m.json": "d8369cd5f621b9cd4840774853c5cde2d72ff200c2ca691b3bdac72c309e804f",
+    "calibrate-1-ours-ring-ce-1-1024m-w64-t512.txt": "6741344c86e643eebf2c5e510b570ad206880005261e9b3effd93206b32dea57",
+    "calibrate-2-ours-ll-16-256.txt": "157bf8408edee83ac2ab2fd11239685ee0e8eb38b9d3904745d61072d97ce266",
+    "calibrate-1-nccl-ce-ring-ch4.txt": "8b636cdfb03b312ec01a53b6d6c42f76621bed580b9126b55c3d9f3b271d0854",
+    "calibrate-3-ours-ll-16-256.txt": "450f1ee46c3506897456a41a7243d97799826abc86b5756eaa2120b8ce8f9230",
+    "calibrate-3-nccl-ce-ring-ch8-b32m.json": "de176bc340b785c4ceab536546c36e11ce162163fb1673d3cc65985a150c6468",
+    "calibrate-3-nccl-ce-ring-ch6-b32m.json": "178d6ece5fbe7a40812c10711b7f37cf33658537873af314c432dac1d9ceb111",
+    "calibrate-3-nccl-ce-ring-ch2-b16m.json": "4b7043974d4435067f9ec1feae3ce6edbb1608bb1945b426b9df239486ef6b77",
+    "calibrate-1-nccl-ce-ring-ch8-b1m.json": "d66deeaea9aaacccb9d014346a2775b45243811b9a54ca46f66ea4a2b7243c4b",
+    "calibrate-2-ours-ring-ce-1-1024m-w64-t512.json": "521e411ae3fef0f7ee2aff36acdb1fdeca2cb40c9e0e31ffdd08b53b345a269d",
+    "calibrate-2-nccl-ce-ring-ch8.txt": "c4e3e922395600fe7e27db0deac69a56501d9906877f5f771004002e3b961ab3",
+    "calibrate-1-nccl-ce-ring-ch8-b1m.txt": "dd69b77cda19a0071b442553379ffdf5d5fe1ffd210a034eb041de132f15a851",
+    "calibrate-1-nccl-ce-tree.json": "f85c4030078d832b323b8092b376739e579081e869467433c1fa3d940437386b",
+    "calibrate-2-ours-ring-ce-2-8m-t512-s2.txt": "7e4d462a50fa7237fffe161a2e63e9685dd65da0b9d5ad175a4e59f4660b38aa",
+    "calibrate-2-nccl-ce-ring-ch4.txt": "71da2cd190bd281e43fe3b5073d0c09ca06f8775e82b81639ca9a90907c4d2fb",
+    "calibrate-3-ours-ring-ce-2-256m.txt": "f8b43d2b3f369bab6156ff4a9e108222da181c0d6eb2bbab3b112182e111aa68",
+    "calibrate-1-nccl-ce-ring-ch1-b16m.txt": "69d32885fc63d5e6821cf13724be9d671a6f4cf38c25d63162cfb7c3d538d641",
+    "calibrate-2-ours-ring-ce-4-32m-s2.json": "29c2a8b4ebed03603e08d5697e2d63ef4df9dfca27d2a5e2fd5bbddc25e4d90c",
+    "calibrate-3-ours-ring-ce-2-8m-t1024-s2.txt": "8f9ebc8ad3a93f44d8fb4953ab6c1f4b603b0b6005be872a0b84f42a8946c4cc",
+    "calibrate-2-ours-ring-ce-2-32m-s2.txt": "c0dfb1fb037e2307494e4c3bb02d59d24c4d1b10e27a361eb8a0e52659048c8c",
+    "calibrate-2-ours-ring-ce-1-256m-t1024.txt": "5522fa28de025669671eb61e1a6e63f0e0ac131da0886e029a840029f47cf949",
+    "calibrate-1-nccl-ce-ring-ch2-b16m.txt": "4d07bb9904106690977dc3c8bc491d729aa13dbb3df352017536b45f2b1644a7",
+    "calibrate-2-ours-ll-1-1024.txt": "e525e74978c877fb9fa234e3c1df0b7eb20af7042f073947a94a74a6eeaa0481",
+    "calibrate-2-ours-ring-ce-2-16m-t512-s2.txt": "cba491d26ae977421eda5aaa83f098ffbaedb4b3e6c0adfc9f44c739a3afc13a",
+    "calibrate-2-ours-ring-ce-2-32m-t512-s2.txt": "a839a6815f21c458598cf4222711f1313c8dda4a0ffcf83646aa45b60da8bd3a",
+    "calibrate-3-ours-ring-host-ce-4-128m.txt": "191f51da2d18389cddee09d4b7375c053d05796a46da043a08cd45c5aed1e4b9",
+    "calibrate-1-nccl-ce-ring.txt": "7ef26570e61b7922e806da2181894f62b95b2d8696a67a420d7465f596583077",
+    "calibrate-2-ours-ll-16-1024.json": "e2f638e2226ffba1ad133b0c18e0c3fdec833390f95002cad436b6e2cf883ad7",
+    "calibrate-2-ours-ll-32-256.json": "4467cbbf71c5cbe0902a4dd3d642cbf573f5caee9120ced9980f588489d8d277",
+    "calibrate-2-nccl-ce-ring-ch6-b32m.txt": "ab0590c24604a8b410c38e888b8795f253bea955d3b949626986456ada17fe9b",
+    "calibrate-3-ours-put-16.txt": "8c676b903be6e297557baca578320524c5af90087b8f03d29002755a7fe5093e",
+    "calibrate-1-ours-ring-ce-2-32m-s2.json": "607feaab49b712f9e14393350b16c3c4939136990e2e7d66b9245a548372b52c",
+    "calibrate-2-nccl-ce-ring-ch4-b64m.json": "04898aaf63da19a546cb9b3ecb82879832b65416068c3b5832617a772e35436c",
+    "calibrate-3-nccl-ce-ring-ch8-t128.json": "6a5a43e26aaeac8f05ea2490628de06df1d89647f99078f034f458278428e83e",
+    "calibrate-3-ours-ring-ce-1-1024m-w64-t512.json": "e89fe73d966e1aa6d1959055228b4d8e9ff730d4020b3fcaabdcded84fb483fe",
+    "calibrate-3-ours-put-4.txt": "c8318b1bea054ec6a2aad41db3bbe24236a0cda9c856415d95001424af78803f",
+    "calibrate-2-ours-ring-ce-2-32m-s2.json": "3d0e8c5eb353ec17f40ec250a16af9e3417758bb447859522b54e94b726390d1",
+    "calibrate-3-nccl-ce-ring-ch2-b64m.json": "cb2487488d411bb38237aa73a74a5997d6820101dff681a9cd935e5dc9bd9056",
+    "calibrate-1-ours-ll-32-1024.txt": "812b51f0971d6aadff74774cb29f2912c6b5bf391b4952accddd53c6b813e835",
+    "calibrate-2-ours-ll-16-256.json": "6f50be5b4cbffb5495a6fa3422f2e8cce97521773474db4beace45e0d0b28937",
+    "calibrate-3-ours-ring-ce-2-8m-t1024-s2.json": "ae954d8d614d91d793d534f060f968a7d141b47cc60d382261824883b36880d5",
+    "calibrate-2-ours-ll-4-1024.txt": "abda7b209ae4395da27857afe5c26e04633870ea8e4a772e084f97547956bd2d",
+    "calibrate-3-ours-ring-ce-2-16m-t512-s2.json": "9c6c76ce75da06faf96f6eed6402bd91071d9f0f379e7d2ee7fc83665b485bc0",
+    "calibrate-2-nccl-ce-ring-ch6-b16m.txt": "0de405a185faf707d080b14dfc779e4e9022877b1f5cdf938e845eb20694796a",
+    "calibrate-3-ours-ll-32-256.txt": "da7ec6c6539f9ee8718c9ea54f51a3f57a96d258dc286ebcea506da8e916eb89",
+    "calibrate-3-ours-ring-ce-1-256m-t1024.txt": "84202cd669e0932eaa50aeeb144c2c0a46aefacc7476cac31dca3425215fba1a",
+    "calibrate-2-nccl-ce-ring-ch2-b16m.json": "1004ce452d6b59739ec6afd37e3322d44ba40e468f01f73929a158ebab61e343",
+    "calibrate-1-nccl-ce-ring-ch8-b64m.txt": "fb22e2a66ecbe494f0bd2928b9323fda2eff4d89d3373d910b5b331eb810404d",
+    "calibrate-1-ours-ring-ce-2-32m.txt": "cd04ba40516e3a3978cbb923efffc9a229479ea19ee2ab3d3baa7b8bbf43215d",
+    "calibrate-3-ours-put-16.json": "425c6b9099c57318308ec57baebbc24becae73d93d239a1fd1ae223c1af56407",
+    "calibrate-3-ours-ring-host-ce-1-1024m-w128-t1024.txt": "b3e7aa9bb6c51438165cf4248ad81f8f84609b1cc419ca648c8fadaa09ada4fe",
+    "calibrate-1-ours-ll-16-1024.txt": "6499aed505b6589d66d5e1404f48b5dff84ce20f2eb17415ca6c667391c9fc74",
+    "calibrate-1-nccl-ce-ring-ch4-b32m.json": "9f105ee9e6bccac6826bba1fae2cf4e72f9dd5bd9d70e535de66c8c0127e2ee8",
+    "calibrate-1-ours-ring-ce-2-256m.json": "ff792f09792f91a338e565cef8d1a498b09e62828daf457b8cb4d22a0e7bf92d",
+    "calibrate-2-nccl-ce-ring-ch8-b1m.txt": "3d476e81720395dbc64b9c9abdb6de2e3af0410f1c5124744f3a133b9d85cb8e",
+    "calibrate-1-ours-staged-ce-128.txt": "656abfd8c4716d33d87fedc5041fb0a7242c40afcbca4c0a0e0d949b78d8f314",
+    "calibrate-2-nccl-ce-ring-ch2-b64m.txt": "37229cd3573d009b38f638c0d48a8de651f3ea7e2ba8b23c0cbfdc8c247fc2c7",
+    "calibrate-3-nccl-ce-ring-ch2.txt": "b01a24f249c75c1e0392838b5fb82725f89e1e9fa2d3366bb91485c7915376cd",
+    "calibrate-2-ours-ll-4-256.txt": "c3cde5e80aa6cf4cdb63f0bd0c699a92d220ca17a0f22a087f151d1076ca1be8",
+    "calibrate-3-ours-drained-ce-128.json": "66ac4b788d2fb7924867e3dc671ada54c3400eb972bc377dd7fd8b3ffd47c62b",
+    "calibrate-2-nccl-ce-ring-ch2-b32m.json": "91cf80c7894582200492e4634ae8d5224f6ad5df3aab3b705c3835300e9d4e8e",
+    "calibrate-1-ours-ring-ce-2-64m-t512-s2.json": "de350192a3055bd518ef3881b947287515b93a0bea3a13ef03e8d98d5c0be367",
+    "calibrate-3-ours-ring-ce-2-64m-t512-s2.txt": "e1e097fefcc98584f4dd263a7647da191aff8873d858f1cf46b4bdd7f8605629",
+    "calibrate-3-ours-ring-ce-2-64m-t512.json": "21cc4b12014c4e91026fa75cb6491592953fff46e64f4ccdb744608d1b08912b",
+    "calibrate-3-nccl-ce-ring-ch4-t128.txt": "dcab716f5127425f42f2555c7074f78bbbcce53fce3506140f76e32fd1cd504c",
+    "calibrate-2-ours-put-64.json": "03d49c22da2298517a56943bcdb78201384be1a655277157125a4cbd48001188",
+    "calibrate-3-nccl-ce-ring-ch8.json": "49504971e22db1278aee43fa4f7574e621843b4df0962e6383ad3296c287ff52",
+    "calibrate-3-nccl-ce-ring-ch4-b16m.json": "f02ad6bb2983725cacdac7d2aa9bf4ef16fc2f85bc8a5f18d3673e98674f4439",
+    "calibrate-1-ours-ring-ce-2-16m-t512-s2.json": "7a01e652661f731c0429746b8513c07903ff246b076b74daa854b7a8a315b24e",
+    "calibrate-1-nccl-ce-ring-ch16.json": "d62d73c7c6feb156f273efd149ea9269a3faa00f5ab2a81a1a64ebb64769188f",
+    "calibrate-2-ours-ring-ce-2-32m.txt": "3c659dc9fa55050e2e0696ac59d23a3491810e508d8699dd74841fabd1d43e60",
+    "calibrate-1-nccl-ce-ring-ch2.json": "fb9350a7b35dc54af8683e3f14b6b02a7187bd46c1d77e705867dc82616d7f84",
+    "calibrate-3-nccl-ce-ring-ch4-b32m.txt": "803a10d9dbfc5a7e47ce0c0cd1860b452892e9079bd9d0c5ba7ba8cf9b83f49f",
+    "calibrate-1-ours-put-16.txt": "a5e10da8a8ba111a9bee31076a6c603b82aa84a79f6307215f8ec8f43c72a8fa",
+    "calibrate-3-ours-ring-ce-2-256m-s2.json": "38798979e8c9ad6dbffcd3e86b4d377ac346a6f04a3e962245e6ef2d1630298f",
+    "calibrate-2-ours-ring-ce-2-32m-t1024-s2.json": "bbf3fd3a8f5f446abebbca03778c6ff97a8874957dd33695e473942c236ac6c2",
+    "calibrate-1-ours-ring-host-ce-2-256m.json": "a44279f2ff1773fa5df2255142c65de8e6eabe1653cfdceb9bc28ffcfe566751",
+    "calibrate-1-nccl-ce-ring-ch6-b16m.txt": "d54b6ee74044c3788ea6314041310d6c1ebb12173fc7bbac0e4b5bc9a0f02592",
+    "calibrate-2-nccl-ce-ring-ch2-b16m.txt": "0b6b600e1f31a5f722bb97ba0e2217469785858489f1d4e4c1602d4d3facd918",
+    "calibrate-2-nccl-ce-ring-ch1.json": "839b15be48ba57890dd6795ebc77c42c25be258ef6fc7444c3a3ef57e33f8a1a",
+    "calibrate-1-ours-ll-1-1024.txt": "120039566a69b006ce15b0cf2d88e011127adb44fd31dcea18e243b27cdba32a",
+    "calibrate-2-ours-staged-ce-32.json": "dbc083c91c8516896084cd425dd544d9285a2d970492c362a92c075877fcace1",
+    "calibrate-1-nccl-ce-ring-ch8-b16m.json": "cafaa1be45530f5687d571a64ae0c86fa95c539c9f0fbd5921da0ee24eb6d2d0",
+    "calibrate-2-nccl-ce-ring-ch4-t128.txt": "16400bc54b2fafba1520e1a9411e067e0e369a4440827bd774d213fe6b3b1929",
+    "calibrate-3-ours-ll-1-256.json": "5cefb5cfc3f082253aea49f39c2aff1158f0e19b55335e175915a3b020c707c8",
+    "calibrate-2-nccl-ce-ring-ch2-b32m.txt": "637e405a5fffa75c41573a57b37132879b66743a6c5cd970d6da078fe726f474",
+    "calibrate-3-nccl-ce-ring-ch1.json": "c533dedfff2e9f631dd70d00c5503e3a42fca1451990bcb1b7da1e2e4ab8bbba",
+    "calibrate-2-nccl-ce-auto.txt": "c8b4d331fc51b5d5f8fe062d7bc71b661fce5e1a5ad4e6868291775349b0b718",
+    "calibrate-3-ours-ll-32-1024.json": "d786cf078557d69a8892a601c4bf345f1f0c8e54a1a4efc4ca683beee8e0c7ff",
+    "calibrate-1-nccl-ce-ring-ch8-b16m.txt": "66ade915c271ce58ab5ff8b72c69a02fa9ff3f8b001cc65448e767f1b44540fa",
+    "calibrate-3-ours-put-4.json": "f07369390ed67f475127c172c359d6542e531171a4dcbeaaec4043c791fa83f8",
+    "calibrate-1-nccl-ce-ring-ch8-b32m.txt": "e8176ed4c4ab07d07d9643e934ac4f3423c83d2eb6ef1ca3d411983378ebb308",
+    "calibrate-1-ours-ring-ce-4-32m-s2.txt": "94deeb93d461bd5dacf1ad2bdd4fe13070ca4b8db41d31132ec57d325ababebf",
+    "calibrate-1-ours-ll-32-256.json": "ac00beff3d57f68ee5a067df4145330574c449c0a4c2cfe1baa7210dd1b5e811",
+    "calibrate-1-nccl-ce-ring-ch4-b1m.txt": "b20e15354fb82879d754923c2b1564c2c0c2b597b0e593be06b9d3af372e2c86",
+    "calibrate-2-ours-ring-host-ce-4-128m.txt": "a622cda3e9465842cef65d2d670b17d81e6b5dd5cddc97c595f368277f617949",
+    "calibrate-1-ours-ring-ce-2-32m-t512-s2.json": "1e8707a4d4e286e52239461cf7862ee86e5c5694a43dd37fc56ad72efe8c3c33",
+    "calibrate-3-ours-ll-4-1024.txt": "f0bdad8a32b36a441a665730990e90ed10d89a3c5007ae8b5723566018bf9edd",
+    "calibrate-3-nccl-ce-ring-ch8-b1m.json": "86ca2cb8f24330660bf76f2337adc639728cc453efda9db51fab873f21f96992",
+    "calibrate-1-nccl-ce-ring-ch4-b16m.json": "fa6c86b85561a2567911cced57f3942f288f88c4d7051e6d6475795b9d5a7971",
+    "calibrate-2-nccl-ce-ring-ch8-b64m.txt": "5762eb321f39159244de87751886666dc87593da9d3cd63ba8a4a3342fecbd3d",
+    "calibrate-2-ours-ring-ce-2-32m-t1024.json": "76ced08fc606a7a9075d2c7cf75fa15d6ee777823a2680a32ca1ac18af1560fb",
+    "calibrate-3-ours-ring-ce-2-32m-t1024-s2.txt": "e46295d56b0840f32d2208f866a2f8d8e46d3f8455015191fba65d09c857745f",
+    "calibrate-1-nccl-ce-ring-ch8-t128.txt": "0e216d603024fdcff0d96492bccafdf19c11bf95aef47056fb4d4770df9f37b2",
+    "calibrate-2-nccl-ce-ring-ch2.txt": "c8d45c3167d7d610b74b5d63bcb21035246b8cb2493f1e028d7c732e6c6c10cc",
+    "calibrate-1-ours-ll-32-256.txt": "f3a9865f6b45046e895c8966095691045c2b3e32c6b3c23539f31094f5587bc2",
+    "calibrate-2-ours-ll-32-1024.txt": "88055ac16ad06a384b341fece33767d927328cd712d5cdc621f59e7ed56682a6",
+    "calibrate-3-nccl-ce-ring-ch8-b32m.txt": "8aada00151e4b5c0519d0f64b59d9b1201b90869e01076077f42761ab137e3c2",
+    "calibrate-3-ours-staged-ce-128.json": "27ac3b0ef57dbca57351a88925d0ff467a6615216d223476b983a0d2a3edcdf4",
+    "calibrate-1-ours-ring-ce-2-256m.txt": "b12e9ecf33b2378f774db2e39ae3f7c813ca616d12c8f79388cde40af3670e5b",
+    "calibrate-2-nccl-ce-ring-ch4-b1m.json": "b1f803359a3e601fefcd7cf743305af366844219b77e5437fa789933632566b9",
+    "calibrate-3-ours-ll-1-1024.txt": "f5e76a49b5d69dc1f677f578a4da2460d15bc47e220d3af57ed95228a08dd8e3",
+    "calibrate-1-nccl-ce-ring-ch4-b32m.txt": "4f61acbbc54176c0fe44ffefb8ba3d0dbcc384dfac628e3c783169da65cf04ed",
+    "calibrate-2-ours-ring-ce-2-256m.txt": "3d4059edf21dce2739b2bb003c48f6c03710852679e032a3dd7dddca0d27cc52",
+    "calibrate-2-ours-ring-ce-4-32m-s2.txt": "59c3fdab334b839d88820e9c390a0452acad41c50817b17ace8987e2e09ec16c",
+    "calibrate-2-ours-ring-ce-2-8m-t1024-s2.txt": "fae390fe07a6ed67dddbaae3197200569fa25b4abfa6cddc337acd8e9d5beae0",
+    "calibrate-2-ours-staged-ce-64.txt": "775e7b34c2d04b81fc0b7c0e1df0fc195a637ce94e0d47b00ce4b4f93f722641",
+    "calibrate-3-ours-ring-ce-2-8m-t512-s2.json": "fd32ef114f2af6d0e7535465a3a599f40fb279b796495a4d5c0fa20c209d8e89",
+    "calibrate-2-nccl-ce-ring-ch6-b16m.json": "e071f188ce67b487cd0155d5864e682a78b85ee66b7b9fc85a70085edf9a784b",
+    "calibrate-3-nccl-ce-ring-ch1-b16m.json": "14a17b6902d3e85746f4c21bc4f6a7c5fc45766032bb9abe7bf823ba52ec14f7",
+    "calibrate-1-nccl-ce-ring-ch2-b16m.json": "61de396542e6ff8a3779a30924b2d42a2302d95c8de118702940dcdf4c6a017c",
+    "calibrate-2-nccl-ce-ring-ch4-b1m.txt": "ac47fd2ca7dfd953264d762504301e93c3c63547c1fb4fa49ceb75beeb292aa4",
+    "calibrate-2-nccl-ce-ring-ch2.json": "878802ed91d3d2973a371684dca8a1b965dcbe5ebfe66cfa6f2b3eee9b61edd5",
+    "calibrate-2-nccl-ce-ring-ch8-b32m.txt": "787c995f831bb335f78528744f625546c457345961e94c9a344569414a140f59",
+    "calibrate-1-nccl-ce-ring-ch4-b1m.json": "e3b80b19356e06500673ff6e1d54f112785759977e1eedd19cbf340894e86045",
+    "calibrate-1-nccl-ce-ring-ch6-b32m.json": "65bf5f925ba382a92c935f87cb00c13bcc68f2edbfb5da32177f4018d11af123",
+    "calibrate-2-nccl-ce-tree.json": "366a797ed2eb9b2087a8f106650b5595574c8dbd492fd825925548a20ba463e8",
+    "calibrate-3-ours-ring-ce-2-32m.txt": "51bebd15346deaa380fa90ddae76b0526952c6ac62d2acaf0a22847870b1649f",
+    "calibrate-2-ours-put-16.json": "a3ad4661c365409a6d488c1152078edcbc98d6af169442620b3b00a1ac4ede77",
+    "calibrate-2-ours-ring-ce-2-256m.json": "39725548b5bdb268f0cc04161a007dcac86f7d87b2addb390a16ad79d48f1c01",
+    "calibrate-3-nccl-ce-ring-ch4-b1m.json": "a934d0df5f47173fc01e7579ae7b7b2cf825c3d7c4f75bf01ea904cf63d13bc2",
+    "calibrate-1-ours-ring-ce-2-32m.json": "e5b8a5f5f044083d41a0ddc2cbabe73d54a00e57b75d161b19b97f68f847840b",
+    "calibrate-3-nccl-ce-ring-ch8-b16m.json": "1786dd061e95fe7103230ed16ed7a72097a24f8bd48aba168dbabb3e19a3b222",
+    "calibrate-3-nccl-ce-ring-ch8.txt": "0db376fb62a59ec2363bf8eb18c5c67166717a9d403c58a6482d8ff0812ed71c",
+    "calibrate-1-ours-ll-16-1024.json": "c396f47a3444c0e3b28949d60140f56a02cde98d8172d1db8a8d5efb1a1f2aef",
+    "calibrate-3-ours-ring-ce-1-256m-t1024.json": "e029710f5661522b7b2b110c5f4ce1d503d86c8b24a5929d773eef93ad66de3a",
+    "calibrate-1-ours-ring-host-ce-4-128m.txt": "67ea00ac5b04137f7323931b6f1f527b375b0571779550fbcc65e168c983e5b1",
+    "calibrate-3-nccl-ce-ring.txt": "fb04fdd84d2d673f81a1fce8b07f7907613271b76ae80f06623fed1a46c42601",
+    "calibrate-3-nccl-ce-ring-ch1.txt": "628dc41bd40c39690c69470639a54180796f574a6f0accc060fab1f3a80f9c16",
+    "calibrate-2-ours-ring-ce-2-16m-t512-s2.json": "85ef2505b2f2b843342ada4be5188ee12b657cc5ea8ab84e4e1643cb96af349d",
+    "calibrate-3-ours-ring-ce-1-1024m-w64-t512.txt": "804a4170fb4c6a6babebd90eff8d020d51160706108fa8d55aad2bfa57c2668c",
+    "calibrate-2-ours-ll-32-1024.json": "e8c9616a1ee833256235cf44bedbcb5e6f87a2e7275f5eda7351664f7b7aa25d",
+    "calibrate-2-nccl-ce-ring-ch4-b32m.json": "ea130d6ccf480c00c21180c3baeac0d913df936b1c7e74ab4cec9f9b7fb0e708",
+    "calibrate-1-ours-put-16.json": "9783adc0927dfdb43846b464cb7c4a530eb2350d378564c3aba4b0f58d714253",
+    "calibrate-2-nccl-ce-ring-ch1-b16m.txt": "8229901550f3babd23785adfea9609d71f1b942fd91b63e9adfae841c19a9065",
+    "calibrate-2-ours-ll-16-1024.txt": "e1f243b44b02c9310ecec3753c007c13d2b99f0ee2d23f6e92b3d52116d22eec",
+    "calibrate-1-nccl-ce-ring-ch2-t128.txt": "04e52e06356ba4cb3b852329ef08a716530953da9879a3a80dbdb6f4be8b3819",
+    "calibrate-2-nccl-ce-ring-ch8-b16m.json": "7a30ef18a44cec4aa4b89d628ee3f298dc79fccd979b589fbfead560beebf453",
+    "calibrate-3-ours-ll-4-256.json": "ef825f8b217171e31109547daa288c26b419a73ec4edaf5492adea2976f21f7e",
+    "calibrate-1-nccl-ce-ring-ch8-b32m.json": "363246bb963a592bb1cecb3b171a59b3f49f4a1bca817c743d6ae84f1df02154",
+    "calibrate-1-ours-ll-4-256.json": "9400f60046c0e99c24f0fbd5ae4634ed3c12711a8aaa12eb279abfefdf6f9927",
+    "calibrate-3-ours-ring-ce-2-32m-t1024.txt": "b37de951a9ffc26c5e5e240cb05bb055efda49a3554d9e3471151132cf11949a",
+    "calibrate-2-nccl-ce-ring-ch4-b32m.txt": "096704e5316e955702a370e95d24f557006dcf0011e5e14ac635f3ea24d0f728",
+    "calibrate-3-ours-ring-ce-2-32m.json": "1725b9e6d1cf44d5fa6162541b6fdbb35a520e2768b65410cef51a2424533642",
+    "calibrate-1-nccl-ce-ring-ch2-b1m.txt": "6bd52daea35d00ddf90df1ca416409e52c8cad52c86a320980c1710bd49f6a40",
+    "calibrate-3-nccl-ce-ring-ch16.txt": "c6180e875f4ec228808c8f62760820234318dcd46cc41d0a39c230852bf5e118",
+    "calibrate-1-nccl-ce-ring-ch1.json": "549fe3f73f2f20d53767a51dc1ba3503ef3075455bbe20c2099d78de41ac24c2",
+    "calibrate-3-nccl-ce-ring-ch8-b64m.json": "c6615877c6df8e61b98a85f7e3efe1783ad16e7a1fd81bfe97dc94e46dc46c8b",
+    "calibrate-3-ours-ring-ce-2-256m.json": "6ba7d894b6f127e752a49743fe50499532d1d522356bbb7a14aacc9ade3b3249",
+    "calibrate-2-nccl-ce-ring-ch16.txt": "069d3aa135a058a132989c79195b92c8a4b42d2958fcbd695fe3ab541e8c2ec1",
+    "calibrate-2-nccl-ce-ring-ch2-b1m.json": "cdc91f8d2c6c7b0e9c7f851a08e6cd79fffc406a5a3db455274d9405717e3608",
+    "calibrate-1-ours-ring-ce-2-64m-t512.json": "82c6eb31fb15dbee74efe177893b133c999650da447e09c7b6ba10c458738005",
+    "calibrate-1-nccl-ce-ring-ch4.json": "0bb04fb9be84925d8e86a2b3cdb5df636c6ac7e45a6f7b8dc11029f8db7118fc",
+    "calibrate-2-ours-ring-ce-2-32m-t1024.txt": "44d798455016e2d5dc800ae371acecd98f3ba5c5ca75032a22a70b6e9f449a7f",
+    "calibrate-3-ours-staged-ce-64.txt": "df4a41c906ef0f3e4f3c7946e9dd74003d753f3615b357402a73c80e9add572b",
+    "calibrate-3-nccl-ce-ring-ch2-t128.json": "c85a25056beae1de5ead4a6aeebcb1cfdeaf14c71d4c7ba08d5c6c28cc505f90",
+    "calibrate-2-ours-ring-host-ce-2-256m.txt": "5f33f1abd4143b5161868e72e3736d41885fdb390ec191131cc4b1db8f123962",
+    "calibrate-1-ours-ring-ce-1-256m-t1024.json": "de1278b7899e05c2221820974a703d447c2382ca470fedce6148e58293dc6abb",
+    "calibrate-1-nccl-ce-ring-ch8-b64m.json": "462d58590afa725f8ad119ae22c772e82d6e5576dcfc4a1ab5758e3af1c2d789",
+    "calibrate-1-ours-staged-ce-32.json": "bc474798ed9666e4bcb6ab388cb755e6e8c655399c2edb1e09b16040c3e232f2",
+    "calibrate-2-ours-put-4.txt": "40100e008346b03719e42935bcf95e95a83966af7eea46717eb80182572130fe",
+    "calibrate-3-ours-ll-1-1024.json": "aaa714f3183a3a4fd1e5f7089bbb86a938bd51c62d576d4cdab2143b5282c0bc",
+    "calibrate-1-ours-ll-1-1024.json": "3072e2285bc271ceb5d0b0586f48b3f1ba2ef08dcfd3f096bab1245c1c1b1074",
+    "calibrate-2-ours-ring-ce-2-16m-t1024-s2.txt": "9055697417d9face9c4b88933e17cde1b379d369ff9bde2ea453d05a1b37e2d1",
+    "calibrate-2-ours-ring-ce-2-32m.json": "6a237a4f1252cc2c56fdd3e8d7aa355b0cc778ca528301bb1210d56fa24b6215",
+    "calibrate-1-nccl-ce-auto.json": "6bc56ffa7c5182c404e2d1436980e1a72d14b5874da2e87358e88cfd62a87220",
+    "calibrate-3-nccl-ce-auto.txt": "54e8ea4f2371c9868c866ce1ec5bd6bda45d67b385280412199e54a268586625",
+    "calibrate-1-ours-put-64.json": "22ad64f0abb040f8522d9fcb49f313440c4bb0579986d29da62c3a938eb31798",
+    "calibrate-1-nccl-ce-ring-ch16.txt": "8119d5e404afa4e84b07b4d6a1ffb517a6ec01018d08630bf4adc8bc9c51f42d",
+    "calibrate-1-nccl-ce-auto.txt": "45371ef279634ef1030bb838b3c22d7fc781d09c7ef92e7e177d11b15aaba9c8",
+    "calibrate-3-ours-ring-ce-2-32m-t1024-s2.json": "4ded876f168d0ca9370e6965469a00482d21c44d731fc1db07d3bb8b3c769ce8",
+    "calibrate-1-ours-ring-ce-2-32m-t1024-s2.txt": "7d79994959b27c2813831a2fa817d2279d55306cb24fe4a89932e5afc76c99aa",
+    "calibrate-2-ours-ring-ce-2-64m-t512.json": "e3a4a5d0b7584238595caaec5799b88650180cea9d912a751f018c9691f84a22",
+    "calibrate-1-ours-ll-16-256.txt": "cd9256875f566b94626c673fec59f92508e95061fb95a45d44dd8b24dc315f0b",
+    "calibrate-2-nccl-ce-ring.json": "8e66a9dffd220aee59e35241e405665e0c87b83bcb350b43712481248cdaee6f",
+    "calibrate-3-ours-staged-ce-128.txt": "663ca7eb0adc5fe6eedc96210b5a52e0a0fa45d6263e5e92f339fc0470401c49",
+    "calibrate-1-nccl-ce-ring-ch2-b32m.json": "00174f5ff307957c5e35dedd5dda5ca753a1d7e4d8d490f548cc78d428cc56c3",
+    "calibrate-2-nccl-ce-ring-ch4-b16m.txt": "6178c9ec1d4c01c7eec98ef3bf986e79f86e1a62f049af52ede5248dd36fb0b8",
+    "calibrate-2-ours-staged-ce-128.txt": "9b7ccf462fe396539f5a948ca1138ecbe1481b70559bd6d5621293aefa9cf2f6",
+    "calibrate-2-ours-staged-ce-32.txt": "caf4be80c6f25179353f71e5bedcdb7744be298fca4cd05b98882388a59bf48f",
+    "calibrate-2-nccl-ce-ring-ch2-t128.json": "0acea7bf9ab7a2a4070272fbe253ea0905a493e3928944a825291cc64e8feb4b",
+    "calibrate-2-ours-ring-ce-2-64m-t512-s2.json": "2e23b01e5902fc040d0971596d75702ab6c9fc4813b31a645d48bcdd63e5c937",
+    "calibrate-2-ours-ring-ce-2-8m-t512-s2.json": "b311396c673d0b101cd6671d3dae3a3e1fb0cb69d95366445444ab5608a1aa16",
+    "calibrate-2-ours-ll-32-256.txt": "c7040e4301dc95d7c882bef94ede3c6af69c8b4573842b286e68ff74f4dc4db4",
+    "calibrate-2-ours-ring-host-ce-4-128m.json": "65b03bec92cf232b406cd09193c0548d1d043ee7984b0ed5ba659a940f345580",
+    "calibrate-3-ours-ll-4-1024.json": "02a9d253a430ef0d70cf62cde9f2e67b94f99ab9a4d928116c6726e6b0256940",
+    "calibrate-1-ours-ring-ce-2-64m-t512-s2.txt": "b90a20155135d1e542541eb7b5b55d323373f4780d047d6907bb14e3f19a1b5a",
+    "calibrate-1-ours-ring-ce-2-8m-t1024-s2.json": "5778d534822b7a83324a87c7d1d2681eb0e481ce67b473c9b2580baa65a3f368",
+    "calibrate-3-ours-ring-ce-2-16m-t1024-s2.json": "380d6efefda7b0e4ed2c21776074edf17f58423fe8a22e097ddeda21ed41ec94",
+    "calibrate-3-nccl-ce-ring-ch4-t128.json": "e23b5bd4625bb969ee260141aca6f806521905846d89e4c7dcae7e635489cbbd",
+    "calibrate-3-ours-ll-32-1024.txt": "6c0892fa7f45c1fb80396a15baddfc2bf7aa510ed0125872baf5ca82e02fdb18",
+    "calibrate-2-ours-drained-ce-128.json": "a2939777ae76e6926458ef1034a25ef43b7ed77ec850b55f9ebd8b384587523a",
+    "calibrate-1-ours-drained-ce-128.json": "0673fe6757c7ba10ae8dcada9fec8d131d773071f3f0d9312ef614b2bdec6ca9",
+    "calibrate-3-ours-ll-16-1024.txt": "ab38f846903e8504b7b270b24c30da5c83e45baa0308863d2e653027069df381",
+    "calibrate-1-nccl-ce-ring-ch6-b32m.txt": "6af99f77de33e2cf3279abd2a793655f6746259f5fd726cd0daf75ca85d84df2",
+    "calibrate-1-ours-put-64.txt": "a81d41a7a32facbe607a7926e8bae4afe77671afb04471bf585e43fe2f0f58d4",
+    "calibrate-3-ours-staged-ce-64.json": "d814f4285abe24e8172a34c4bccf0601c7f51a5b8d8af98d1d5dcad41d28bc50",
+    "calibrate-3-nccl-ce-tree.txt": "816ab6d055a1aac2fcae7d48489c3ea7e241c3657b73ab2934114fda036da43e",
+    "calibrate-3-nccl-ce-ring-ch8-b1m.txt": "a3f29d860a1aba4e443b4a0ee920efee11e2688e2678d22d1346393e55a55a4b",
+    "calibrate-3-ours-ring-ce-2-16m-t512-s2.txt": "4d6b319d21ef66a0c24fd351470af0a5122819ab5b2a81aaa271057cf54ce1f9",
+    "calibrate-2-ours-put-16.txt": "863ba1a454a1568cde8c1260f6f2748011c0734f79559e6b6026f1f05de19b71",
+    "calibrate-1-ours-ring-ce-2-16m-t512-s2.txt": "49a4d7a5022a804b4d68e27d1e19191cd3f6cdc24a8bc7db757a9b0abc6dfcd5",
+    "calibrate-1-ours-ll-16-256.json": "848f2ce3732f44ac146337b66e87478af1d4e1dc655e6de6091a49b298548360",
+    "calibrate-1-nccl-ce-ring-ch4-b16m.txt": "6399909b3f6a88e89209cb57b4f09e07a33b1df9fa12c1a532e68069773be2a3",
+    "calibrate-1-nccl-ce-ring-ch4-b64m.json": "1f1a40dcee924768ed33b2e14b7395e25d5e484643ee20d28ae4472df5214475",
+    "calibrate-1-nccl-ce-ring-ch4-b64m.txt": "fddf76af4adbd64bc096f04ee0bab7fedbecea2d3d724f617877596d65047f5e",
+    "calibrate-1-nccl-ce-tree.txt": "9efb04e7b68297ba9af379ff096d3a655c6976c25efa984babe2d46fee81e578",
+    "calibrate-3-nccl-ce-ring-ch6-b16m.json": "7a3e1c2ba9915fc08e60d9a390fff60f34a3fa3976d2a5865c4c1a6048002ceb",
+    "calibrate-3-nccl-ce-ring-ch2.json": "5ee553a570743958a977c57c33fd643a3e7f9bf5fe9b8b71ff678cf606bac981",
+    "calibrate-2-ours-ll-4-1024.json": "408d539cbaf562506910322530c998853d38fbf263af8e4118882d6ae0f942be",
+    "calibrate-3-ours-ll-32-256.json": "2882cea4fe61965d26a5fe1af42e4d7639ba7cb170332c614cce8f729b20480d",
+    "calibrate-3-ours-ring-ce-2-256m-s2.txt": "bb6144c45b3aea491283c17736b9fc874d7bbdea9d283007ae1c7bf532c4e61f",
+    "calibrate-2-ours-ll-1-1024.json": "b8e11f9591936ca9be9dd4a6d011eb61a443ef3b32235f974c4c4c0c0fafaa6b",
+    "calibrate-1-ours-drained-ce-128.txt": "b76bd054d0fb54c6fd3c76c607bdfd5a1d5c89d6250a9c2ddd8450f741de6e61",
+    "calibrate-2-ours-ll-4-256.json": "77bb267d6936a005a8836d10405d78eac53a7eb5fa408efba24b86d8a12c06e4",
+    "calibrate-3-ours-staged-ce-32.json": "66471d9f197b65e15d458191a9e3cc48a769549c4e656120734b1b41c48cb94e",
+    "calibrate-3-ours-ll-1-256.txt": "2d904c4f29431462cde94c94554169e0630b854e662edced2bf58fa2d4025281",
+    "calibrate-1-ours-put-4.json": "8df8569ab15ff6e2ffde0c081b7626b3d91c28e98ea5c5d92e160ac8aea75429",
+    "calibrate-2-nccl-ce-ring-ch4-b64m.txt": "b987b7a122e02c687aa214f7191549e4cafdeedc32d12c387932a89fda30ceef",
+    "calibrate-3-ours-staged-ce-32.txt": "d4a6cf0825d79f54775e98bc61a120875e7acc9aea6bed9d0b23ab8ea46e8069",
+    "calibrate-2-nccl-ce-ring-ch8-b32m.json": "d2ce2a57e9265b6f4b477378df9b748a2aeba2ab061d44fb90ff35175ad6242d",
+    "calibrate-2-ours-ring-ce-2-8m-t1024-s2.json": "5284d55a03fe702dec021a306470ffc693d00ca519964dd717fb7cf7b02a2ef3",
+    "calibrate-1-ours-ring-host-ce-1-1024m-w128-t1024.txt": "e107f4598ae963a5df5b21c9e8215649f6561933342adf770c66ee72949d22b5",
+    "calibrate-2-ours-staged-ce-64.json": "26624dfcfc65caebd3b169d8f6aae461555af55408dcc0c8778e30a6f935b280",
+    "calibrate-3-ours-ring-host-ce-2-256m.txt": "4b6acd3b658221f591e14f212471789ffc0019371c4308f796c884dc88c00b08",
+    "calibrate-3-nccl-ce-ring-ch2-b64m.txt": "3cd1eb7e11ac32cad97734fcff6f3affc8474f36db97be69f7fbf2ced349638a",
+    "calibrate-2-ours-ll-1-256.json": "238b155c1776a3036d2845825de4e1b10391a40db1d7b9eaed0fd67843e473a5",
+    "calibrate-3-ours-ll-4-256.txt": "fb95bedf22a9b0d24061bb7244a505e8cc8d65a4150eec6d8359ce0e91eeefca",
+    "calibrate-2-ours-ring-ce-1-256m-t1024.json": "eb14d5f78ee519f83e9e4f31db0437246d5ed064ef609ecea402eece2c8e364f",
+    "calibrate-3-nccl-ce-tree.json": "2d098f27a29c9e1a5bf7345b01791662c3532cfe525bab2477f0b0b311a2e555",
+    "calibrate-2-ours-ring-ce-2-256m-s2.txt": "f9c89bde080e060b5861952f40d84744c30d3af82711721338eac5751ba1985d",
+    "calibrate-2-nccl-ce-ring-ch4.json": "51642a20e778952c49d6aded8838fe11c29a0a0029091c3e6882ae109fcf8c27",
+    "calibrate-2-nccl-ce-ring-ch1.txt": "eebf0de4f122b89bdd12afd7f42f18c6fe0c22f28860351101e4d32477aca54d",
+    "calibrate-2-nccl-ce-ring-ch6-b32m.json": "476a898ca4b1b8fb25b3da2e44237662442d14a49d35c93e89ad5cd2480b2e48",
+    "calibrate-1-ours-ring-host-ce-4-128m.json": "9d883eb917b346edebec18c3f31a49562673489d0a525ff97b9dbeb25813ec8c",
+    "calibrate-1-nccl-ce-ring-ch2-b1m.json": "984fcc819a816be9c3f7652f15b88b5de38e9289cbb81a051a6299bbe50d2282",
+    "calibrate-1-nccl-ce-ring-ch8-t128.json": "b6e2ccf938884181324c75ea52ba1ed64dbb26fcc7a4862d84e053bad67ab428",
+    "calibrate-3-nccl-ce-ring-ch4-b32m.json": "d7bbb6f744a11b08e6618ff25ba4755ac69732a90c3d21df4a5ab4b8adc66300",
+    "calibrate-2-nccl-ce-auto.json": "c58a4c7e1f7e7d1c90bd1e046e4e27fc56220b48b5e3c47e11d12a0a37d4a73b",
+    "calibrate-1-ours-ring-ce-2-8m-t512-s2.json": "7111ea34151cd00390e4b61fd2c526bc9c4c5976b3f835302627350a4230d2a1",
+    "calibrate-1-ours-ring-ce-2-256m-s2.txt": "50e851f9177f2ba3e3a9f0b449c3d3fb77ee093621e0b0ffa6b3d2c00450c605",
+    "calibrate-2-nccl-ce-ring-ch16.json": "e30b0084e1ea3cfa952f77678e588bc9db7d46d31696e10ec0848f198a369322",
+    "calibrate-2-ours-drained-ce-128.txt": "5544665c42d512ca512e67ee339a3a8641579cafc9ac7a003e97844c11fbbe08",
+    "calibrate-2-nccl-ce-ring-ch8-b1m.json": "fbcc58de00d7b317d8d5fea906a3b870e568591a8fb00d87f1316db1f70dfc56",
+    "calibrate-1-nccl-ce-ring-ch1-b16m.json": "6112847d7c4b9a48ceb11c5d6b5592f219e33c20fe1c467d867e5b21591055d5",
+    "calibrate-3-nccl-ce-ring-ch8-b64m.txt": "93d4e718ec332a7074132a791d8e5a60b28536f1a02a88974328969d55611783",
+    "calibrate-3-nccl-ce-ring-ch8-t128.txt": "5b7da2eeb625c6a7bc895ec78d5bd1310c6ef8f2ce8e706862bd25fac944ce23",
+    "calibrate-3-ours-ring-ce-2-32m-t512-s2.txt": "78c9a83dc7a3fabd019900b1e901cb8a43a2b38c0ac0c6e65edcdf890630bde2",
+    "calibrate-3-nccl-ce-ring-ch4.txt": "80548713f3284bfcd2e21415d3526ff99f97da7d20ba8d495a62f84ec3d4ed49",
+    "calibrate-3-nccl-ce-ring-ch2-b16m.txt": "515d35b689c7f5adf5bc91641bc052d25c17ea94c902960a83de38bed0327d79",
+    "calibrate-1-nccl-ce-ring.json": "32e98f58f15e124d616c221ca5e1de2786222368d9e788e625f9619c88bb62b9",
+    "calibrate-3-nccl-ce-ring-ch2-b32m.txt": "ca02f3e30ea982109212632f176f3cc714cead4383c7d2dedc634ae40828e27c",
+    "calibrate-1-ours-ring-ce-2-16m-t1024-s2.json": "5995f647adbba90f643118c70cf4d81b37778032fa1e6e5c048be3e45a1bfbe2",
+    "calibrate-3-nccl-ce-ring-ch1-b16m.txt": "a532d765fa837c850a8b9180a22504d117a97cc28953169f6db25023ef96e837",
+    "calibrate-2-ours-ring-ce-2-32m-t512-s2.json": "0b6e6ab390d8eb05d47b9dd8b5ac227b1356ccb7a6563b4b1a70cf1412207f8e",
+    "calibrate-1-ours-ring-ce-1-256m-t1024.txt": "a5b77f801dd15928f49649a779850c967e241b909f40aedb31071522a6fcfcdb",
+    "calibrate-1-ours-staged-ce-32.txt": "20be64ff5f544e22224d12042f70217484d7e62bdf4e7c3d1d967475441a7899",
+    "calibrate-3-ours-ring-ce-2-8m-t512-s2.txt": "02c4b19e1555d5fa5024e17ba315e4b32ce0f5e2a7d250f4a6505f0ea6f0d9a0",
+    "calibrate-1-ours-ring-ce-2-256m-s2.json": "f7cf122a00e22831ed962127dc3dc5b4d63aad1de1f322916faf1960fdd6efd4",
+    "calibrate-3-nccl-ce-ring-ch4-b64m.txt": "87fd5661082ce493346edc2f3c6759f9b188aee563ff0f71aa317a3b07b0904f",
+    "calibrate-3-nccl-ce-ring-ch16.json": "a87bdaa659ec1b9312bd327542193c8fae6ae6dd0711b8dd55374ef70addf75e",
+    "calibrate-1-ours-ring-ce-2-16m-t1024-s2.txt": "9997f6c48f7b9d90ac1724389b2cf52e1ae8842a19ba88ef19bad0a68edaffc8",
+    "calibrate-3-nccl-ce-ring-ch2-b32m.json": "0b39efb34604dc518ac4cddeb0fa30237692fdd227f98bf1e1b236ffa194205b",
+    "calibrate-1-ours-ring-host-ce-2-256m.txt": "4fa53edd7a3a19b580bd8851c97b5729667db8d95850028502086d08dab86d23",
+    "calibrate-3-nccl-ce-ring-ch4-b16m.txt": "3f0eb3844c13988c4c4642fa3dec4dff03050054e7beda2c460a3b116a5c775c",
+    "calibrate-1-ours-ring-ce-4-32m-s2.json": "0ad94c5b0c2c11c69423c615938f6734c6eb5f8959f082eeedccc2f8133f8edf",
+    "calibrate-2-ours-ring-host-ce-2-256m.json": "e34a6adc1c4bc7ba623249435acaef5b99c201ae08efbcfb75513bd868ac5002",
+    "calibrate-2-nccl-ce-ring-ch8-b64m.json": "e2a1338377577c5c5f8fca7ca15a4dbf1cf59a3bf1959ce5982057dcde00e7b0",
+    "calibrate-2-ours-ring-ce-2-64m-t512-s2.txt": "edcd338c6f92889e70080a490f020eb273e98e669f2c2355e1933320d1aa88db",
+    "calibrate-3-ours-ll-16-1024.json": "d7be58b078991486c02a38da0772572cc7ee05a034208b56a76e00fd5561ebd3",
+    "calibrate-3-nccl-ce-ring-ch4-b64m.json": "3ada549afcc498c2680f48df8a0b5caabfdf7abf66d445b3d8ce371d4f17856e",
+    "calibrate-1-nccl-ce-ring-ch8.json": "6f490fb8078be0e774303c903525ea533c1f229a73a1fbcfa897bb177a16f96e",
+    "calibrate-3-ours-ll-16-256.json": "1af1d1a865401f53eb1ad619ed9d9fc9aa04d99de1649bdf8715e8ed7ba9d61b",
+    "calibrate-3-nccl-ce-ring-ch2-b1m.json": "74683ff10873971dfbc4bd5341e912381fa3812ba3474c3a55a4184319add921",
+    "calibrate-2-nccl-ce-ring-ch8-t128.txt": "9b90bce7ae6b8fb59c70bacc964efc4a5cdb1f094d45cba69f621d14a0491811",
+    "calibrate-1-ours-ll-32-1024.json": "3b3037ddd43ee21cf757e1c26c4e23340a25ee905f5861c2f20311be40bc8dc7",
+    "calibrate-1-nccl-ce-ring-ch2-b64m.txt": "315d578e57895aba8e0b1831b6197bd1b49e7fd0b148a34881da304a2f154dd0",
+    "calibrate-2-nccl-ce-ring-ch4-t128.json": "635af794b9cbf3f23020a6d4b03490d5e8fae1a89c068149a37e1870101ed68e",
+    "calibrate-3-nccl-ce-auto.json": "106f8257ec09543dcfc8f76a7a9aa2ba664c911ee7e71a3b960d05a871c98bd5",
+    "calibrate-3-nccl-ce-ring-ch2-b1m.txt": "70061de2ab3fc38bc235026381afd47f9d430e8993a323d668880fd7672a02b7",
+    "calibrate-1-ours-ll-1-256.json": "06a3f33ed1b41dfdc8d48629c528c332a0f25a5ccbf46164b58e2b1d94728d68",
+    "calibrate-2-nccl-ce-ring-ch8-b16m.txt": "49a8bea868f965eea88eb13dba5edafed2972144d6bf53534bc1b2e1e31c65ba",
+    "calibrate-3-nccl-ce-ring-ch6-b16m.txt": "2320247e3a39e6c47d447f023c802a60a5fc1b96cc73eb35092b31782c2d9c92",
+    "calibrate-3-ours-ring-host-ce-1-1024m-w128-t1024.json": "ea09925f1b74eb7215037573cdb31c3ca6006a1bfc4df878f882fd9508a1bde2",
+    "calibrate-3-ours-ring-ce-2-16m-t1024-s2.txt": "fb010649acc38cfe9cc3413298acefa3d0c7e9166398763f45c9b34d10a09d1a",
+    "calibrate-3-ours-ring-ce-4-32m-s2.txt": "90f51417b5d4a36d8afc6607bc1698c47fd5707b85cd4be2c245754056335897",
+    "calibrate-1-ours-ll-4-1024.txt": "0bfcde23e2ce298a3217a866b3e1b93c1b6f948690894e87b1ccb6e256d2fe74",
+    "calibrate-2-nccl-ce-ring-ch2-b1m.txt": "e333d7aa80898fbe600b30f54293085c76184d8c2c993eda04d90b99717d489c",
+    "calibrate-1-ours-ring-ce-2-32m-s2.txt": "8ec5a94778ca5aadee3a6f500b48f621dd99bb71e50b8d02e8e36f699b1522dd",
+    "calibrate-3-ours-ring-ce-2-32m-s2.txt": "78aab6b5a003410cd6aa3b5deb1441cc5ec46576439df331df8a074ac48e0275",
+    "calibrate-2-ours-ring-host-ce-1-1024m-w128-t1024.txt": "48bad1b8f1d7c398d546a89522a378744f02e2d2f166201a0ffdca8af434c4b4",
+    "calibrate-2-nccl-ce-ring-ch1-b16m.json": "649f16d6b8ced562a1fcde3f220a646eb603395176584c7d715385d454915e9c",
+    "calibrate-3-ours-ring-ce-2-32m-s2.json": "faece096273cdd1e8021360bd5c553a4b0ed7600b768ee8eb8505a27a0f6e0a1",
+    "calibrate-3-ours-ring-host-ce-4-128m.json": "4566625dceaa80f7d5114463505885e25681d41dade962958c694e1e071d5774",
+    "calibrate-1-ours-ll-4-1024.json": "7c30c5a5360997d76231a9fdafaaee642951f4b2bec4d6eead6f40b92545ca19",
+    "calibrate-3-ours-ring-ce-2-32m-t512-s2.json": "6ce3bc9596366d73c088869ff69a09e37efd4fa7437231240ca5060252498456",
+    "calibrate-1-ours-staged-ce-64.txt": "1fe2518055206eb5174d35a70ac9019e16b0b88c3322ea439648319292efb57d",
+    "calibrate-1-ours-ring-ce-2-32m-t1024-s2.json": "742c024d93fdea7ae9b374ff59c50196205c20efb6c770fea5d5d3543c87ddd9",
+    "calibrate-3-nccl-ce-ring-ch2-t128.txt": "37f234695a1a5600b37c8fc35d6a830486e37dfe22483d7be35cbc289d17e6b8",
+    "calibrate-2-ours-ring-ce-2-16m-t1024-s2.json": "3a083d3aa0e54ca93c6b6a5f2f4f6e6dda6fec8ad7056ce527fdd5ad881d1db8",
+    "calibrate-1-ours-ring-host-ce-1-1024m-w128-t1024.json": "d36abc2e8fd593b47a41d461467775ddd36633d950267cb80770cca2cf57dbed",
+    "calibrate-2-ours-ring-host-ce-1-1024m-w128-t1024.json": "4b3ef2faa651df589834d41044f1d031de62894a91db460a1963a78ebfb97403",
+    "calibrate-1-ours-staged-ce-64.json": "4955ef5d0ec7e688b86456549674b77d420d04196a345f749943b170d4134ba9",
+    "calibrate-1-ours-ring-ce-2-32m-t1024.txt": "a5f6be8ef813e443c3cd2d3e914e6bbcb3dddf9224d307b610d859daaa28806c",
+    "calibrate-1-ours-ring-ce-2-8m-t512-s2.txt": "eb5e7e8e09bd66e21f44d5f80f4f1f39b97e47ed07965c4069ba4f2720bf34f3",
+    "calibrate-3-nccl-ce-ring.json": "98a9c8abc79e4b6a4fcec8cced4f7673a39de61f60c47583c564dc33f33adc8a",
+    "calibrate-3-nccl-ce-ring-ch4.json": "00195714b31a779da0bda351caf91edc88cd657a5b1a4bdf4c70f479bdb53fed",
+    "calibrate-1-nccl-ce-ring-ch8.txt": "213bc0b0a02aa00078d3183ede11d6448f63752c73a1038bb7091b93fc34da52",
+    "calibrate-1-ours-ll-4-256.txt": "f093e4075fdf83cd64a42b0e68b2b5654595103f80acb484c25d34cab815ac83",
+    "calibrate-2-nccl-ce-ring-ch2-b64m.json": "52580f031fa10b06d9abe3a222f313c20e00e3339529598c895f4ac006871cec",
+    "calibrate-1-nccl-ce-ring-ch4-t128.txt": "47126baa1f63cb584a5f67fc0ea6e87f9b9c48c2d84cab8cbb12a0a758375c10",
+    "calibrate-2-ours-staged-ce-128.json": "bcf3272dff8633dacd554ff678520e75281e91a912a34ed82428fde9ccdcd52f",
+    "calibrate-1-ours-put-4.txt": "b74b0851de9b28877069ec6bcde5e417559b5df34cd62758aa8e3632d5ca4951",
+    "calibrate-1-ours-ring-ce-1-1024m-w64-t512.json": "bc159fb3ab76ef40181c406217cc7c9be3f47bd827a2c4947a7c70bd9e804ce6",
+    "calibrate-3-ours-ring-ce-4-32m-s2.json": "2ba08d7155c32c5dd66727a9a35824f2a6588a77d173c96ffdfef05e45453aff",
+    "calibrate-2-ours-ring-ce-2-32m-t1024-s2.txt": "09ef9f03fbd0429fefb95faed506da1386c45e0e07978a3f14581956f316aed8",
+    "calibrate-2-ours-ring-ce-2-256m-s2.json": "0e6fba3bc5a45ceab9dd94acf5e5a0818a91df07f8a3b3abc1989e9293384830",
+    "calibrate-1-ours-staged-ce-128.json": "6ebef4992ebc052d2543d09fe7851412f6f22a89ae4b554c9c680a400e6af411",
+    "calibrate-1-ours-ring-ce-2-32m-t512-s2.txt": "76b3bbd4ccedaa359909c2889b99e73b00ed5dd982b2a12ca952f726be91e527",
+    "calibrate-3-ours-ring-ce-2-64m-t512-s2.json": "a0df3d9d2d849eeb46a7e7078404572ee1ac82bf3ca264920a27f597084e4a2e",
+    "calibrate-3-ours-ring-ce-2-64m-t512.txt": "43070e65ccf63c51ba246eb5dd7abbad54896c1b97dc7e29daceb0be26b09f61",
+    "calibrate-2-nccl-ce-tree.txt": "9f3ac81ce40981ea90a2a46bdd5bd95c34d311be279c312a9548f1555f34bc9c",
+    "calibrate-2-ours-ring-ce-1-1024m-w64-t512.txt": "0bc62b68a5e2d30d1660c2e77c76e324719cdb198ee8b8636ae1bb839a95bb4b",
+    "calibrate-2-nccl-ce-ring-ch4-b16m.json": "443ffdd608512e09803aa6cbd807eaa70dc66be1abb73b271d20961539959d43",
+    "calibrate-3-ours-drained-ce-128.txt": "dc3c87918d44b638eff35d772ad6350d6b6706b09de45cd6c58ed2cc38d6341e",
+    "calibrate-1-ours-ll-1-256.txt": "ec3bb24eefc16322e1293c1a72245fa7bbf02cd94ea41cfc0a979e80149ddca9",
+    "calibrate-2-nccl-ce-ring-ch8-t128.json": "78b66325525b5a87dba5892e6ccf3a8e3ae916b603e165d44d5d75e548b5763d",
+    "calibrate-1-nccl-ce-ring-ch4-t128.json": "bdb8a81803728221fb054a6bcf43823300a45dfc611d1116d5450d0e79da5935",
+    "calibrate-1-nccl-ce-ring-ch2.txt": "d17fa46f065cc08363a278b8fc4c8607bb5eb20f652bd8d02de0e8e9875b933d",
+    "calibrate-1-nccl-ce-ring-ch2-t128.json": "fcbeb15d17e0a9c18ddc91ef859466e7500a6f1546aa0531e8b5495962839462",
+    "calibrate-2-nccl-ce-ring-ch2-t128.txt": "d97f9a273c095df9cd3034e49a2cf77aefc69a0361bd29ceac53439e9cbfaf0a",
+    "calibrate-1-nccl-ce-ring-ch6-b16m.json": "b24b0188abe19c4d5cfad8b37f75bc852e004bc150b6471b9546184ede457fd2",
+    "calibrate-2-ours-ll-1-256.txt": "91304ebdddaed47eeac0ad4186e65bfe4b179161e72f5475529a01eab81a72e6",
+    "calibrate-1-nccl-ce-ring-ch2-b32m.txt": "46d3b077089eb9f17316e6d17fc6443fac38d2b14c477ce272a7c65293dddb31",
+    "calibrate-3-nccl-ce-ring-ch6-b32m.txt": "db4720928ce57f7415b87134cec473800e9397f6e7cf75b9e4b7a79cbf50b99c"
+  }
+}

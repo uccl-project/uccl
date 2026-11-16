@@ -2,6 +2,7 @@
 #pragma once
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -10,10 +11,12 @@
 #include <string>
 #include <vector>
 #include <cuda_runtime.h>
+#include <dirent.h>
 #include <sched.h>
 
 namespace uccl_lite {
 constexpr size_t guardBytes = 4096;
+inline cpu_set_t rankCpuMask;
 inline void checkCuda(cudaError_t result) {
   if (result != cudaSuccess) {
     std::fprintf(stderr, "CUDA: %s\n", cudaGetErrorString(result));
@@ -51,9 +54,42 @@ inline void pinRank(int rank) {
     CPU_SET(cpu, &selected);
   }
   if (sched_setaffinity(0, sizeof(selected), &selected)) std::exit(2);
+  rankCpuMask = selected;
   std::printf("# rank=%d cpus=%d-%d placement=%s\n", rank, base,
               base + width - 1, placement ? placement : "local-four");
   std::fflush(stdout);
+}
+
+// Some communication runtimes reset thread affinity to the entire NUMA node.
+// Reapply the caller's mask after warmup, outside timing, on BOTH backends.
+// After the timed batch, verify that no worker escaped the matched placement.
+inline void rankThreadPlacement(int rank, bool enforce, bool report) {
+  cpu_set_t const& expected = rankCpuMask;
+  DIR* tasks = opendir("/proc/self/task");
+  if (!tasks) std::exit(2);
+  while (auto entry = readdir(tasks)) {
+    int tid = std::atoi(entry->d_name);
+    if (!tid) continue;
+    cpu_set_t actual;
+    if (sched_getaffinity(tid, sizeof(actual), &actual)) {
+      if (errno == ESRCH) continue;
+      std::exit(2);
+    }
+    int before = CPU_COUNT(&actual);
+    if (enforce) {
+      if (sched_setaffinity(tid, sizeof(expected), &expected)) {
+        if (errno == ESRCH) continue;
+        std::exit(2);
+      }
+    } else if (!CPU_EQUAL(&actual, &expected)) {
+      std::fprintf(stderr, "AFFINITY_FAILURE rank=%d tid=%d\n", rank, tid);
+      std::exit(2);
+    }
+    if (report)
+      std::printf("AFFINITY rank=%d tid=%d before_cpus=%d matched_cpus=%d\n",
+                  rank, tid, before, CPU_COUNT(&expected));
+  }
+  closedir(tasks);
 }
 
 __host__ __device__ inline int pattern(size_t j, int rank, int seed) {

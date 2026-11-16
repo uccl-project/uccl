@@ -1,0 +1,18 @@
+{
+  "frozen_sha256": "fd23e24adb84a4301ecc769d2657ec8760dfecb08b13d6bcc80c81e0d5aec901",
+  "counts": {
+    "calibration_pass": 180,
+    "calibration_fail": 0,
+    "validation_pass": 105,
+    "output_checks": 20850,
+    "rank_checks": 166800,
+    "nccl_rank_logs": 1024
+  },
+  "retained_failed_epochs": [],
+  "median_wins": 21,
+  "five_of_five_wins": 21,
+  "separated_range_wins": 21,
+  "remaining_losing_or_inconsistent_sizes": [],
+  "nonseparated_sizes": [],
+  "all_sizes_reproducibly_faster": true
+}

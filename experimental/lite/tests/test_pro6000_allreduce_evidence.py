@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from run_pro6000_allreduce import parse, transport
+from run_pro6000_allreduce import parse, placement_audit, transport
 
 
 class EvidenceChecks(unittest.TestCase):
@@ -61,6 +61,21 @@ class EvidenceChecks(unittest.TestCase):
             (root / "case.3.log").write_text(line)
             with self.assertRaises(ValueError):
                 transport(root, "case", [1024, 2048])
+
+    def test_require_matched_threads_on_every_rank(self):
+        rows = [
+            f"AFFINITY rank={r} tid={100+r} before_cpus=192 matched_cpus=4"
+            for r in range(8)
+        ]
+        log = "\n".join(rows)
+        self.assertEqual(placement_audit(log, 4)["matched_cpu_count"], 4)
+        for bad in (
+            "\n".join(rows[:-1]),
+            log.replace("matched_cpus=4", "matched_cpus=192"),
+            log + "\n" + rows[0],
+        ):
+            with self.assertRaises(ValueError):
+                placement_audit(bad, 4)
 
 
 if __name__ == "__main__":

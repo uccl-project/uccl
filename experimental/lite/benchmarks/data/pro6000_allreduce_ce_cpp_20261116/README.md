@@ -1,5 +1,12 @@
 # Experimental FP32/C++ AllReduce versus tuned NCCL CE on eight RTX PRO 6000 GPUs
 
+**Placement erratum:** a [subsequent thread-affinity audit](../pro6000_allreduce_ce_ring_cpp_20261116/README.md)
+found that MSCCL++ expanded some CPU masks during initialization. This epoch
+matched the initial pinning requests, but did not enforce matching masks
+throughout timing. The measurements below remain unchanged and describe that
+historical configuration. The follow-up enforces and checks every thread's
+mask and freshly calibrates both backends.
+
 **The 21-of-21 goal was not achieved.** UCCL Lite wins all five independent
 pairs at **15/21 sizes (1 KiB–16 MiB)**, with separated observed ranges.
 It loses at **32, 64, 128, 256 and 512 MiB, and 1 GiB** in every pair.
@@ -58,7 +65,7 @@ controls, with the matched checker, capacity, CPU placement and timing above.
   driver 580.178.04. The pinned environment is `/home/wxzheng/eat-pcieccl-vllm-pro6000-20261115-074910/runtime_env.sh`.
   The existing patched MSCCL++ installation is reused; its installed version
   header, all header hashes and actual shared-library hash are archived.
-- Final rank CPU masks are 0–3, 4–7, 8–11, 12–15, 96–99, 100–103, 104–107,
+- Requested initial rank CPU masks are 0–3, 4–7, 8–11, 12–15, 96–99, 100–103, 104–107,
   and 108–111. Both backends use the same placement function before CUDA and
   worker initialization. The exploratory legacy and single-core controls are
   separate. Clock settings and system configuration are unchanged.
@@ -229,3 +236,7 @@ complete rank/size coverage, guards/output status, transport, timing contract,
 identities, and five independent rounds. Generated output goes under `build/`;
 the published figure uses `scripts/figure_style.py`, with previews under
 `build/figures/`.
+
+Source and plotting-script checksums identify recording commit `93110886`;
+the README checksum includes the later placement erratum. The original raw
+archive, policies, measurements, and figure are unchanged.

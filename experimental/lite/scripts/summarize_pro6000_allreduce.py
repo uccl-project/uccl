@@ -8,7 +8,7 @@ from pathlib import Path
 from statistics import median
 import tarfile
 
-from run_pro6000_allreduce import SIZES, parse, sha, transport
+from run_pro6000_allreduce import SIZES, parse, placement_audit, sha, transport
 
 
 if not __debug__:
@@ -84,6 +84,13 @@ def audit(root, output):
             values = parse(log.read_text(), sizes)
             assert {str(k): v for k, v in values.items()} == rec["values"]
             assert "warmups=10 continuous=20" in log.read_text()
+            if "thread_placement" in frozen["platform"]:
+                assert (
+                    placement_audit(
+                        log.read_text(), 4 if frozen["placement"] == "local-four" else 1
+                    )
+                    == rec["placement_audit"]
+                )
             if rec["backend"] == "nccl":
                 actual = transport(directory / "debug", rec["label"], sizes)
                 assert actual["hashes"] == rec["transport"]["hashes"]
@@ -247,6 +254,21 @@ def audit(root, output):
         nonseparated_sizes=overlapping,
         all_sizes_reproducibly_faster=not losses and not overlapping,
     )
+    # This control was the pre-optimization large-message implementation.
+    # Read its extra held-out 1-GiB points without selecting another variant.
+    controls = [runs.get(f"validation-{i}-ours-staged-ce-128") for i in range(1, 6)]
+    if all(controls) and any(
+        n.startswith("ring-") for n in frozen["policy"]["ours"].values()
+    ):
+        control_us = [r["values"][str(1 << 30)] for r in controls]
+        current_us = rows[-1]["ours_median_us"]
+        conclusion["staged_control_1g"] = dict(
+            config="staged-ce-128",
+            times_us=control_us,
+            median_us=median(control_us),
+            current_median_us=current_us,
+            latency_reduction_percent=100 * (1 - current_us / median(control_us)),
+        )
     (output / "summary.json").write_text(json.dumps(conclusion, indent=2) + "\n")
     lines = [
         "# Frozen-policy FP32/C++ AllReduce validation",

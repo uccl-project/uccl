@@ -14,6 +14,9 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--summary", type=Path, required=True)
     p.add_argument("--preview", action="store_true")
+    p.add_argument(
+        "--name", default="collectives-pro6000x8-allreduce-fp32-ce-optimized"
+    )
     a = p.parse_args()
     rows = list(csv.DictReader(a.summary.open()))
     assert [int(r["bytes"]) for r in rows] == [1 << p for p in range(10, 31)]
@@ -110,7 +113,7 @@ def main():
         ncol=2,
         frameon=False,
     )
-    save(fig, "collectives-pro6000x8-allreduce-fp32-ce-optimized", a.preview)
+    save(fig, a.name, a.preview)
 
 
 if __name__ == "__main__":
