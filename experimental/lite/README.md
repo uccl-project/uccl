@@ -27,12 +27,12 @@
 <div align="center">
 
 <table align="center">
-  <tr><th>#</th><th>GPUs</th><th>GPU P2P</th></tr>
-  <tr><td>1</td><td>8 × NVIDIA L4</td><td>Partial P2P</td></tr>
-  <tr><td>2</td><td>8 × NVIDIA L4</td><td>Without P2P</td></tr>
-  <tr><td>3</td><td>4 × NVIDIA L4</td><td>With P2P</td></tr>
-  <tr><td>4</td><td>2 × NVIDIA RTX PRO 6000</td><td>With P2P</td></tr>
-  <tr><td>5</td><td>8 × NVIDIA RTX PRO 6000 Blackwell</td><td>With P2P</td></tr>
+  <tr><th>#</th><th>GPUs</th><th>GPU P2P</th><th>PCIe switch P2P</th><th>PCIe root complex P2P</th></tr>
+  <tr><td>1</td><td>8 × NVIDIA L4</td><td>Partial support</td><td align="center">✓</td><td align="center">✗</td></tr>
+  <tr><td>2</td><td>8 × NVIDIA L4</td><td>Not supported</td><td align="center">✗</td><td align="center">✗</td></tr>
+  <tr><td>3</td><td>4 × NVIDIA L4</td><td>Full support</td><td align="center">✗</td><td align="center">✓</td></tr>
+  <tr><td>4</td><td>2 × NVIDIA RTX PRO 6000</td><td>Full support</td><td align="center">✓</td><td align="center">✗</td></tr>
+  <tr><td>5</td><td>8 × NVIDIA RTX PRO 6000</td><td>Full support</td><td align="center">✓</td><td align="center">✓</td></tr>
 </table>
 
 </div>
