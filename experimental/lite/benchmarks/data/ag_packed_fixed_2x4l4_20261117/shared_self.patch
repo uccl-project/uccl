@@ -1,0 +1,131 @@
+diff --git a/build/ag_packed_fixed_20261117/before.cu b/src/multinode/multinode_host_allgather.cu
+index b1a1b65c..2527527c 100644
+--- a/build/ag_packed_fixed_20261117/before.cu
++++ b/src/multinode/multinode_host_allgather.cu
+@@ -179,11 +179,11 @@ Config parse(int argc, char** argv) {
+         "contiguous download requires DMA upload, host inputs, "
+         "copy local exchange, multicast network and no early/worker modes");
+   if (cfg.packedDownload &&
+-      (cfg.smUpload || cfg.gpuWorkers || cfg.sharedLocal || cfg.pairedNetwork ||
+-       cfg.directRdma || cfg.localInputs || cfg.leanContext))
++      (cfg.smUpload || cfg.gpuWorkers || cfg.pairedNetwork || cfg.directRdma ||
++       cfg.localInputs == 2 || cfg.leanContext))
+     throw std::invalid_argument(
+-        "packed download requires DMA upload, host inputs, copy local "
+-        "exchange, multicast network and no worker/lean modes");
++        "packed download requires DMA upload, host/self inputs, multicast "
++        "network and no worker/lean modes");
+   return cfg;
+ }
+ struct Slot {
+@@ -658,7 +658,7 @@ int main(int argc, char** argv) {
+             own, vectors);
+         check(cudaGetLastError());
+       } else {
+-        auto* target = cfg.packedDownload
++        auto* target = cfg.packedDownload && !cfg.sharedLocal
+                            ? slot.packed.host + device.globalRank * slot.length
+                            : slot.send.host + gpu * slot.length;
+         check(cudaMemcpyAsync(target,
+@@ -683,27 +683,58 @@ int main(int argc, char** argv) {
+       int sourceCount = phase < 0 ? kGpus : 4;
+       if (cfg.packedDownload) {
+         size_t offset = piece * cfg.chunkBytes;
++        int lastSource = firstSource + sourceCount;
++        int own = cfg.localInputs == 1 ? device.globalRank : -1;
++        bool skipOwn = own >= firstSource && own < lastSource;
++        // Remote rows remain packed. Shared local rows are read directly
++        // from their owner's immutable packet, protected by its reader ACK.
++        auto hostRow = [&](int r, bool mapped) {
++          HostBlock* block = &slot.packed;
++          int row = r;
++          if (cfg.sharedLocal && r / 4 == node) {
++            block = r / kGpusPerGroup == rank ? &slot.send : &slot.local;
++            row = r % kGpusPerGroup;
++          }
++          return (mapped ? block->mapped[gpu] : block->host) +
++                 size_t(row) * slot.length;
++        };
+         if (cfg.dmaMulticast) {
+-          // Source rows are adjacent; destination rows are separated by the
+-          // complete contribution size. No CPU pack or GPU transpose pass.
+-          check(cudaMemcpy2DAsync(
+-              reinterpret_cast<char*>(device.output) +
+-                  size_t(firstSource) * shardBytes + offset,
+-              shardBytes, slot.packed.host + size_t(firstSource) * slot.length,
+-              slot.length, slot.length, sourceCount, cudaMemcpyHostToDevice,
+-              device.consume));
++          // Batch only physically adjacent source rows. Splitting at the own
++          // row avoids a redundant H2D, and splitting at shared packet edges
++          // avoids recreating the local MPI payload copy just to pack rows.
++          for (int first = firstSource; first < lastSource;) {
++            if (first == own) {
++              ++first;
++              continue;
++            }
++            int end = lastSource;
++            if (cfg.sharedLocal) {
++              int boundary = first / 4 == node
++                                 ? (first / kGpusPerGroup + 1) * kGpusPerGroup
++                                 : (first / 4 + 1) * 4;
++              end = std::min(end, boundary);
++            }
++            if (own > first && own < end) end = own;
++            check(cudaMemcpy2DAsync(
++                reinterpret_cast<char*>(device.output) +
++                    size_t(first) * shardBytes + offset,
++                shardBytes, hostRow(first, false), slot.length, slot.length,
++                end - first, cudaMemcpyHostToDevice, device.consume));
++            first = end;
++          }
+         } else {
+-          for (int r = firstSource; r < firstSource + sourceCount; ++r)
+-            source.pointer[r] = reinterpret_cast<uint4 const*>(
+-                slot.packed.mapped[gpu] + size_t(r) * slot.length);
++          for (int r = firstSource; r < lastSource; ++r)
++            if (r != own)
++              source.pointer[r] =
++                  reinterpret_cast<uint4 const*>(hostRow(r, true));
+           size_t vectors = slot.length / sizeof(uint4);
+           int blocks = int(std::min<size_t>(
+               128, (vectors + cfg.consumeThreads - 1) / cfg.consumeThreads));
+-          multicastPacket<<<dim3(blocks, sourceCount), cfg.consumeThreads, 0,
+-                            device.consume>>>(
++          multicastPacket<<<dim3(blocks, sourceCount - int(skipOwn)),
++                            cfg.consumeThreads, 0, device.consume>>>(
+               source, reinterpret_cast<uint4*>(device.output),
+               shardBytes / sizeof(uint4), offset / sizeof(uint4), vectors,
+-              firstSource, -1);
++              firstSource, skipOwn ? own : -1);
+           check(cudaGetLastError());
+         }
+         check(cudaEventRecord(device.consumeDone[slotIndex], device.consume));
+@@ -782,6 +813,19 @@ int main(int argc, char** argv) {
+     };
+     auto launch = [&](size_t fullBytes) {
+       size_t shardBytes = fullBytes / kGpus;
++      if (cfg.packedDownload && cfg.localInputs == 1) {
++        // Copy the retained shard once, rather than submitting a D2D for
++        // every packet. Consumer-stream order includes it in final completion;
++        // later consumers never write this output row.
++        for (auto const& device : devices) {
++          check(cudaSetDevice(device->physical));
++          check(cudaMemcpyAsync(
++              reinterpret_cast<char*>(device->output) +
++                  size_t(device->globalRank) * shardBytes,
++              device->input, shardBytes, cudaMemcpyDeviceToDevice,
++              device->consume));
++        }
++      }
+       if (cfg.contiguousDownload) {
+         size_t groupBytes = shardBytes * kGpusPerGroup;
+         std::array<MPI_Request, 3> receive{}, send{};
+@@ -918,7 +962,7 @@ int main(int argc, char** argv) {
+             check(cudaEventSynchronize(device->uploadDone[slotIndex]));
+           }
+         int count = int(2 * slot.length);
+-        auto* payload = cfg.packedDownload
++        auto* payload = cfg.packedDownload && !cfg.sharedLocal
+                             ? slot.packed.host + size_t(rank) * count
+                             : slot.send.host;
+         if (rdma) {

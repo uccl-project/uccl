@@ -1,5 +1,30 @@
 # NUMA host-router AllGather
 
+The opt-in combined path is available in the current standalone implementation:
+
+```text
+--download combined -k 262144
+```
+
+It preserves the low-submission packed CE path for measured 1–128-KiB outputs,
+uses early packed CE at 256 KiB, retains shared SM at 512 KiB–4 MiB, and uses
+shared/self packed CE at 8 MiB–1 GiB. CE selection is limited to the exact
+power-of-two extents covered by the measurements; other sizes use shared SM.
+The preset owns local-input/exchange/early-consume options and prepares both
+layouts outside timing. Per-call selection is included in the measurements.
+
+The large CE path reads local packets through the existing shared mapping and
+copies its own contribution once in device memory. Remote rows remain packed
+and use 2D copies into rank-ordered output. H2D volume is 7N/8; shared-reader ACKs
+protect reuse. `--download packed-dma --local-input self --local-exchange shared
+--early-consume 1 --progress ready -k 262144` selects that path explicitly.
+
+[Fresh latest-branch validation and README figure provenance](../benchmarks/data/ag_combined_latest_2x4l4_20261117/README.md)
+record the port onto `f9665eae`, matching two-host tests, baseline controls,
+transition/fallback checks and exact source hashes. This is an explicit eager
+experiment, not automatic production backend admission or a performance claim
+for other topology/software identities.
+
 This is an explicit experimental data path for two hosts with four L4 GPUs each,
 FP32, and two NUMA groups per host. Each group process owns two GPUs. It extends
 `multinode_host_allgather.cu`; the independently linked CPU-router core and its

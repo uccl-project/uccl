@@ -1,0 +1,93 @@
+[
+  {
+    "command": [
+      "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/ag_combined_latest_20261117/uccl_lite_multinode_host_allgather",
+      "--download",
+      "combined",
+      "-k",
+      "262144",
+      "--upload",
+      "sm"
+    ],
+    "returncode": 1,
+    "stderr": "host RDMA AllGather: combined download requires 256-KiB chunks, DMA upload, 256 threads and no local-input/exchange/early/worker/network overrides\n"
+  },
+  {
+    "command": [
+      "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/ag_combined_latest_20261117/uccl_lite_multinode_host_allgather",
+      "--download",
+      "combined",
+      "-k",
+      "262144",
+      "--local-input",
+      "self"
+    ],
+    "returncode": 1,
+    "stderr": "host RDMA AllGather: combined download requires 256-KiB chunks, DMA upload, 256 threads and no local-input/exchange/early/worker/network overrides\n"
+  },
+  {
+    "command": [
+      "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/ag_combined_latest_20261117/uccl_lite_multinode_host_allgather",
+      "--download",
+      "combined",
+      "-k",
+      "262144",
+      "--local-exchange",
+      "shared"
+    ],
+    "returncode": 1,
+    "stderr": "host RDMA AllGather: combined download requires 256-KiB chunks, DMA upload, 256 threads and no local-input/exchange/early/worker/network overrides\n"
+  },
+  {
+    "command": [
+      "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/ag_combined_latest_20261117/uccl_lite_multinode_host_allgather",
+      "--download",
+      "combined",
+      "-k",
+      "262144",
+      "--early-consume",
+      "1"
+    ],
+    "returncode": 1,
+    "stderr": "host RDMA AllGather: combined download requires 256-KiB chunks, DMA upload, 256 threads and no local-input/exchange/early/worker/network overrides\n"
+  },
+  {
+    "command": [
+      "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/ag_combined_latest_20261117/uccl_lite_multinode_host_allgather",
+      "--download",
+      "combined",
+      "-k",
+      "262144",
+      "--gpu-workers",
+      "1"
+    ],
+    "returncode": 1,
+    "stderr": "host RDMA AllGather: combined download requires 256-KiB chunks, DMA upload, 256 threads and no local-input/exchange/early/worker/network overrides\n"
+  },
+  {
+    "command": [
+      "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/ag_combined_latest_20261117/uccl_lite_multinode_host_allgather",
+      "--download",
+      "combined",
+      "-k",
+      "262144",
+      "--consume-threads",
+      "128"
+    ],
+    "returncode": 1,
+    "stderr": "host RDMA AllGather: combined download requires 256-KiB chunks, DMA upload, 256 threads and no local-input/exchange/early/worker/network overrides\n"
+  },
+  {
+    "command": [
+      "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/ag_combined_latest_20261117/uccl_lite_multinode_host_allgather",
+      "--download",
+      "combined",
+      "-k",
+      "262144",
+      "-k",
+      "131200"
+    ],
+    "returncode": 1,
+    "stderr": "host RDMA AllGather: combined download requires 256-KiB chunks, DMA upload, 256 threads and no local-input/exchange/early/worker/network overrides\n"
+  }
+]

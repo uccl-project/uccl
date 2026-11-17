@@ -1,0 +1,41 @@
+[
+  {
+    "command": [
+      "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/ag_contiguous_large_20261117/uccl_lite_multinode_host_allgather",
+      "--download",
+      "contiguous-dma",
+      "-e",
+      "1073741824",
+      "--local-exchange",
+      "shared"
+    ],
+    "returncode": 1,
+    "stderr": "host RDMA AllGather: contiguous download requires DMA upload, host inputs, copy local exchange, multicast network and no early/worker modes\n"
+  },
+  {
+    "command": [
+      "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/ag_contiguous_large_20261117/uccl_lite_multinode_host_allgather",
+      "--download",
+      "contiguous-dma",
+      "-e",
+      "1073741824",
+      "--early-consume",
+      "1"
+    ],
+    "returncode": 1,
+    "stderr": "host RDMA AllGather: contiguous download requires DMA upload, host inputs, copy local exchange, multicast network and no early/worker modes\n"
+  },
+  {
+    "command": [
+      "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/ag_contiguous_large_20261117/uccl_lite_multinode_host_allgather",
+      "--download",
+      "contiguous-dma",
+      "-e",
+      "1073741824",
+      "--upload",
+      "sm"
+    ],
+    "returncode": 1,
+    "stderr": "host RDMA AllGather: contiguous download requires DMA upload, host inputs, copy local exchange, multicast network and no early/worker modes\n"
+  }
+]

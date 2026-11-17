@@ -1,0 +1,26 @@
+[
+  {
+    "arguments": [
+      "--download",
+      "contiguous-dma",
+      "-e",
+      "4194304",
+      "-k",
+      "262144"
+    ],
+    "returncode": 1,
+    "stderr": "host RDMA AllGather: contiguous download requires one piece, DMA upload, host inputs, copy local exchange, multicast network and no early/worker modes\n"
+  },
+  {
+    "arguments": [
+      "--download",
+      "contiguous-dma",
+      "-e",
+      "1024",
+      "--local-exchange",
+      "shared"
+    ],
+    "returncode": 1,
+    "stderr": "host RDMA AllGather: contiguous download requires one piece, DMA upload, host inputs, copy local exchange, multicast network and no early/worker modes\n"
+  }
+]

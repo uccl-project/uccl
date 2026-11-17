@@ -1,0 +1,5 @@
+make: Nothing to be done for 'router-policy-check'.
+g++ -O3 -std=c++17 -MMD -MP -Iinclude -Iinclude/uccl_lite/cpu_router -I/usr/local/cuda/include tests/cpu_router/dispatcher_check.cc build/cpu_router/libuccl_lite_cpu_router.a -L/usr/local/cuda/lib64 -lcudart -lpthread -ldl -Wl,-rpath,/usr/local/cuda/lib64 -o build/uccl_lite_dispatcher_check
+/usr/local/cuda/bin/nvcc -O3 -arch=sm_89 -MMD -MP  -std=c++17 -Iinclude -Iinclude/uccl_lite/cpu_router -I/usr/local/cuda/include tests/cpu_router/dispatcher_cuda_check.cu build/cpu_router/libuccl_lite_cpu_router.a -Xcompiler=-pthread -ldl -o build/uccl_lite_dispatcher_cuda_check
+/usr/local/cuda/bin/nvcc -O3 -arch=sm_89 -MMD -MP  -std=c++17 -Iinclude -Iinclude/uccl_lite/cpu_router -I/usr/local/cuda/include tests/cpu_router/router_check.cu build/cpu_router/libuccl_lite_cpu_router.a -Xcompiler=-pthread -ldl -o build/uccl_lite_router_check
+/usr/local/cuda/bin/nvcc -O3 -arch=sm_89 -MMD -MP  -std=c++17 -Iinclude -Iinclude/uccl_lite/cpu_router -I/usr/local/cuda/include tests/cpu_router/router_graph_check.cu build/cpu_router/libuccl_lite_cpu_router.a -Xcompiler=-pthread -ldl -o build/uccl_lite_router_graph_check
