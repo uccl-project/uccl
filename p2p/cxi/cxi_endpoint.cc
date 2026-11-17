@@ -6,6 +6,8 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <future>
 #include <limits>
 #include <sstream>
@@ -47,12 +49,49 @@ fi_threading threading_hint() {
       " (expected one of: safe, endpoint, completion, domain, fid, unspec)");
 }
 
+// Reads <device_dir>/numa_node. Returns -1 if it is missing or unknown.
+int sysfs_numa_node(std::filesystem::path const& device_dir) {
+  std::ifstream file(device_dir / "numa_node");
+  int node = -1;
+  if (!(file >> node) || node < 0) return -1;
+  return node;
+}
+
+std::filesystem::path cxi_device_dir(std::string const& domain_name) {
+  return std::filesystem::path("/sys/class/cxi") / domain_name / "device";
+}
+
+int cxi_device_index_on_gpu_numa_node(int gpu_index) {
+  auto const gpus = uccl::get_gpu_cards();
+  if (static_cast<size_t>(gpu_index) >= gpus.size()) return -1;
+  int const node = sysfs_numa_node(gpus[gpu_index]);
+  if (node < 0) return -1;
+
+  int found = -1;
+  std::error_code ec;
+  for (auto const& entry :
+       std::filesystem::directory_iterator("/sys/class/cxi", ec)) {
+    std::string const name = entry.path().filename().string();
+    if (name.rfind("cxi", 0) != 0) continue;
+
+    char* end = nullptr;
+    long const index = std::strtol(name.c_str() + 3, &end, 10);
+    if (end == name.c_str() + 3 || *end != '\0') continue;
+    if (sysfs_numa_node(cxi_device_dir(name)) != node) continue;
+    if (found >= 0) return -1;  // More than one NIC on this NUMA node.
+    found = static_cast<int>(index);
+  }
+  return found;
+}
+
 int cxi_device_index_for_gpu(int gpu_index) {
   char const* value = std::getenv("UCCL_CXI_DEVICE_INDEX");
   if (value && value[0] != '\0') return std::atoi(value);
   if (gpu_index < 0 || static_cast<uint32_t>(gpu_index) == INVALID_GPU) {
     return -1;
   }
+  int const local = cxi_device_index_on_gpu_numa_node(gpu_index);
+  if (local >= 0) return local;
   return gpu_index % 4;
 }
 
@@ -196,8 +235,15 @@ bool CxiEndpoint::initialize_rdma_ctx_for_gpu(
   init_fabric(gpu_index);
   fabric_initialized_ = true;
   UCCL_LOG(INFO) << "CxiEndpoint initialized for GPU " << gpu_index
-                 << " on domain " << cxi_domain_name_for_gpu(gpu_index);
+                 << " on domain "
+                 << (info_->domain_attr->name ? info_->domain_attr->name : "?")
+                 << ", NIC NUMA node " << nic_numa_node();
   return true;
+}
+
+int CxiEndpoint::nic_numa_node() const {
+  if (!info_ || !info_->domain_attr || !info_->domain_attr->name) return -1;
+  return sysfs_numa_node(cxi_device_dir(info_->domain_attr->name));
 }
 
 void CxiEndpoint::init_fabric(int gpu_index) {

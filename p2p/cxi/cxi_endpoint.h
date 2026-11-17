@@ -48,6 +48,8 @@ class CxiEndpoint {
   void create_unified_p2p_socket() {}
 
   int gpu_index() const { return gpu_index_; }
+  // NUMA node of the CXI NIC this endpoint opened, or -1 if it is unknown.
+  int nic_numa_node() const;
   uint16_t get_p2p_listen_port();
   int get_p2p_listen_fd();
   std::shared_ptr<EpollClient> get_oob_client();
