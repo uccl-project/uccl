@@ -40,6 +40,23 @@ static __global__ void consume(Sources sources, uint4* output, size_t shard,
        i += size_t(gridDim.x) * blockDim.x)
     output[size_t(source) * shard + offset + i] = sources.p[source][i];
 }
+// Experimental consumer: each source points to a full-input packet, not a
+// reduced shard. All eight contributions are summed directly into GPU output.
+static __global__ void reduceInputs(Sources sources, float4* output,
+                                    size_t offset, size_t length) {
+  for (size_t i = blockIdx.x * blockDim.x + threadIdx.x; i < length;
+       i += size_t(gridDim.x) * blockDim.x) {
+    float4 sum = make_float4(0, 0, 0, 0);
+    for (int source = 0; source < 8; ++source) {
+      float4 value = reinterpret_cast<float4 const*>(sources.p[source])[i];
+      sum.x += value.x;
+      sum.y += value.y;
+      sum.z += value.z;
+      sum.w += value.w;
+    }
+    output[offset + i] = sum;
+  }
+}
 class Gather {
   static constexpr int slots = 3;
   struct Slot {
@@ -167,10 +184,14 @@ class Gather {
       if (p) cudaHostUnregister(p);
     if (window_ != MPI_WIN_NULL) MPI_Win_free(&window_);
   }
-  void run(void const* input, void* output, size_t shardBytes) {
+  void run(void const* input, void* output, size_t shardBytes,
+           bool reduceAllInputs = false) {
     size_t pieces = (shardBytes + capacity_ - 1) / capacity_, next = 0,
            retired = 0;
     auto gpuConsume = [&](int index, bool remote) {
+      // A one-shot reduction waits for all eight inputs; it has no local-only
+      // output pass. Existing upload/send/ACK ordering stays unchanged.
+      if (reduceAllInputs && !remote) return;
       cudaCheck(__LINE__, cudaSetDevice(local_));
       Slot& s = state_[index];
       Sources sources{};
@@ -192,9 +213,23 @@ class Gather {
       // Every CUDA operation owned here is checked directly; clear only that
       // probe status before testing this launch, preserving all other errors.
       clearMpiProbeStatus();
-      consume<<<dim3(blocks, 4), 256, 0, consume_>>>(
-          sources, static_cast<uint4*>(output), shardBytes / 16, s.offset / 16,
-          s.length / 16, first);
+      if (reduceAllInputs) {
+        for (int g = 0; g < 2; ++g)
+          for (int p = 0; p < 2; ++p) {
+            int global = 4 * node_ + 2 * g + p;
+            char const* src =
+                mapped_[g] + size_t(index) * 6 * capacity_ + p * s.length;
+            if (global == rank_)
+              src = static_cast<char const*>(input) + s.offset;
+            sources.p[global] = reinterpret_cast<uint4 const*>(src);
+          }
+        reduceInputs<<<blocks, 256, 0, consume_>>>(
+            sources, static_cast<float4*>(output), s.offset / 16,
+            s.length / 16);
+      } else
+        consume<<<dim3(blocks, 4), 256, 0, consume_>>>(
+            sources, static_cast<uint4*>(output), shardBytes / 16,
+            s.offset / 16, s.length / 16, first);
       cudaCheck(__LINE__, cudaGetLastError());
       if (remote) cudaCheck(__LINE__, cudaEventRecord(s.down, consume_));
     };

@@ -1,0 +1,75 @@
+$ git rev-parse HEAD
+14f0033344dabe590227964a447d340cfcc33e58
+$ hostname
+mibura-sky-test-02
+$ nvidia-smi --query-gpu=name,pci.bus_id,driver_version,utilization.gpu,clocks.sm,clocks.mem --format=csv
+name, pci.bus_id, driver_version, utilization.gpu [%], clocks.current.sm [MHz], clocks.current.memory [MHz]
+NVIDIA L4, 00000000:4A:00.0, 595.58.03, 0 %, 210 MHz, 405 MHz
+NVIDIA L4, 00000000:61:00.0, 595.58.03, 0 %, 210 MHz, 405 MHz
+NVIDIA L4, 00000000:CA:00.0, 595.58.03, 0 %, 210 MHz, 405 MHz
+NVIDIA L4, 00000000:E1:00.0, 595.58.03, 0 %, 210 MHz, 405 MHz
+$ nvidia-smi topo -m
+	[4mGPU0	GPU1	GPU2	GPU3	NIC0	NIC1	CPU Affinity	NUMA Affinity	GPU NUMA ID[0m
+GPU0	 X 	NODE	SYS	SYS	NODE	SYS	0,2,4,6,8,10	0		N/A
+GPU1	NODE	 X 	SYS	SYS	NODE	SYS	0,2,4,6,8,10	0		N/A
+GPU2	SYS	SYS	 X 	NODE	SYS	NODE	1,3,5,7,9,11	1		N/A
+GPU3	SYS	SYS	NODE	 X 	SYS	NODE	1,3,5,7,9,11	1		N/A
+NIC0	NODE	NODE	SYS	SYS	 X 	SYS				
+NIC1	SYS	SYS	NODE	NODE	SYS	 X 				
+
+Legend:
+
+  X    = Self
+  SYS  = Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)
+  NODE = Connection traversing PCIe as well as the interconnect between PCIe Host Bridges within a NUMA node
+  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)
+  PXB  = Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)
+  PIX  = Connection traversing at most a single PCIe bridge
+  NV#  = Connection traversing a bonded set of # NVLinks
+
+NIC Legend:
+
+  NIC0: mlx5_0
+  NIC1: mlx5_1
+
+$ /usr/local/cuda/bin/nvcc --version
+nvcc: NVIDIA (R) Cuda compiler driver
+Copyright (c) 2005-2025 NVIDIA Corporation
+Built on Tue_May_27_02:21:03_PDT_2025
+Cuda compilation tools, release 12.9, V12.9.86
+Build cuda_12.9.r12.9/compiler.36037853_0
+$ /usr/mpi/gcc/openmpi-4.1.7rc1/bin/mpirun --version
+mpirun (Open MPI) 4.1.7rc1
+
+Report bugs to http://www.open-mpi.org/community/help/
+$ ssh 10.10.55.1 hostname; nvidia-smi --query-gpu=name,pci.bus_id,driver_version,utilization.gpu --format=csv; nvidia-smi --query-compute-apps=pid,process_name --format=csv; nvidia-smi topo -m
+mibura-sky-test-01
+name, pci.bus_id, driver_version, utilization.gpu [%]
+NVIDIA L4, 00000000:4A:00.0, 580.178.04, 0 %
+NVIDIA L4, 00000000:61:00.0, 580.178.04, 0 %
+NVIDIA L4, 00000000:CA:00.0, 580.178.04, 0 %
+NVIDIA L4, 00000000:E1:00.0, 580.178.04, 0 %
+pid, process_name
+	[4mGPU0	GPU1	GPU2	GPU3	NIC0	NIC1	CPU Affinity	NUMA Affinity	GPU NUMA ID[0m
+GPU0	 X 	NODE	SYS	SYS	NODE	SYS	0,2,4,6,8,10	0		N/A
+GPU1	NODE	 X 	SYS	SYS	NODE	SYS	0,2,4,6,8,10	0		N/A
+GPU2	SYS	SYS	 X 	NODE	SYS	NODE	1,3,5,7,9,11	1		N/A
+GPU3	SYS	SYS	NODE	 X 	SYS	NODE	1,3,5,7,9,11	1		N/A
+NIC0	NODE	NODE	SYS	SYS	 X 	SYS				
+NIC1	SYS	SYS	NODE	NODE	SYS	 X 				
+
+Legend:
+
+  X    = Self
+  SYS  = Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)
+  NODE = Connection traversing PCIe as well as the interconnect between PCIe Host Bridges within a NUMA node
+  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)
+  PXB  = Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)
+  PIX  = Connection traversing at most a single PCIe bridge
+  NV#  = Connection traversing a bonded set of # NVLinks
+
+NIC Legend:
+
+  NIC0: mlx5_0
+  NIC1: mlx5_1
+

@@ -1227,6 +1227,7 @@ __global__ void nullKernel() {}
 
 struct Config {
   bool arOneShot = false;
+  bool hostOneShot = false;
   bool allGather = false;
   bool reduceScatter = false;
   bool arAuto = false;
@@ -1388,6 +1389,8 @@ int main(int argc, char** argv) {
         cfg.hostGather = std::atoi(next()) != 0;
       else if (key == "--host-piece-bytes")
         cfg.hostPieceBytes = std::strtoull(next(), nullptr, 0);
+      else if (key == "--host-oneshot")
+        cfg.hostOneShot = std::atoi(next()) != 0;
       else if (key == "--ar-oneshot")
         cfg.arOneShot = std::atoi(next()) != 0;
       else if (key == "--ar-auto")
@@ -1570,9 +1573,19 @@ int main(int argc, char** argv) {
     MPI_Abort(MPI_COMM_WORLD, 2);
   }
 
-  bool hybridRs = cfg.hostGather && !cfg.allGather;
+  if (cfg.hostOneShot &&
+      (!cfg.hostGather || cfg.allGather || cfg.reduceScatter || cfg.arOneShot ||
+       cfg.maxBytes > (1UL << 20))) {
+    if (rank == 0)
+      std::fprintf(stderr,
+                   "--host-oneshot requires --host-gather 1, "
+                   "exclusive AllReduce <= 1 MiB\n");
+    MPI_Abort(MPI_COMM_WORLD, 2);
+  }
+  bool hybridRs = cfg.hostGather && !cfg.allGather && !cfg.hostOneShot;
   if (cfg.hostRepeatCheck < 0 || cfg.hostRepeatCheck > 8 ||
-      (cfg.hostRepeatCheck && (!hybridRs || cfg.reduceScatter))) {
+      (cfg.hostRepeatCheck &&
+       ((!hybridRs && !cfg.hostOneShot) || cfg.reduceScatter))) {
     if (rank == 0)
       std::fprintf(
           stderr,
@@ -1852,8 +1865,10 @@ int main(int argc, char** argv) {
     CUDACHECK(setupStatus);
   CUDACHECK(cudaDeviceSynchronize());
   PortChan ib = ibObject.deviceHandle();
-  localProxy->startProxy();
-  ibProxy->startProxy();
+  if (!cfg.hostOneShot) {
+    localProxy->startProxy();
+    ibProxy->startProxy();
+  }
 
   cudaStream_t stream;
   CUDACHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
@@ -1964,16 +1979,21 @@ int main(int argc, char** argv) {
   // received call i+1, by which time this rank has finished consuming call i.
   // The allocation already reserves two maximum-size RS shards for IB scratch.
   std::unique_ptr<uccl_lite::host_gather::Gather> hostGather;
-  if (cfg.hostGather &&
-      (cfg.allGather || cfg.maxBytes > kHybridSerialArMaxBytes))
+  if (cfg.hostGather && (cfg.hostOneShot || cfg.allGather ||
+                         cfg.maxBytes > kHybridSerialArMaxBytes))
     hostGather = std::make_unique<uccl_lite::host_gather::Gather>(
-        rank, localComm, cfg.maxBytes / kWorld, cfg.hostPieceBytes);
+        rank, localComm, cfg.hostOneShot ? cfg.maxBytes : cfg.maxBytes / kWorld,
+        cfg.hostPieceBytes);
   unsigned overlapSequence = 0;
   unsigned agSequence = 0;
   unsigned oneShotSequence = 0;
   auto launch = [&](size_t count, size_t bytes) {
     CUDACHECK(cudaSetDevice(localRank));
     if (hostGather) uccl_lite::host_gather::clearMpiProbeStatus();
+    if (cfg.hostOneShot) {
+      hostGather->run(buffer + layout.data, buffer + layout.data, bytes, true);
+      return;
+    }
     if (cfg.arOneShot) {
       uccl_lite::multinode_experiment::oneShotAllReduce<<<1, 256, 0, stream>>>(
           localDirect, ib, buffer, count, layout, localRank,
@@ -2178,7 +2198,8 @@ int main(int argc, char** argv) {
           "# explicit host packet gather; chunk=%zu; slots=3; GPU "
           "reduction=%s; timing includes phase handoff\n",
           cfg.hostPieceBytes,
-          hybridRs ? "tuned RS 96x512, 8MiB target" : "none");
+          hybridRs ? "tuned RS 96x512, 8MiB target"
+          : cfg.hostOneShot ? "SM full-input sum" : "none");
     if (cfg.allGather || cfg.reduceScatter)
       std::printf("# local %s, remote-rank IB exchange; rail map "
                   "%d,%d,%d,%d; RS pieces %d\n",
@@ -2194,7 +2215,11 @@ int main(int argc, char** argv) {
                                               : "flat reduction"),
                   cfg.railMap[0], cfg.railMap[1], cfg.railMap[2],
                   cfg.railMap[3], cfg.rsPieces);
-    if (cfg.arOneShot)
+    if (cfg.hostOneShot)
+      std::printf(
+          "# experimental host one-shot: CE D2H raw inputs; UCX "
+          "host RDMA; SM mapped-host reduction; no GPU P2P payload\n");
+    else if (cfg.arOneShot)
       std::printf("# experimental one-shot: full-input IB exchange; SM local "
                   "pull/reduction; 1 CTA x 256 threads; 2 banks; no result AG\n");
     else if (cfg.rsTargetPieceBytes && rank == 0)
@@ -2248,7 +2273,8 @@ int main(int argc, char** argv) {
     }
     if (rank == 0) {
       char const* selected =
-          cfg.arOneShot    ? "oneshot-remote-input-local-pull"
+          cfg.hostOneShot  ? "oneshot-host-input-reduction"
+          : cfg.arOneShot  ? "oneshot-remote-input-local-pull"
           : cfg.hostGather ? (hybridRs ? (bytes <= kHybridSerialArMaxBytes
                                               ? "serial-local"
                                               : "gpu-rs-host-ag")
@@ -2416,8 +2442,10 @@ int main(int argc, char** argv) {
   CUDACHECK(cudaStreamSynchronize(stream));
   MPICHECK(MPI_Barrier(MPI_COMM_WORLD));
   hostGather.reset();
-  ibProxy->stopProxy();
-  localProxy->stopProxy();
+  if (!cfg.hostOneShot) {
+    ibProxy->stopProxy();
+    localProxy->stopProxy();
+  }
   if (timingEnd) CUDACHECK(cudaEventDestroy(timingEnd));
   if (timingStart) CUDACHECK(cudaEventDestroy(timingStart));
   CUDACHECK(cudaStreamDestroy(stream));
