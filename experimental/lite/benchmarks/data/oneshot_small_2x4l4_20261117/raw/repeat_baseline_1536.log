@@ -1,0 +1,19 @@
+# UCCL Lite two-node hierarchical AllReduce, float32
+# timing=host enqueue+completion; slowest of eight ranks
+# rank 0 node mibura-sky-test-02 gpu 0 NVIDIA L4 rail 0 (mlx5_0)
+# rank 1 node mibura-sky-test-02 gpu 1 NVIDIA L4 rail 0 (mlx5_0)
+# rank 2 node mibura-sky-test-02 gpu 2 NVIDIA L4 rail 1 (mlx5_1)
+# rank 3 node mibura-sky-test-02 gpu 3 NVIDIA L4 rail 1 (mlx5_1)
+# rank 4 node mibura-sky-test-01 gpu 0 NVIDIA L4 rail 0 (mlx5_0)
+# rank 5 node mibura-sky-test-01 gpu 1 NVIDIA L4 rail 0 (mlx5_0)
+# rank 6 node mibura-sky-test-01 gpu 2 NVIDIA L4 rail 1 (mlx5_1)
+# rank 7 node mibura-sky-test-01 gpu 3 NVIDIA L4 rail 1 (mlx5_1)
+# explicit host packet gather; chunk=262144; slots=3; GPU reduction=tuned RS 96x512, 8MiB target; timing includes phase handoff
+# RS target piece 8388608 B per destination shard
+#      size(B)        count   pieces   time(us)      algbw      busbw  maxrelerr
+# selected,allreduce,1536,serial-local
+# host_repeat_check,1536,8,0.000e+00
+# sample,allreduce,1536,1,48.828,0.000e+00
+# sample,allreduce,1536,2,36.113,0.000e+00
+# sample,allreduce,1536,3,35.891,0.000e+00
+          1536          384        1      40.28       0.04       0.07    0.0e+00
