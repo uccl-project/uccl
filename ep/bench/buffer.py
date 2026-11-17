@@ -194,7 +194,6 @@ class Buffer:
             group,
             use_normal_mode=not low_latency_mode,
             is_intranode=is_intranode,
-            rdma_buffer_is_host_allocated=rdma_buffer_is_host_allocated,
         )
         check_nvlink_connections(group)
 

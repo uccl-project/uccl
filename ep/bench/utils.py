@@ -605,7 +605,6 @@ def initialize_uccl(
     num_experts=0,
     is_intranode: Optional[bool] = None,
     use_normal_mode=False,
-    rdma_buffer_is_host_allocated=False,
 ):
     # Only sweep barriers belonging to OUR mode so we don't stomp on a
     # coexisting Buffer of the other mode in the same process. The C++
