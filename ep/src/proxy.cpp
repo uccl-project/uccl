@@ -1496,29 +1496,14 @@ void Proxy::quiet(std::vector<uint64_t> wrs, std::vector<TransferCmd> cmds) {
   acked_wrs_.insert(wrs[0]);
 }
 
-void Proxy::destroy(bool free_gpu_buffer) {
+void Proxy::destroy() {
+  // Main scratch is borrowed. Its owner frees it after all users finish.
   if (cxi_transport_) {
     for (auto& transport : cxi_transports_by_rank_) {
       if (transport) transport->destroy();
     }
     cxi_transports_by_rank_.clear();
     cxi_transport_ = nullptr;
-
-    if (free_gpu_buffer && cfg_.gpu_buffer) {
-      cudaError_t e;
-      if (cfg_.free_buffer_with_cuda_free_host) {
-        e = cudaFreeHost(cfg_.gpu_buffer);
-        if (e != cudaSuccess)
-          fprintf(stderr, "[destroy] cudaFreeHost failed: %s\n",
-                  cudaGetErrorString(e));
-      } else {
-        e = cudaFree(cfg_.gpu_buffer);
-        if (e != cudaSuccess)
-          fprintf(stderr, "[destroy] cudaFree failed: %s\n",
-                  cudaGetErrorString(e));
-      }
-      if (e == cudaSuccess) cfg_.gpu_buffer = nullptr;
-    }
 
     acked_wrs_.clear();
     wr_id_to_start_time_.clear();
@@ -1695,22 +1680,6 @@ void Proxy::destroy(bool free_gpu_buffer) {
   if (ctx_.atomic_old_values_buf) {
     free(ctx_.atomic_old_values_buf);
     ctx_.atomic_old_values_buf = nullptr;
-  }
-
-  if (free_gpu_buffer && cfg_.gpu_buffer) {
-    cudaError_t e;
-    if (cfg_.free_buffer_with_cuda_free_host) {
-      e = cudaFreeHost(cfg_.gpu_buffer);
-      if (e != cudaSuccess)
-        fprintf(stderr, "[destroy] cudaFreeHost failed: %s\n",
-                cudaGetErrorString(e));
-    } else {
-      e = cudaFree(cfg_.gpu_buffer);
-      if (e != cudaSuccess)
-        fprintf(stderr, "[destroy] cudaFree failed: %s\n",
-                cudaGetErrorString(e));
-    }
-    if (e == cudaSuccess) cfg_.gpu_buffer = nullptr;
   }
 
   if (ctx_.pd) {

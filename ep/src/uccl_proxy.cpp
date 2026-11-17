@@ -16,8 +16,8 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
                      size_t total_size, int rank, int node_idx, int local_rank,
                      int num_experts, int num_ranks, int num_nodes,
                      bool use_normal_mode, bool is_intranode,
-                     bool gpu_buffer_is_host_allocated, int barrier_local_rank,
-                     int device_index, int nic_local_rank)
+                     int barrier_local_rank, int device_index,
+                     int nic_local_rank)
     : thread_{},
       mode_{Mode::None},
       running_{false},
@@ -60,7 +60,6 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
   cfg.num_nodes = num_nodes;
   cfg.use_normal_mode = use_normal_mode;
   cfg.is_intranode = is_intranode;
-  cfg.free_buffer_with_cuda_free_host = gpu_buffer_is_host_allocated;
   proxy_ = std::make_unique<Proxy>(cfg);
   local_rank_ = local_rank;
   node_idx_ = node_idx;
@@ -156,9 +155,7 @@ void UcclProxy::stop() {
   proxy_->set_progress_run(false);
   if (thread_.joinable()) thread_.join();
   running_.store(false, std::memory_order_release);
-  // Because proxies share the gpu_buffer, only destroy gpu_buffer for the first
-  // proxy.
-  proxy_->destroy(thread_idx_ == 0);
+  proxy_->destroy();
 }
 
 void UcclProxy::start(Mode m) {
@@ -287,8 +284,7 @@ void FifoProxy::stop() {
     thread_->join();
   }
   thread_.reset();
-  // Python owns the scratch tensor; only release the transport resources.
-  proxy_->destroy(false);
+  proxy_->destroy();
 }
 
 void FifoProxy::run_sender() {
