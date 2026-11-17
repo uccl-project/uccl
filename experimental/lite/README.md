@@ -39,13 +39,18 @@
 
 ## What is included
 
-| Component | Purpose |
-| --- | --- |
-| [Profiler](docs/hardware-profiler.md) | Inspect GPU, PCIe, and NUMA topology and measure transfer bandwidth. |
-| [Single-node collectives](docs/collectives.md) | AllReduce, AllGather, and ReduceScatter on one node. |
-| [Multi-node collectives](docs/multinode.md) | Collective implementations across nodes using local GPU access and network rails. |
-| [CPU router](docs/cpu-router.md) | Optional NUMA-aware path for local collectives, selected from measured benefit. |
-| [Fusion kernels](docs/fusion.md) | Combine collective communication with GEMM and MoE stages. |
+<div align="center">
+
+<table align="center">
+  <tr><th>Component</th><th>Purpose</th></tr>
+  <tr><td><a href="docs/hardware-profiler.md">Profiler</a></td><td>Inspect GPU, PCIe, and NUMA topology and measure transfer bandwidth.</td></tr>
+  <tr><td><a href="docs/collectives.md">Single-node collectives</a></td><td>AllReduce, AllGather, and ReduceScatter on one node.</td></tr>
+  <tr><td><a href="docs/multinode.md">Multi-node collectives</a></td><td>Collective implementations across nodes using local GPU access and network rails.</td></tr>
+  <tr><td><a href="docs/cpu-router.md">CPU router</a></td><td>Optional NUMA-aware path for local collectives, selected from measured benefit.</td></tr>
+  <tr><td><a href="docs/fusion.md">Fusion kernels</a></td><td>Combine collective communication with GEMM and MoE stages.</td></tr>
+</table>
+
+</div>
 
 ## Measured results
 
