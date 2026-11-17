@@ -1,0 +1,57 @@
+[
+  {
+    "command": [
+      "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/ag_packed_pipeline_20261117/uccl_lite_multinode_host_allgather",
+      "--download",
+      "packed-dma",
+      "--local-exchange",
+      "shared"
+    ],
+    "returncode": 1,
+    "stderr": "host RDMA AllGather: packed download requires DMA upload, host inputs, copy local exchange, multicast network and no worker/lean modes\n"
+  },
+  {
+    "command": [
+      "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/ag_packed_pipeline_20261117/uccl_lite_multinode_host_allgather",
+      "--download",
+      "packed-dma",
+      "--local-input",
+      "self"
+    ],
+    "returncode": 1,
+    "stderr": "host RDMA AllGather: packed download requires DMA upload, host inputs, copy local exchange, multicast network and no worker/lean modes\n"
+  },
+  {
+    "command": [
+      "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/ag_packed_pipeline_20261117/uccl_lite_multinode_host_allgather",
+      "--download",
+      "packed-dma",
+      "--upload",
+      "sm"
+    ],
+    "returncode": 1,
+    "stderr": "host RDMA AllGather: packed download requires DMA upload, host inputs, copy local exchange, multicast network and no worker/lean modes\n"
+  },
+  {
+    "command": [
+      "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/ag_packed_pipeline_20261117/uccl_lite_multinode_host_allgather",
+      "--download",
+      "packed-dma",
+      "--gpu-workers",
+      "1"
+    ],
+    "returncode": 1,
+    "stderr": "host RDMA AllGather: packed download requires DMA upload, host inputs, copy local exchange, multicast network and no worker/lean modes\n"
+  },
+  {
+    "command": [
+      "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/ag_packed_pipeline_20261117/uccl_lite_multinode_host_allgather",
+      "--download",
+      "packed-dma",
+      "--network",
+      "paired"
+    ],
+    "returncode": 1,
+    "stderr": "host RDMA AllGather: packed download requires DMA upload, host inputs, copy local exchange, multicast network and no worker/lean modes\n"
+  }
+]

@@ -1,0 +1,4 @@
+mode,round,bytes,mean_us
+contiguous_dma,1,1073741824,77392.96104
+contiguous_dma,2,1073741824,77250.49336
+contiguous_dma,3,1073741824,77424.03882

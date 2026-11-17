@@ -1,0 +1,9 @@
+mode,round,bytes,mean_us
+combined,1,131200,96.8771
+combined,1,262400,101.7095
+combined,1,524800,112.2304
+combined,1,1049600,132.7945
+combined,1,2099200,242.4857
+combined,1,4198400,383.6187
+combined,1,8396800,667.8616
+combined,1,16793600,1295.5852

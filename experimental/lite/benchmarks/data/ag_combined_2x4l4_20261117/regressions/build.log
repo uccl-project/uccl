@@ -1,0 +1,5 @@
+make: Nothing to be done for 'router-policy-check'.
+make: 'build/uccl_lite_dispatcher_check' is up to date.
+make: 'build/uccl_lite_dispatcher_cuda_check' is up to date.
+make: 'build/uccl_lite_router_check' is up to date.
+make: 'build/uccl_lite_router_graph_check' is up to date.

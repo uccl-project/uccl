@@ -1,0 +1,36 @@
+diff --git a/home/zhongjie/uccl-zhongjie-dev/experimental/lite/benchmarks/data/ag_contiguous_2x4l4_20261117/measured_source/src/multinode/multinode_host_allgather.cu b/src/multinode/multinode_host_allgather.cu
+index aa567bd7..ee18aa9a 100644
+--- a/home/zhongjie/uccl-zhongjie-dev/experimental/lite/benchmarks/data/ag_contiguous_2x4l4_20261117/measured_source/src/multinode/multinode_host_allgather.cu
++++ b/src/multinode/multinode_host_allgather.cu
+@@ -162,14 +162,15 @@ Config parse(int argc, char** argv) {
+     throw std::invalid_argument(
+         "RDMA mode requires make multinode_host_rdma_allgather");
+ #endif
+-  // Experimental one-piece layout. Receives land directly in rank order;
+-  // every invocation drains all readers before this single buffer is reused.
++  // Experimental full-tensor layout, independent of packet chunk size.
++  // Receives land directly in rank order; every invocation drains all readers
++  // before this single buffer is reused. The global 1-GiB limit also keeps
++  // each two-GPU MPI contribution (fullBytes / 4) within an int count.
+   if (cfg.contiguousDownload &&
+-      (cfg.end > cfg.chunkBytes * kGpus || cfg.smUpload || cfg.gpuWorkers ||
+-       cfg.earlyConsume || cfg.sharedLocal || cfg.pairedNetwork ||
+-       cfg.directRdma || cfg.localInputs || cfg.leanContext))
++      (cfg.smUpload || cfg.gpuWorkers || cfg.earlyConsume || cfg.sharedLocal ||
++       cfg.pairedNetwork || cfg.directRdma || cfg.localInputs || cfg.leanContext))
+     throw std::invalid_argument(
+-        "contiguous download requires one piece, DMA upload, host inputs, "
++        "contiguous download requires DMA upload, host inputs, "
+         "copy local exchange, multicast network and no early/worker modes");
+   return cfg;
+ }
+@@ -570,6 +571,9 @@ int main(int argc, char** argv) {
+       std::printf("# timing=host enqueue+completion, slowest of 4 groups/8 GPUs; "
+                   "warmups=%d iterations=%d repeats=%d; every output checked\n",
+                   cfg.warmups, cfg.iterations, cfg.repeats);
++      if (cfg.contiguousDownload)
++        std::puts("# contiguous schedule=full-tensor; chunk setting unused; "
++                  "one full-output H2D copy/kernel per GPU after all receives");
+       if (cfg.compareNccl)
+         std::printf("# paired NCCL version=%d; same two GPU streams and "
+                     "complete output check\n", ncclVersion);

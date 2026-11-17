@@ -1,0 +1,159 @@
+# two-node host-RDMA AllGather; FP32; 4 GPUs/node; 2 MPI groups/node; 2 IB rails; chunk=131200 B; slots=3; download=packed-dma
+# host network=remote-multicast local_input=host gpu_workers=0 early_consume=1 progress=ready upload=dma lean_context=0 consume_threads=256 local_exchange=shared delay_rank=3
+# timing=host enqueue+completion, slowest of 4 groups/8 GPUs; warmups=5 iterations=10 repeats=1; every output checked
+# packed schedule=three-slot pipeline; direct receive into eight source rows; 2D H2D copy or SM scatter per phase
+collective,bytes,backend,median_us,min_us,max_us
+# sample,allgather,1152,host-rdma-multicast,1,1,31.067,0
+# sample,allgather,1152,host-rdma-multicast,1,2,232.665,0
+# sample,allgather,1152,host-rdma-multicast,1,3,32.203,0
+# sample,allgather,1152,host-rdma-multicast,1,4,30.855,0
+# sample,allgather,1152,host-rdma-multicast,1,5,232.963,0
+# sample,allgather,1152,host-rdma-multicast,1,6,30.952,0
+# sample,allgather,1152,host-rdma-multicast,1,7,32.333,0
+# sample,allgather,1152,host-rdma-multicast,1,8,237.745,0
+# sample,allgather,1152,host-rdma-multicast,1,9,32.873,0
+# sample,allgather,1152,host-rdma-multicast,1,10,32.187,0
+allgather,1152,host-rdma-multicast,92.584,92.584,92.584
+# sample,allgather,2304,host-rdma-multicast,1,1,31.865,0
+# sample,allgather,2304,host-rdma-multicast,1,2,233.153,0
+# sample,allgather,2304,host-rdma-multicast,1,3,31.869,0
+# sample,allgather,2304,host-rdma-multicast,1,4,31.216,0
+# sample,allgather,2304,host-rdma-multicast,1,5,239.735,0
+# sample,allgather,2304,host-rdma-multicast,1,6,32.649,0
+# sample,allgather,2304,host-rdma-multicast,1,7,32.333,0
+# sample,allgather,2304,host-rdma-multicast,1,8,239.987,0
+# sample,allgather,2304,host-rdma-multicast,1,9,31.086,0
+# sample,allgather,2304,host-rdma-multicast,1,10,31.323,0
+allgather,2304,host-rdma-multicast,93.522,93.522,93.522
+# sample,allgather,4608,host-rdma-multicast,1,1,31.397,0
+# sample,allgather,4608,host-rdma-multicast,1,2,233.438,0
+# sample,allgather,4608,host-rdma-multicast,1,3,31.930,0
+# sample,allgather,4608,host-rdma-multicast,1,4,32.619,0
+# sample,allgather,4608,host-rdma-multicast,1,5,232.987,0
+# sample,allgather,4608,host-rdma-multicast,1,6,32.727,0
+# sample,allgather,4608,host-rdma-multicast,1,7,32.925,0
+# sample,allgather,4608,host-rdma-multicast,1,8,239.641,0
+# sample,allgather,4608,host-rdma-multicast,1,9,31.894,0
+# sample,allgather,4608,host-rdma-multicast,1,10,32.197,0
+allgather,4608,host-rdma-multicast,93.175,93.175,93.175
+# sample,allgather,9216,host-rdma-multicast,1,1,31.758,0
+# sample,allgather,9216,host-rdma-multicast,1,2,240.088,0
+# sample,allgather,9216,host-rdma-multicast,1,3,31.611,0
+# sample,allgather,9216,host-rdma-multicast,1,4,31.732,0
+# sample,allgather,9216,host-rdma-multicast,1,5,234.600,0
+# sample,allgather,9216,host-rdma-multicast,1,6,32.237,0
+# sample,allgather,9216,host-rdma-multicast,1,7,31.963,0
+# sample,allgather,9216,host-rdma-multicast,1,8,239.950,0
+# sample,allgather,9216,host-rdma-multicast,1,9,36.049,0
+# sample,allgather,9216,host-rdma-multicast,1,10,36.264,0
+allgather,9216,host-rdma-multicast,94.625,94.625,94.625
+# sample,allgather,18432,host-rdma-multicast,1,1,38.120,0
+# sample,allgather,18432,host-rdma-multicast,1,2,239.652,0
+# sample,allgather,18432,host-rdma-multicast,1,3,32.666,0
+# sample,allgather,18432,host-rdma-multicast,1,4,39.630,0
+# sample,allgather,18432,host-rdma-multicast,1,5,232.465,0
+# sample,allgather,18432,host-rdma-multicast,1,6,32.077,0
+# sample,allgather,18432,host-rdma-multicast,1,7,32.427,0
+# sample,allgather,18432,host-rdma-multicast,1,8,240.047,0
+# sample,allgather,18432,host-rdma-multicast,1,9,31.937,0
+# sample,allgather,18432,host-rdma-multicast,1,10,32.319,0
+allgather,18432,host-rdma-multicast,95.134,95.134,95.134
+# sample,allgather,36864,host-rdma-multicast,1,1,35.772,0
+# sample,allgather,36864,host-rdma-multicast,1,2,242.131,0
+# sample,allgather,36864,host-rdma-multicast,1,3,36.500,0
+# sample,allgather,36864,host-rdma-multicast,1,4,35.511,0
+# sample,allgather,36864,host-rdma-multicast,1,5,242.112,0
+# sample,allgather,36864,host-rdma-multicast,1,6,35.910,0
+# sample,allgather,36864,host-rdma-multicast,1,7,36.178,0
+# sample,allgather,36864,host-rdma-multicast,1,8,237.570,0
+# sample,allgather,36864,host-rdma-multicast,1,9,36.392,0
+# sample,allgather,36864,host-rdma-multicast,1,10,35.791,0
+allgather,36864,host-rdma-multicast,97.387,97.387,97.387
+# sample,allgather,73728,host-rdma-multicast,1,1,39.146,0
+# sample,allgather,73728,host-rdma-multicast,1,2,238.853,0
+# sample,allgather,73728,host-rdma-multicast,1,3,36.810,0
+# sample,allgather,73728,host-rdma-multicast,1,4,37.300,0
+# sample,allgather,73728,host-rdma-multicast,1,5,239.539,0
+# sample,allgather,73728,host-rdma-multicast,1,6,36.843,0
+# sample,allgather,73728,host-rdma-multicast,1,7,37.332,0
+# sample,allgather,73728,host-rdma-multicast,1,8,243.610,0
+# sample,allgather,73728,host-rdma-multicast,1,9,37.930,0
+# sample,allgather,73728,host-rdma-multicast,1,10,36.888,0
+allgather,73728,host-rdma-multicast,98.425,98.425,98.425
+# sample,allgather,147456,host-rdma-multicast,1,1,40.160,0
+# sample,allgather,147456,host-rdma-multicast,1,2,244.985,0
+# sample,allgather,147456,host-rdma-multicast,1,3,40.509,0
+# sample,allgather,147456,host-rdma-multicast,1,4,40.166,0
+# sample,allgather,147456,host-rdma-multicast,1,5,243.191,0
+# sample,allgather,147456,host-rdma-multicast,1,6,39.966,0
+# sample,allgather,147456,host-rdma-multicast,1,7,41.039,0
+# sample,allgather,147456,host-rdma-multicast,1,8,234.850,0
+# sample,allgather,147456,host-rdma-multicast,1,9,40.856,0
+# sample,allgather,147456,host-rdma-multicast,1,10,40.266,0
+allgather,147456,host-rdma-multicast,100.599,100.599,100.599
+# sample,allgather,294912,host-rdma-multicast,1,1,45.148,0
+# sample,allgather,294912,host-rdma-multicast,1,2,250.810,0
+# sample,allgather,294912,host-rdma-multicast,1,3,46.340,0
+# sample,allgather,294912,host-rdma-multicast,1,4,45.382,0
+# sample,allgather,294912,host-rdma-multicast,1,5,251.449,0
+# sample,allgather,294912,host-rdma-multicast,1,6,46.574,0
+# sample,allgather,294912,host-rdma-multicast,1,7,46.081,0
+# sample,allgather,294912,host-rdma-multicast,1,8,250.943,0
+# sample,allgather,294912,host-rdma-multicast,1,9,44.614,0
+# sample,allgather,294912,host-rdma-multicast,1,10,45.831,0
+allgather,294912,host-rdma-multicast,107.317,107.317,107.317
+# sample,allgather,589824,host-rdma-multicast,1,1,56.278,0
+# sample,allgather,589824,host-rdma-multicast,1,2,264.206,0
+# sample,allgather,589824,host-rdma-multicast,1,3,55.818,0
+# sample,allgather,589824,host-rdma-multicast,1,4,56.730,0
+# sample,allgather,589824,host-rdma-multicast,1,5,264.314,0
+# sample,allgather,589824,host-rdma-multicast,1,6,55.934,0
+# sample,allgather,589824,host-rdma-multicast,1,7,61.801,0
+# sample,allgather,589824,host-rdma-multicast,1,8,256.926,0
+# sample,allgather,589824,host-rdma-multicast,1,9,56.150,0
+# sample,allgather,589824,host-rdma-multicast,1,10,55.227,0
+allgather,589824,host-rdma-multicast,118.338,118.338,118.338
+# sample,allgather,1179648,host-rdma-multicast,1,1,88.515,0
+# sample,allgather,1179648,host-rdma-multicast,1,2,513.361,0
+# sample,allgather,1179648,host-rdma-multicast,1,3,86.784,0
+# sample,allgather,1179648,host-rdma-multicast,1,4,86.803,0
+# sample,allgather,1179648,host-rdma-multicast,1,5,512.802,0
+# sample,allgather,1179648,host-rdma-multicast,1,6,87.583,0
+# sample,allgather,1179648,host-rdma-multicast,1,7,87.966,0
+# sample,allgather,1179648,host-rdma-multicast,1,8,518.950,0
+# sample,allgather,1179648,host-rdma-multicast,1,9,87.196,0
+# sample,allgather,1179648,host-rdma-multicast,1,10,87.893,0
+allgather,1179648,host-rdma-multicast,215.785,215.785,215.785
+# sample,allgather,2359296,host-rdma-multicast,1,1,145.343,0
+# sample,allgather,2359296,host-rdma-multicast,1,2,777.622,0
+# sample,allgather,2359296,host-rdma-multicast,1,3,146.718,0
+# sample,allgather,2359296,host-rdma-multicast,1,4,145.954,0
+# sample,allgather,2359296,host-rdma-multicast,1,5,776.154,0
+# sample,allgather,2359296,host-rdma-multicast,1,6,145.989,0
+# sample,allgather,2359296,host-rdma-multicast,1,7,145.745,0
+# sample,allgather,2359296,host-rdma-multicast,1,8,779.384,0
+# sample,allgather,2359296,host-rdma-multicast,1,9,144.751,0
+# sample,allgather,2359296,host-rdma-multicast,1,10,144.482,0
+allgather,2359296,host-rdma-multicast,335.214,335.214,335.214
+# sample,allgather,4718592,host-rdma-multicast,1,1,253.935,0
+# sample,allgather,4718592,host-rdma-multicast,1,2,896.810,0
+# sample,allgather,4718592,host-rdma-multicast,1,3,679.978,0
+# sample,allgather,4718592,host-rdma-multicast,1,4,252.498,0
+# sample,allgather,4718592,host-rdma-multicast,1,5,891.344,0
+# sample,allgather,4718592,host-rdma-multicast,1,6,692.463,0
+# sample,allgather,4718592,host-rdma-multicast,1,7,250.470,0
+# sample,allgather,4718592,host-rdma-multicast,1,8,895.308,0
+# sample,allgather,4718592,host-rdma-multicast,1,9,674.673,0
+# sample,allgather,4718592,host-rdma-multicast,1,10,257.581,0
+allgather,4718592,host-rdma-multicast,574.506,574.506,574.506
+# sample,allgather,9437184,host-rdma-multicast,1,1,1102.530,0
+# sample,allgather,9437184,host-rdma-multicast,1,2,1101.456,0
+# sample,allgather,9437184,host-rdma-multicast,1,3,1101.432,0
+# sample,allgather,9437184,host-rdma-multicast,1,4,1103.536,0
+# sample,allgather,9437184,host-rdma-multicast,1,5,1099.143,0
+# sample,allgather,9437184,host-rdma-multicast,1,6,1098.260,0
+# sample,allgather,9437184,host-rdma-multicast,1,7,1103.493,0
+# sample,allgather,9437184,host-rdma-multicast,1,8,1085.037,0
+# sample,allgather,9437184,host-rdma-multicast,1,9,1098.607,0
+# sample,allgather,9437184,host-rdma-multicast,1,10,1089.316,0
+allgather,9437184,host-rdma-multicast,1098.281,1098.281,1098.281

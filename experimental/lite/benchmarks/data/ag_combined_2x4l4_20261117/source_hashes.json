@@ -1,0 +1,5 @@
+{
+  "src/multinode/multinode_host_allgather.cu": "b929961112fdf6e406176e785fc47c22cb0fa8561b5aecb985749ae0ee68b915",
+  "include/uccl_lite/multinode_host_common.cuh": "01a3cd8196e7e54e982730c94db1f18d737f95a932fb488178a539cad2952f34",
+  "scripts/validate_multinode_ag_contiguous.py": "9357fc4b42c71e4ec11dcccb09f364876f05cade607c30d929c57f5b9c234b13"
+}

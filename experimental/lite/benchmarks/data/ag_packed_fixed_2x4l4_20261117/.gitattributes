@@ -1,0 +1,7 @@
+# Preserve raw evidence bytes, including CRLF and tool-generated whitespace.
+*.csv -text -whitespace
+*.log -text -whitespace
+*.txt -text -whitespace
+*.svg -whitespace
+*.patch -text -whitespace
+measured_source/** -text -whitespace
