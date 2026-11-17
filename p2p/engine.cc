@@ -2615,7 +2615,7 @@ void Endpoint::recv_proxy_thread_func() {
       status->done.store(true, std::memory_order_release);
       recv_proxy_adaptive_sleeper_.update_timer();
     } else {
-      uccl_drive_recv(ep_);
+      uccl_drive_recv_idle(ep_);
     }
   }
 }

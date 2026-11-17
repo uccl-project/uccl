@@ -50,6 +50,9 @@ class CxiEndpoint {
   int gpu_index() const { return gpu_index_; }
   // NUMA node of the CXI NIC this endpoint opened, or -1 if it is unknown.
   int nic_numa_node() const;
+  // True if remote accesses to this endpoint's MRs make events that need
+  // progress here (MR match events, set by FI_CXI_MR_MATCH_EVENTS).
+  bool needs_target_progress() const { return mr_match_events_; }
   uint16_t get_p2p_listen_port();
   int get_p2p_listen_fd();
   std::shared_ptr<EpollClient> get_oob_client();
@@ -122,6 +125,7 @@ class CxiEndpoint {
 
   int gpu_index_ = INVALID_GPU;
   bool fabric_initialized_ = false;
+  bool mr_match_events_ = true;  // true until the domain says otherwise
   std::atomic<bool> stop_accept_{false};
   std::atomic<int32_t> next_send_peer_id_{0};
   std::atomic<int32_t> next_recv_peer_id_{0};

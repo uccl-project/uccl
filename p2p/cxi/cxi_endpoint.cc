@@ -1,6 +1,7 @@
 #include "cxi_endpoint.h"
 #include "engine.h"
 #include <rdma/fi_cm.h>
+#include <rdma/fi_cxi_ext.h>
 #include <rdma/fi_rma.h>
 #include <algorithm>
 #include <chrono>
@@ -290,6 +291,23 @@ void CxiEndpoint::init_fabric(int gpu_index) {
 
     check_fi("fi_fabric", fi_fabric(info_->fabric_attr, &fabric_, nullptr));
     check_fi("fi_domain", fi_domain(fabric_, info_, &domain_, nullptr));
+
+    // With MR match events (FI_CXI_MR_MATCH_EVENTS), the RMA target must make
+    // manual progress to process the match events, or the provider's event
+    // queue overflows. Then the idle receive proxy must keep polling the CQ,
+    // which makes progress. If the domain cannot tell, assume they are on.
+    bool match_events = true;
+    int const match_rc = fi_control(
+        &domain_->fid, FI_OPT_CXI_GET_MR_MATCH_EVENTS, &match_events);
+    mr_match_events_ = match_rc != 0 || match_events;
+    if (mr_match_events_) {
+      UCCL_LOG(INFO, UCCL_INIT)
+          << "CXI MR match events are on or unknown (rc=" << match_rc
+          << "); the receive proxy keeps polling the CQ when idle, so that "
+             "the match events are processed and the event queue does not "
+             "overflow";
+    }
+
     check_fi("fi_endpoint", fi_endpoint(domain_, info_, &ep_, nullptr));
 
     fi_cq_attr cq_attr{};

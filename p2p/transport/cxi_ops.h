@@ -22,6 +22,13 @@ struct EndpointOps<CxiEndpoint> : DirectEndpointOps<CxiEndpoint> {
     return nullptr;
   }
 
+  // The target NIC completes RMA without software, and the CQ holds only
+  // completions of this endpoint's own operations, which the waiting threads
+  // poll. So the idle receive proxy polls only when the target needs progress.
+  static void uccl_drive_recv_idle(std::shared_ptr<CxiEndpoint> const& s) {
+    if (s->needs_target_progress()) s->recv_routine();
+  }
+
   static int uccl_read_async(std::shared_ptr<CxiEndpoint> const& s, Conn* conn,
                              P2PMhandle* local_mh, void* dst, size_t size,
                              FifoItem const& slot_item, UcclRequest* ureq) {
