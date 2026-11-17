@@ -1223,7 +1223,10 @@ __global__ void __launch_bounds__(1024)
 
 __global__ void nullKernel() {}
 
+#include "../multinode/oneshot_allreduce.cuh"
+
 struct Config {
+  bool arOneShot = false;
   bool allGather = false;
   bool reduceScatter = false;
   bool arAuto = false;
@@ -1385,6 +1388,8 @@ int main(int argc, char** argv) {
         cfg.hostGather = std::atoi(next()) != 0;
       else if (key == "--host-piece-bytes")
         cfg.hostPieceBytes = std::strtoull(next(), nullptr, 0);
+      else if (key == "--ar-oneshot")
+        cfg.arOneShot = std::atoi(next()) != 0;
       else if (key == "--ar-auto")
         cfg.arAuto = std::atoi(next()) != 0;
       else if (key == "--ar-serial-local")
@@ -1558,6 +1563,13 @@ int main(int argc, char** argv) {
     MPI_Abort(MPI_COMM_WORLD, 2);
   }
 
+  if (cfg.arOneShot &&
+      (cfg.allGather || cfg.reduceScatter || cfg.maxBytes > (1UL << 20))) {
+    if (rank == 0)
+      std::fprintf(stderr, "--ar-oneshot requires AllReduce <= 1 MiB\n");
+    MPI_Abort(MPI_COMM_WORLD, 2);
+  }
+
   bool hybridRs = cfg.hostGather && !cfg.allGather;
   if (cfg.hostRepeatCheck < 0 || cfg.hostRepeatCheck > 8 ||
       (cfg.hostRepeatCheck && (!hybridRs || cfg.reduceScatter))) {
@@ -1705,6 +1717,7 @@ int main(int argc, char** argv) {
   size_t dataBytes = cfg.maxBytes;
   size_t localScratchBytes = dataBytes;
   size_t ibSlotBytes = (dataBytes + kLocalRanks - 1) / kLocalRanks + 4096;
+  if (cfg.arOneShot) ibSlotBytes = 2 * dataBytes;
   Layout layout{0, dataBytes, dataBytes + localScratchBytes,
                 dataBytes + localScratchBytes + ibSlotBytes, 0};
   size_t bufferBytes = layout.ibScratch + ibSlotBytes;
@@ -1814,7 +1827,7 @@ int main(int argc, char** argv) {
   bool needsDirectLocal =
       cfg.agPipeline == 1 || cfg.agPipeline >= 4 || cfg.rsOverlapLocal ||
       cfg.rsPullLocal || cfg.agSerialLocal || cfg.rsSerialLocal ||
-      cfg.arSerialLocal ||
+      cfg.arSerialLocal || cfg.arOneShot ||
       (cfg.agAuto && cfg.allGather && cfg.minBytes <= kSerialAgMaxBytes) ||
       (cfg.rsAuto && (cfg.reduceScatter || hybridRs) &&
        cfg.minBytes <= kSerialRsMaxBytes) ||
@@ -1831,6 +1844,13 @@ int main(int argc, char** argv) {
       localDirect.c[peers[i] - nodeBase] = directObjects[i]->deviceHandle();
     }
   }
+  // MSCCL++ IPC import can leave a handled invalid-handle probe status.
+  // Clear only that known setup status before checking our kernel launches.
+  auto setupStatus = cudaGetLastError();
+  if (setupStatus != cudaSuccess &&
+      setupStatus != cudaErrorInvalidResourceHandle)
+    CUDACHECK(setupStatus);
+  CUDACHECK(cudaDeviceSynchronize());
   PortChan ib = ibObject.deviceHandle();
   localProxy->startProxy();
   ibProxy->startProxy();
@@ -1950,9 +1970,17 @@ int main(int argc, char** argv) {
         rank, localComm, cfg.maxBytes / kWorld, cfg.hostPieceBytes);
   unsigned overlapSequence = 0;
   unsigned agSequence = 0;
+  unsigned oneShotSequence = 0;
   auto launch = [&](size_t count, size_t bytes) {
     CUDACHECK(cudaSetDevice(localRank));
     if (hostGather) uccl_lite::host_gather::clearMpiProbeStatus();
+    if (cfg.arOneShot) {
+      uccl_lite::multinode_experiment::oneShotAllReduce<<<1, 256, 0, stream>>>(
+          localDirect, ib, buffer, count, layout, localRank,
+          size_t(oneShotSequence++ & 1) * cfg.maxBytes);
+      CUDACHECK(cudaGetLastError());
+      return;
+    }
     if (cfg.allGather) {
       if (hostGather) {
         hostGather->run(buffer + layout.ibSend, buffer + layout.data,
@@ -2166,7 +2194,10 @@ int main(int argc, char** argv) {
                                               : "flat reduction"),
                   cfg.railMap[0], cfg.railMap[1], cfg.railMap[2],
                   cfg.railMap[3], cfg.rsPieces);
-    if (cfg.rsTargetPieceBytes && rank == 0)
+    if (cfg.arOneShot)
+      std::printf("# experimental one-shot: full-input IB exchange; SM local "
+                  "pull/reduction; 1 CTA x 256 threads; 2 banks; no result AG\n");
+    else if (cfg.rsTargetPieceBytes && rank == 0)
       std::printf("# RS target piece %zu B per destination shard\n",
                   cfg.rsTargetPieceBytes);
     else
@@ -2217,9 +2248,11 @@ int main(int argc, char** argv) {
     }
     if (rank == 0) {
       char const* selected =
-          cfg.hostGather ? (hybridRs ? (bytes <= kHybridSerialArMaxBytes
-                                          ? "serial-local" : "gpu-rs-host-ag")
-                                      : "host-ag-eight-rank")
+          cfg.arOneShot    ? "oneshot-remote-input-local-pull"
+          : cfg.hostGather ? (hybridRs ? (bytes <= kHybridSerialArMaxBytes
+                                              ? "serial-local"
+                                              : "gpu-rs-host-ag")
+                                       : "host-ag-eight-rank")
           : cfg.allGather
               ? (cfg.agPipeline == 5   ? "matched-sm"
                  : cfg.agPipeline == 4 ? "matched-ce"
