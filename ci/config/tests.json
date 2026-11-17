@@ -7,7 +7,8 @@
       "tier": "cpu",
       "sources": [
         "ci/tests/test_ci.py",
-        "ci/tests/test_run_report.py"
+        "ci/tests/test_run_report.py",
+        "ci/tests/test_github_comments.js"
       ],
       "paths": [
         "ci/**",
@@ -22,7 +23,7 @@
         "cpu"
       ],
       "timeout": 60,
-      "command": "python3 -m unittest discover -s ci/tests -v"
+      "command": "python3 -m unittest discover -s ci/tests -v && node --test ci/tests/test_github_comments.js"
     },
     {
       "id": "p2p.cpu.backend_build",

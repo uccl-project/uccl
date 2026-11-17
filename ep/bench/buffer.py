@@ -23,6 +23,7 @@ try:
         check_nvlink_connections,
         initialize_uccl,
         destroy_uccl,
+        detect_group_topology,
         _fp8_e4m3_dtype,
     )
 except ImportError:
@@ -31,6 +32,7 @@ except ImportError:
         check_nvlink_connections,
         initialize_uccl,
         destroy_uccl,
+        detect_group_topology,
         _fp8_e4m3_dtype,
     )
 
@@ -136,11 +138,20 @@ class Buffer:
             device_index = torch.cuda.current_device()
 
         if hasattr(ep, "get_rdma_buffer"):
+            # Intranode low-latency mode starts no proxy, so peers can reach this
+            # buffer only through CUDA IPC. A host (cudaMallocHost) fallback has
+            # no IPC handle and the first LL call would hang; keep it on the
+            # device. Internode keeps the host fallback (e.g. host-staged GB10).
+            force_device_alloc = False
+            if low_latency_mode and num_rdma_bytes > 0 and group.size() > 1:
+                if is_intranode is None:
+                    is_intranode = detect_group_topology(group)[-1]
+                force_device_alloc = bool(is_intranode)
             # Allocate outside PyTorch's CUDA allocator so RDMA/IPC sees a raw
             # cudaMalloc/cudaMallocHost-style allocation instead of a possibly
             # segmented caching-allocator mapping.
             scratch_dlpack, rdma_buffer_is_host_allocated = ep.get_rdma_buffer(
-                num_rdma_bytes, device_index
+                num_rdma_bytes, device_index, force_device_alloc=force_device_alloc
             )
             self.scratch = torch.utils.dlpack.from_dlpack(scratch_dlpack)
         else:
@@ -1047,7 +1058,7 @@ class Buffer:
         # TODO: automatically tune
         config_map = {
             2: Config(Buffer.num_sms, 24, 256, 6, 128),
-            4: Config(Buffer.num_sms, 6, 256, 6, 128),
+            4: Config(Buffer.num_sms, 24, 256, 6, 128),
             8: Config(Buffer.num_sms, 6, 256, 6, 128),
             16: Config(Buffer.num_sms, 36, 288, 20, 512 if Buffer._is_efa() else 128),
             24: Config(Buffer.num_sms, 8, 288, 32, 128),
