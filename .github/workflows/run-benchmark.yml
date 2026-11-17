@@ -5,32 +5,21 @@ on:
 permissions:
   contents: read
   actions: write
+  issues: write
+  pull-requests: write
 jobs:
   dispatch:
     if: github.event.issue.pull_request && (startsWith(github.event.comment.body, '/run-benchmark') || startsWith(github.event.comment.body, '/run-ci'))
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/github-script@v7
+      - name: Checkout trusted command helper
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Authorize, comment and dispatch
+        uses: actions/github-script@v7
         with:
           script: |
-            const {owner, repo} = context.repo;
-            const match = context.payload.comment.body.trim().match(/^\/(run-ci|run-benchmark)\s+(all|cpu|l4|gb10|gh200)(?:\s+([a-z0-9_.*,-]+))?$/);
-            if (!match) throw new Error('Usage: /run-ci|/run-benchmark <all|cpu|l4|gb10|gh200> [test IDs/globs]');
-            const {data: permission} = await github.rest.repos.getCollaboratorPermissionLevel({
-              owner, repo, username: context.payload.comment.user.login,
-            });
-            if (!['write', 'maintain', 'admin'].includes(permission.permission)) {
-              throw new Error('Only maintainers may authorize lab execution of a PR');
-            }
-            const {data: pr} = await github.rest.pulls.get({owner, repo, pull_number: context.payload.issue.number});
-            if (pr.state !== 'open' || !pr.head.repo) throw new Error('PR must be open with an accessible source repository');
-            await github.rest.actions.createWorkflowDispatch({
-              owner, repo, workflow_id: 'ci.yml', ref: context.payload.repository.default_branch,
-              inputs: {
-                targets: match[2] === 'all' ? '' : match[2], tests: match[3] || '',
-                tiers: match[1] === 'run-benchmark' ? 'performance' : 'cpu,build,integration',
-                sha: pr.head.sha, head_repo: pr.head.repo.full_name,
-              },
-            });
-            core.summary.addRaw(`Dispatched ${match[1]} for PR #${pr.number}, exact SHA ${pr.head.sha}, target ${match[2]}. See the UCCL CI workflow run and its artifacts.`);
-            await core.summary.write();
+            await require('./ci/github_comments.js').dispatch({github, context, core});
