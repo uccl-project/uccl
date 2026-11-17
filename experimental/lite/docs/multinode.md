@@ -30,6 +30,26 @@ points and label the original orange controls **NCCL (prior)**. Historical
 measurement details below still refer to their respective records; the added
 NCCL curves are separate measurement windows, not fresh paired UCCL runs.
 
+## Small AllReduce: host one-shot below 32 KiB
+
+For the documented two four-L4 FP32 eager setup, select
+`--host-gather 1 --host-oneshot 1` at the measured 1/2/4/8/16-KiB sizes.
+The [November 17 comparison](../benchmarks/data/host_oneshot_small_2x4l4_20261117/README.md)
+measures 27.32 µs at 1 KiB versus 36.22 µs for the existing hierarchy, and
+32.43 versus 35.99 µs at 8 KiB. The 16-KiB median speedup is only 1.04x;
+at 32 KiB, host one-shot loses, 42.11 versus 39.63 µs. Omit `--host-oneshot`
+from 32 KiB upward to retain the existing hybrid selection described below.
+The sub-32-KiB recommendation is based on these power-of-two measurements;
+intermediate sizes and inputs below 1 KiB are not performance-validated.
+
+Host one-shot stages original inputs with copy-engine D2H, exchanges shared
+host packets using MPI/UCX, then fuses mapped-host reads with an SM reduction
+into the complete GPU output. No GPU P2P payload transfer or CPU reduction is
+used. It remains an explicit experimental option, not an automatic router.
+The report retains the slower P2P one-shot comparison, raw measurements,
+repeated in-place and packet-tail checks, and existing-path regressions.
+Historical full-range figures below remain tied to their original sources.
+
 ## Current AllReduce: full-range hybrid sweep
 
 ![Current two-node FP32 AllReduce: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput](assets/collectives-2x4l4-allreduce-nccl-tuned.svg)

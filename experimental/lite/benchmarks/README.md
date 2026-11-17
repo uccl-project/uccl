@@ -40,6 +40,8 @@ in Git history. Restore those logs before rerunning historical summarizers.
 
 | File | Scope and method |
 | --- | --- |
+| [host_oneshot_small_2x4l4_20261117](data/host_oneshot_small_2x4l4_20261117/README.md) | Two-node FP32 small AllReduce: fresh current/P2P-one-shot/host-one-shot comparison, three rotated rounds with 30 checked calls per size; host one-shot wins at tested 1–16 KiB sizes, loses from 32 KiB; explicit selection and retained negative results. |
+| [oneshot_small_2x4l4_20261117](data/oneshot_small_2x4l4_20261117/README.md) | Earlier P2P one-shot experiment on two four-L4 hosts: slower at every tested 1–256 KiB size; checked rounds and repeated in-place calls retained. |
 | [ag_combined_latest_2x4l4_20261117](data/ag_combined_latest_2x4l4_20261117/README.md) | Two-host FP32 AllGather: combined CE/SM path ported to the latest uccl-lite branch, fresh 1 KiB–1 GiB checks and timings, preserved NCCL figure controls. |
 | [pro6000_nccl_baselines_cpp_20261116](data/pro6000_nccl_baselines_cpp_20261116/README.md) | Eight RTX PRO 6000 FP32 AR/AG/RS: fresh NCCL default curves, independently recalibrated AllReduce SM/CE baseline, frozen policies, five validation rounds for all curves, and complete raw correctness/transport evidence. |
 | [pro6000_ag_rs_cpp_20261116](data/pro6000_ag_rs_cpp_20261116/README.md) | Eight RTX PRO 6000 FP32 AllGather/ReduceScatter: 1 KiB–1 GiB, independently tuned SM/CE NCCL, frozen policies, five traced and five initialization-only validation rounds, eager/graph/rank-skew correctness on eight PRO 6000s and four L4s, and retained negative experiments. |

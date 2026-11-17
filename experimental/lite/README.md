@@ -180,6 +180,24 @@ workload from Testbed 1's SGLang serving and DDP/FSDP training.
   </tr>
 </table>
 
+For **two four-L4 hosts, FP32 eager AllReduce**, select the experimental
+**host one-shot path below 32 KiB** with `--host-gather 1 --host-oneshot 1`.
+The tested sub-32-KiB sizes are 1, 2, 4, 8, and 16 KiB: latency is
+**27.32 vs 36.22 µs at 1 KiB** and **32.43 vs 35.99 µs at 8 KiB** against
+the current GPU hierarchy. At 32 KiB it loses (42.11 vs 39.63 µs), so retain
+the existing hybrid selection from 32 KiB upward by omitting `--host-oneshot`.
+This is an explicit selection for the recorded topology, not automatic dispatch;
+sizes below 1 KiB and between the measured points are not performance-validated.
+
+The path uses copy-engine D2H of raw inputs, MPI/UCX host-packet exchange, and
+an SM kernel that reads mapped host memory and computes the full sum, with no
+GPU P2P payload traffic. The [fresh three-variant comparison and reproduction
+commands](benchmarks/data/host_oneshot_small_2x4l4_20261117/README.md) include
+three rounds of 20 warmups and 30 checked calls per size, measured from host
+enqueue to completion on the slowest rank. Values are medians of round means,
+not a best-variant-per-size curve. The AllReduce figure above retains its
+historical measurements; this new comparison does not rerun NCCL.
+
 ### Fusion
 
 #### Testbed 3
