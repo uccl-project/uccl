@@ -9,9 +9,9 @@
 
 ## Design principles
 
-- **Balance traffic.** Simultaneous transfers can congest shared PCIe and
-  cross-NUMA links. Spread traffic across paths and phases to reduce contention
-  and sustain throughput.
+- **Exploit PCIe hierarchy.** Map collective stages to PCIe and NUMA groups.
+  Reduce within groups before exchanging across them, then distribute results
+  locally to limit cross-socket traffic.
 - **Specialize by size.** Cut launches and handshakes for small messages, where
   fixed overhead dominates. Pipeline large transfers to sustain bandwidth and
   amortize coordination costs.
