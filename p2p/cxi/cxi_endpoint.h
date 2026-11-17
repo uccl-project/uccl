@@ -19,17 +19,27 @@
 #include <unordered_map>
 #include <vector>
 
+// Between nodes in different switch groups, a CXI flow can be capped at about
+// 18 GB/s per target endpoint (seen on some node pairs). Each CxiEndpoint
+// therefore opens several endpoints ("lanes") on its one domain, and a large
+// RMA is split over the peer's lanes. CXI provider MR keys use all 64 bits, so
+// the FIFO metadata (32 bytes) has room for 2 lane keys.
+constexpr int kCxiMaxLanes = 2;
+
 struct CxiMemoryRegion {
   void* addr = nullptr;
   size_t len = 0;
-  fid_mr* mr = nullptr;
-  uint64_t key = 0;
+  // One MR per local lane: with FI_MR_ENDPOINT, an MR binds to one endpoint.
+  std::vector<fid_mr*> mrs;
+  std::vector<uint64_t> keys;
 };
 
 struct CxiFifoMetadata {
   uint64_t base = 0;
-  uint64_t key = 0;
   uint64_t len = 0;
+  // keys[i] is the MR key on the owner's lane i. The lane count comes from
+  // the handshake; unused entries are 0.
+  uint64_t keys[kCxiMaxLanes] = {};
 };
 
 static_assert(sizeof(CxiFifoMetadata) <= sizeof(FifoItem::padding),
@@ -88,14 +98,19 @@ class CxiEndpoint {
 
  private:
   struct Peer {
-    fi_addr_t addr = FI_ADDR_UNSPEC;
+    std::vector<fi_addr_t> addrs;  // one per peer lane
     std::string ip;
     uint16_t port = 0;
     int gpu_index = -1;
   };
 
+  // One per request. A striped request posts its pieces to the peer lanes in
+  // turn; each piece has its own fi_context2, and the request is done when
+  // all pieces have completed.
   struct OpContext {
-    fi_context2 ctx{};
+    std::vector<fi_context2> ctxs;  // sized before posting, never resized
+    std::vector<int> lanes;         // remote lane of each piece
+    int remaining = 0;
     int64_t id = -1;
     bool done = false;
     bool failed = false;
@@ -105,14 +120,14 @@ class CxiEndpoint {
   };
 
   struct EndpointInfo {
-    std::vector<uint8_t> ep_name;
+    std::vector<std::vector<uint8_t>> ep_names;  // one per lane
     uint16_t oob_port = 0;
     int gpu_index = -1;
   };
 
   void init_fabric(int gpu_index);
   EndpointInfo local_endpoint_info() const;
-  fi_addr_t insert_peer(EndpointInfo const& info);
+  std::vector<fi_addr_t> insert_peer(EndpointInfo const& info);
   void process_meta(std::string const& input, std::string& output,
                     std::string const& client_ip, int client_port);
   std::string serialize_endpoint_info(EndpointInfo const& info) const;
@@ -134,7 +149,8 @@ class CxiEndpoint {
   fi_info* info_ = nullptr;
   fid_fabric* fabric_ = nullptr;
   fid_domain* domain_ = nullptr;
-  fid_ep* ep_ = nullptr;
+  std::vector<fid_ep*> eps_;    // lanes; RMA is posted from lane 0
+  size_t max_piece_bytes_ = 0;  // max_msg_size, rounded down to 4 KiB
   fid_cq* cq_ = nullptr;
   fid_av* av_ = nullptr;
 

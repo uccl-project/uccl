@@ -180,6 +180,7 @@ Notes:
 | UCCL_CXI_TX_QUEUE_SIZE | CXI transmit queue size | 4096 |
 | UCCL_CXI_RX_QUEUE_SIZE | CXI receive queue size | 4096 |
 | UCCL_CXI_CQ_SIZE | CXI completion queue size | 8192 |
+| UCCL_CXI_NUM_LANES | CXI endpoints (lanes) per UCCL endpoint, `1` or `2`. A message above 512 KiB is split over the peer's lanes; each lane registers its own MR per buffer | 2 |
 | UCCL_P2P_MAX_INFLIGHT_OPS | Maximum one-sided in-flight operations; CXI defaults lower than RDMA | 32 for CXI, otherwise internal maximum |
 | UCCL_LIBFABRIC_SO | Override libfabric shared-library path for the CXI dlsym wrapper | auto-detect `libfabric.so` / `libfabric.so.1` |
 | UCCL_P2P_COMPRESS_STRATEGY | DietGPU compression strategy (requires `USE_DIETGPU=1` build) | none |
