@@ -6,7 +6,8 @@
       "enabled": true,
       "tier": "cpu",
       "sources": [
-        "ci/tests/test_ci.py"
+        "ci/tests/test_ci.py",
+        "ci/tests/test_github_comments.js"
       ],
       "paths": [
         "ci/**",
@@ -21,7 +22,7 @@
         "cpu"
       ],
       "timeout": 60,
-      "command": "python3 -m unittest discover -s ci/tests -v"
+      "command": "python3 -m unittest discover -s ci/tests -v && node --test ci/tests/test_github_comments.js"
     },
     {
       "id": "p2p.cpu.backend_build",
@@ -3541,13 +3542,13 @@
       "nodes": 2,
       "gpus": 1,
       "timeout": 300,
-      "command": "bash ci/torchrun.sh p2p/tests/scenario_compressed_registered_range.py --api=write_async",
+      "command": "for api in write write_async writev writev_async; do bash ci/torchrun.sh p2p/tests/scenario_compressed_registered_range.py --api=\"$api\" || exit $?; done",
       "setup": [
         "compression"
       ],
       "env": {
         "UCCL_P2P_COMPRESS_STRATEGY": "split_only",
-        "UCCL_P2P_COMPRESS_BUFFER_BYTES": "16777216"
+        "UCCL_P2P_COMPRESS_BUFFER_BYTES": "134217728"
       }
     },
     {
