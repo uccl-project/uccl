@@ -151,3 +151,7 @@ python3 scripts/summarize_multinode_host_router.py build/host-router-recheck
 Use a new output directory; existing logs are not overwritten. `validation_commands.sh`
 records the main regression commands. Regenerate the plot with `plot.py` in this
 record directory, after creating `validated/summary.csv`.
+
+Shared archived records: [local software identity](../ag_1m_1g_2x4l4_20261115/software_local.txt), [local GPU topology](../ag_1m_1g_2x4l4_20261115/topology_local.txt).
+These files are byte-identical to this experiment's recorded copies; fresh
+runs must capture their own environment and software identities.

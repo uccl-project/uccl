@@ -111,3 +111,7 @@ the batch; per-call checks use host barriers. Existing AR/AG automatic paths
 receive a two-host checked smoke sweep through 1 MiB. This is eager validation;
 CUDA graph replay, arbitrary floating-point distributions, and Compute Sanitizer
 are not covered. No policy calibration or automatic route promotion is made.
+
+Shared archived records: [local software identity](../ag_1m_1g_2x4l4_20261115/software_local.txt), [local GPU topology](../ag_1m_1g_2x4l4_20261115/topology_local.txt), [remote GPU topology](../ag_1m_1g_2x4l4_20261115/topology_local.txt).
+These files are byte-identical to this experiment's recorded copies; fresh
+runs must capture their own environment and software identities.

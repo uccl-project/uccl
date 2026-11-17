@@ -1,7 +1,6 @@
 {
   ".gitignore": "283024cdb8d432a83f6db628061ce47372c6d324b12e651785e8e50ace49e548",
-  "README.md": "afb8edd57ed73098e2a4bb31ca638d3f19a454986ef5996266fa6132c8e27973",
-  "WORKLOG.md": "097a113d8aca2ba2f940cdec4683afff7b21001a99892137ce549129ac327b01",
+  "README.md": "de0ecfa078daa4c691cc867b1787ba5d0e5c18628b8df701f30b82176ffb76f9",
   "candidates.csv": "25ad5c29a1f5c26d08f229876cab68c7d125f877e4752eaf7b69cff77440b0c4",
   "control_validation.json": "3a7b9ab55dc091ee2403ce7709120963b65cd42f60d9dfa39b6872ed79cd4447",
   "controls.csv": "eec3e078778d1636501c6c55e47246b07e81396944762cf61c11de4aeb04237c",
@@ -288,11 +287,10 @@
   "reproduction/ring_native.cuh": "292bbdeec44ad192a9f75cc821af78eae12a3c1599514c2f9f3a8aeda71c0be2",
   "reproduction/ring_progress.cuh": "d7adc3e473ddb78c470a82bddec7ec9e0ba169add6b55adf135ae141eebd6555",
   "reproduction/verify_original.py": "f37a3b3d95c7a5c7ef1c1e12e8fffc409793d5afc5c17900bdb58f90d6304631",
-  "results.md": "d16c0e8dcfc23065aa02d5de255354ef6db652a511ac04e6b69231b283f1fefc",
   "screening.csv": "73d9bb9f247bb1e0e05356b46a447b02269042909bb76c4d8355bf2c7ba4f560",
   "source_hashes.json": "aa32ba8f51a839aedef5413e707434b340284582abf8c0b78b1b79a8814c908e",
   "source_hashes_pre_append.json": "dac8852842e33baa06a43e9a7cffb811d09ab684ef18b35025a691d2a16a87de",
   "summary.csv": "2eda94ad5e60ef2b49f87b2a70bc9d1435be6ca33c0f5c332a6827def4f92f2c",
-  "topology.txt": "8d41cd5f2cd33575dff6c674d4db1ec8a6290fc0b8b5d6c5d9ee96fecabc612b",
+  "../full_refresh_8l4_20261114/topology.txt": "8d41cd5f2cd33575dff6c674d4db1ec8a6290fc0b8b5d6c5d9ee96fecabc612b",
   "validation.json": "ebfcfc85f77229f8e547204713d2d4d75d016460fc8b5ddd7cbf3c075e5f9425"
 }

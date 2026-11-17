@@ -34,9 +34,8 @@ Three-run median whole-batch latency: **UCCL-Lite 14.72 s vs NCCL 15.84 s
 
 ![Whole-batch latency bar chart](../../docs/assets/sglang-e2e-latency-8l4.svg)
 
-The [EP8 fusion boundary inventory](fusion_candidate_20261112.md) records the
-actual SGLang producer/consumer chain and request shapes for adapting the
-standalone AG+GEMM and GEMM+RS experiments.
+The [AG+gate integration report](fusion_ag_rs_8l4_20261112.md#integration-boundary-and-initial-probe)
+records the SGLang fusion boundary and initial standalone probe.
 The opt-in [MoE epilogue plus RS experiment](fusion_rs_8l4_20261112.md)
 adds the routed and shared BF16 outputs during packet RS upload. On the
 measured GLM-4.5-Air-FP8 EP8 server, its optimized variant reduced three-run

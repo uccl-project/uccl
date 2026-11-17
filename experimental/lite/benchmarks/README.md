@@ -24,6 +24,15 @@ records give their own topology and measurement protocol.
 
 ## Included data
 
+Each experiment keeps its method, interpretation and negative results in one
+README, with complete measurements in CSV/JSON. Rendered Markdown tables are
+reproducible outputs rather than additional committed reports. Summarizers
+with a fixed data directory write them to `build/reports/<experiment>/`;
+those with an explicit output option should target `build/` as documented in
+the experiment README. Identical environment snapshots are shared by relative
+reference, with the original content hashes retained where recorded. Fresh
+runs must still capture their own environment and software identities.
+
 TXT logs not needed by the main README figures have been pruned. Retained
 CSVs, figures and study notes preserve historical measurements and negative
 results; references to pruned raw logs describe the original archive, available

@@ -3,6 +3,8 @@ from pathlib import Path
 import csv
 
 root = Path(__file__).resolve().parent
+report = root.parents[2] / 'build/reports' / root.name
+report.mkdir(parents=True, exist_ok=True)
 modes = ['auto', 'fanout_sm', 'fanout_ce', 'dual_sm', 'dual_ce', 'matched_sm', 'matched_ce']
 for sweep, divisor, unit in [('small', 1, 'µs'), ('large', 1000, 'ms')]:
     path = root / sweep / 'summary.csv'
@@ -18,5 +20,5 @@ for sweep, divisor, unit in [('small', 1, 'µs'), ('large', 1000, 'ms')]:
         vals = [float(data[size,mode]['median_us'])/divisor for mode in modes]
         digits = 2 if sweep == 'small' else 3
         lines.append('| ' + ' | '.join([label, *[f'{v:.{digits}f}' for v in vals]]) + ' |')
-    (root / f'{sweep}_results.md').write_text('\n'.join(lines)+'\n')
+    (report / f'{sweep}_results.md').write_text('\n'.join(lines)+'\n')
     print('\n'.join(lines))

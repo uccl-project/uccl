@@ -12,6 +12,7 @@ sys.dont_write_bytecode = True
 from run import parse
 
 DATA = Path(__file__).resolve().parent
+REPORT = DATA.parents[2] / "build/reports" / DATA.name
 
 
 def main():
@@ -62,8 +63,9 @@ def main():
                      f"{row['min_us']:.2f}–{row['max_us']:.2f} | {historical[size]:.2f} |")
     table += ["", "All 195 size/mode pre-timing correctness checks report zero maximum relative error.",
               "The original timed loop does not validate every invocation; this behavior is preserved.",
-              "See [README.md](README.md) for hardware, timing boundaries, source identities and reproduction.", ""]
-    (DATA / "results.md").write_text("\n".join(table))
+              "See [README.md](../../../benchmarks/data/pro6000_original_cpp_latency_20261116/README.md) for hardware, timing boundaries, source identities and reproduction.", ""]
+    REPORT.mkdir(parents=True, exist_ok=True)
+    (REPORT / "results.md").write_text("\n".join(table))
     print("Verified source/archive hashes, five complete 39-row sweeps and all zero-error checks")
     print("\n".join(table[5:]))
 

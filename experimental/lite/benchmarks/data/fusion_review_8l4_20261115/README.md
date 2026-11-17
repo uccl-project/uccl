@@ -6,8 +6,15 @@ unchanged. The tested implementation uses resident CUTLASS BF16 GEMM and CPU
 packet progress. SGLang's multiprocess packet/row-ready integration is a separate
 implementation and is not benchmarked here.
 
-Results are in [results.md](results.md); [summary.csv](summary.csv) retains
-both run medians and every measured configuration.
+[summary.csv](summary.csv) retains both run medians and every measured
+configuration. Across the 24 operation/shape pairs, unchanged resident fusion
+has lower aggregate medians than paired NCCL at 24/24 points and than the
+optimized sequential UCCL control at 17/24. These are descriptive counts, not
+significance tests. The largest regressions against current sequential UCCL
+are 34.9% for 32B AG+GEMM at M=64, and 11.8% / 8.4% for 9B GEMM+AR at
+M=2048 / 8192. Winners that change between the two runs remain unresolved
+near ties. CPU batching was measured in isolated fused-only runs, so it does
+not establish a uniform benefit against the interleaved unbatched control.
 
 The fixed 512-KiB resident AR packet candidate improves all four tested prefill
 shapes by 7.5%–19.4% over the old 128-KiB cap, in both reversed runs. This
@@ -58,7 +65,7 @@ two-socket Intel Xeon CPU @ 2.20 GHz, 96 logical CPUs, driver 580.178.04,
 CUDA 12.9.41, CUTLASS 4.5.0, NCCL 2.28.9. The submitting process is pinned to
 CPU 47 for performance runs. Correctness tests retain the full permitted CPU
 set so the dispatcher can inspect worker placement. GPU identities and topology
-are in `hardware.csv`, `topology.txt`, `cpu.json`; library identity and build
+are in `hardware.csv`, [GPU topology](../full_refresh_8l4_20261114/topology.txt), `cpu.json`; library identity and build
 command are in `software.json`.
 
 BF16 inputs/outputs with FP32 GEMM accumulation. Two endpoint model-derived
@@ -153,3 +160,18 @@ A second brief unrelated GPU process interrupted the reversed packet run at
 on idle GPUs. `packet_candidates.py` now resumes completed cases and preserves
 any excluded partial samples in `raw/`. The pre-resume driver is archived in
 `measured_source_v1/`; the measured C++ binary is unchanged.
+
+The fixed 512-KiB candidate also lowers latency by 9.0%–12.2% versus its own
+paired current sequential control. Each cap has fresh interleaved
+NCCL/sequential/fused controls. Changing the cap also changes active CPU lanes
+and resident transport crew sizes, so this is not an isolated packet-count
+measurement. Other shapes and hardware require separate calibration.
+
+Reproduce one measured shape from the Lite root:
+
+```bash
+NCCL_NET=Socket ./build/fusion_review_8l4_20261115/uccl_lite_router_fusion_8l4 \
+  --op gemm-ar --m 2048 --n 4096 --k 1536 \
+  --router-profile current --packet-kib 512 \
+  --warmup 2 --repeats 3 --iterations 10
+```

@@ -9,6 +9,7 @@ import statistics
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "benchmarks/data/full_refresh_8l4_20261114"
+REPORT = ROOT / "build/reports" / DATA.name
 OPS = {"ar": "all_reduce", "ag": "all_gather", "rs": "reduce_scatter"}
 SIZES = [1 << power for power in range(10, 31)]
 VARIANTS = ("nccl", "router-base", "current")
@@ -107,7 +108,8 @@ def main():
                 cells.append(f"{u:,.2f} / {n:,.2f}" + (" †" if u > n else ""))
             text.append("| " + " | ".join([label, *cells]) + " |")
         text.append("")
-    (DATA / "results.md").write_text("\n".join(text) + "\n")
+    REPORT.mkdir(parents=True, exist_ok=True)
+    (REPORT / "results.md").write_text("\n".join(text) + "\n")
     print(f"Validated {timed} timed calls and {warmup} warmups; {len(summary)} fresh points.")
 
 

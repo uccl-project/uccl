@@ -1,9 +1,8 @@
 {
-  "README.md": "4e8755002cb70f7411e60c0bd31a3218a745cd156e3793b3ee119b571edf6a42",
+  "README.md": "f4239ea1236b53ab47e5956d401b1d47f847deb42f1e0d847e0832d08485c5fa",
   "frozen-policy.json": "315035e5db1f1a7cdf08f498a0f1fdee3f9c2d28da5340d040762b06db0d070d",
   "measurements.tar.gz": "6e17594971c495dfa2b4e508a671ed6f377837bbcb1f5671bdceff2526a74908",
   "profiles.csv": "67306e7f8ef5b99dcbe2a6a76563471ba91768725d9fcf36bbadfd4454163dcd",
-  "results.md": "2ed44ba954083836516293411910b68a7719063311800f2ae7295801ee82fc27",
   "summary.csv": "a4edad0f557cb767d51ebce9cfc402ead086ddb292014ecbf35dad6d7fdb25e4",
   "summary.json": "8ba25c493b793b4e1d2b32a34238c3136b4e6d1ee19d4a8a33ceb2a2938e4d29",
   "../../../docs/assets/collectives-pro6000x8-allreduce-fp32-ce-optimized.svg": "b8a70bf1235c24f5c88710eff096b7654277b19d7c777e1fdbccd49d499b6d8f",

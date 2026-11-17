@@ -20,6 +20,37 @@ hashes. Unsupported shapes and layouts use the original SGLang methods.
 `run_sglang_ag_gate_8l4.sh` and `run_sglang_rs_sum2_8l4.sh` allow independent
 comparison. No installed SGLang package or model weight was edited.
 
+## Integration boundary and initial probe
+
+In the recorded SGLang build, `Glm4MoeDecoderLayer.forward` gathers through
+`CommunicateWithAllReduceAndLayerNormFn._gather_hidden_states_and_residual`
+and `dp_gather_partial` before MoE/MLP, then scatters through
+`CommunicateSummableTensorPairFn._scatter_hidden_states` and
+`dp_reduce_scatter_tensor`. Fusion needs the layer's weights and token layout;
+the NCCL symbol interposer alone cannot identify the GEMM producer or consumer.
+The routed experts use `CompressedTensorsW8A8Fp8MoE` with dynamic per-token FP8
+activations. The BF16 standalone GEMM and single-process `PacketPipeline`
+cannot directly replace that arithmetic or ownership. Expert quantization and
+routing remain in SGLang; the gate weight is BF16 `[128,4096]`.
+
+The initial single-process, synthetic-BF16 AG+gate probe used eight L4s,
+CUDA 12.9, NCCL 2.28.9 and `router_fusion_8l4`: one warmup round and two
+measured rounds of five calls per method. Slowest-GPU CUDA-event medians from
+the [30 samples per shape](fusion_ag_gate_probe_20261112.tsv) were:
+
+| Total gathered rows | cuBLAS + NCCL | cuBLAS + router | fused + router |
+| ---: | ---: | ---: | ---: |
+| 8 (one row/rank decode) | 0.2519 ms | 0.1904 ms | 0.1331 ms |
+| 296 (37 rows/rank prefill) | 0.6252 ms | 0.5371 ms | 0.6221 ms |
+
+These are isolated operation timings, not SGLang results or a per-size selected
+curve. The prefill probe did not beat cuBLAS plus router. A cold eight-request
+64-input/16-output-token shape trace observed BF16 element counts AG
+4096/18944/132608/151552, RS 4096, and AR 4096/28672/32768/262144/1839104.
+These were first occurrences, not frequencies; its 4.85 s cold request was
+not a paired performance comparison. The implemented decode path above
+supersedes the initial candidate inventory.
+
 ## Numerical checks
 
 The eight-process `check-ag-gemm` compares every gathered BF16 element and

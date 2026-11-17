@@ -6,7 +6,7 @@ standalone implementation, not the c03 vLLM extension. New figures and derived
 tables label this implementation **UCCL Lite**; historical source and raw logs
 retain the recorded `PCIeCCL` name.
 
-[Complete auto-path latency table](results.md) · [all-mode summary CSV](summary.csv)
+[all-mode summary CSV](summary.csv)
 
 ## Method preserved from the PRO5000 run
 

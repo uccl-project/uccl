@@ -12,7 +12,7 @@ All new paths remain explicitly selected experiments; `--ag-auto` is unchanged.
 
 ## Final comparison method
 
-`paired/` uses the final source in `hashes.txt`, staged identically on both hosts.
+`paired/` uses the final source in [source and binary hashes](../ag_1m_1g_2x4l4_20261115/hashes.txt), staged identically on both hosts.
 AllGather is FP32, out-of-place, with eight MPI processes, one per GPU. Sizes
 1 KiB–64 MiB are **complete output bytes per GPU**; input per GPU is one eighth
 of that number. Both UCCL and NCCL use slowest-rank host enqueue-to-completion
@@ -163,3 +163,7 @@ in `build/ag_pipeline_20261115/profile_ce.nsys-rep`.
 
 All additional checks completed successfully; `validation_summary.json` records
 per-test coverage and zero output error. Compute Sanitizer was not run.
+
+Shared archived records: [local software identity](../ag_1m_1g_2x4l4_20261115/software_local.txt), [local GPU topology](../ag_1m_1g_2x4l4_20261115/topology_local.txt).
+These files are byte-identical to this experiment's recorded copies; fresh
+runs must capture their own environment and software identities.

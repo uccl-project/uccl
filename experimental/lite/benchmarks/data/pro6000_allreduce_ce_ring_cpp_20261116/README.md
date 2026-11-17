@@ -16,7 +16,7 @@ corrects CPU affinity enforcement, and independently recalibrates both backends.
 The NCCL reference calls `ncclAllReduce` directly from the matched C++ harness;
 it is **not the official nccl-tests executable**.
 
-[Every size and every loss](results.md) · [all five measurements](summary.csv)
+[all five measurements](summary.csv)
 
 ![Frozen-policy FP32/C++ comparison](../../../docs/assets/collectives-pro6000x8-allreduce-fp32-ce-ring.svg)
 

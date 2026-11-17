@@ -4,6 +4,8 @@ import csv
 import json
 
 root = Path(__file__).resolve().parent
+report = root.parents[2] / 'build/reports' / root.name
+report.mkdir(parents=True, exist_ok=True)
 rows = list(csv.DictReader((root / 'paired/summary.csv').open()))
 modes = ['serial', 'ring', 'ce4096', 'nccl_default', 'nccl_simple']
 sizes = [2**power for power in range(20, 31)]
@@ -15,7 +17,7 @@ lines = ['All latencies are **milliseconds**, median of three round means.', '',
 for n in sizes:
     values = [float(lookup[n, mode]['median_us']) / 1000 for mode in modes]
     lines.append('| ' + ' | '.join([str(n // 2**20), *[f'{v:.3f}' for v in values]]) + ' |')
-(root / 'results.md').write_text('\n'.join(lines) + '\n')
+(report / 'results.md').write_text('\n'.join(lines) + '\n')
 coverage = {'sizes': sizes, 'configurations': modes, 'rounds': 3,
             'timed_calls_per_size_per_round': 20,
             'total_timed_calls': len(sizes) * len(modes) * 3 * 20,

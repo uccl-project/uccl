@@ -2,7 +2,7 @@
 
 This replaces every ordinary-call point in the six GPU/SHM overview figures
 with new measurements. No historical tail, copied curve, or resident timing
-is used. [results.md](results.md) lists all 126 operation/testbed/size points;
+is used. [summary.csv](summary.csv) lists all 126 operation/testbed/size points;
 [summary.csv](summary.csv) is the figure input. [candidates.csv](candidates.csv)
 also retains the base router, both sweep medians, and run ranges.
 

@@ -119,7 +119,7 @@ At **1 GiB complete tensor per GPU**, selected NCCL bus throughput is:
 
 CE is slower than SM at 1 GiB for all three collectives and also has a worse
 calibration-wide geometric mean. All CE curves are retained in full. The
-[complete table](results_table.md) and CSV preserve all sizes, run ranges and
+[complete CSV](summary.csv) preserve all sizes, run ranges and
 regressions. No claim is made that every tuned point beats its prior control.
 
 ## Figures

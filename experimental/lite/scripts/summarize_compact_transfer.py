@@ -8,6 +8,7 @@ import statistics
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "benchmarks/data/transfer_4to8_20261114"
+REPORT = ROOT / "build/reports" / DATA.name
 
 
 def summarize():
@@ -87,7 +88,7 @@ def write_tables(rows):
         return f"{size // 1048576} MiB" if size >= 1048576 else f"{size // 1024} KiB"
 
     text = ["# Confirmed transfer results", "",
-            "All times are microseconds. Each confirmation point is the median of two sweep medians; each sweep has five repetitions of twenty checked calls, with ten warmups per backend/repetition. Variants rotate and the second sweep reverses their order. No best-per-size curve is selected. See [method and limitations](README.md).", "",
+            "All times are microseconds. Each confirmation point is the median of two sweep medians; each sweep has five repetitions of twenty checked calls, with ten warmups per backend/repetition. Variants rotate and the second sweep reverses their order. No best-per-size curve is selected. See [method and limitations](../../../benchmarks/data/transfer_4to8_20261114/README.md).", "",
             "## Specialized AllGather: ordinary event timing", "",
             "Fixed 16-block mini-host geometry; out of place; complete output bytes/GPU. Positive reduction means faster than the current tuned router.", "",
             "| Size | Tuned router | Mini-host | NCCL | Reduction vs tuned router |",
@@ -137,7 +138,8 @@ def write_tables(rows):
             if complete(ex, size, variants, 1):
                 times = " | ".join(f"{get(ex, size, v):.2f}" for v in variants)
                 text.append(f"| {op.upper()} | {size_label(size)} | {times} |")
-    (DATA / "results.md").write_text("\n".join(text) + "\n")
+    REPORT.mkdir(parents=True, exist_ok=True)
+    (REPORT / "results.md").write_text("\n".join(text) + "\n")
 
 
 if __name__ == "__main__":

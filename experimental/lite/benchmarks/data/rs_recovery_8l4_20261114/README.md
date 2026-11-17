@@ -17,7 +17,7 @@ Complete input bytes per GPU, BF16, out of place. Values are microseconds. The p
 | shm | 4 | 927.49 | 833.79 | 1036.26 | 10.1% |
 | shm | 8 | 1682.43 | 1574.91 | 1942.02 | 6.4% |
 
-[All 42 points](results.md), [per-sweep candidates](candidates.csv), and [validation](validation.json) retain every result. NCCL timings changed from the earlier morning experiments; only freshly paired controls support the speedups above. Historical measurements remain untouched.
+[All 42 points](summary.csv), [per-sweep candidates](candidates.csv), and [validation](validation.json) retain every result. NCCL timings changed from the earlier morning experiments; only freshly paired controls support the speedups above. Historical measurements remain untouched.
 
 A separate [direct archived-binary comparison](original_binary_control.csv)
 also improves all eight target size/mode keys by 6.0–15.2%. It reruns the exact
@@ -30,7 +30,7 @@ improvement independently of the same-executable `previous` selector.
 
 ## Hardware and timing
 
-`wxz-l4`: eight NVIDIA L4 GPUs, two Intel Xeon sockets reported as CPU @ 2.20 GHz, ranks 0–3 on NUMA 0 and 4–7 on NUMA 1. CUDA 12.9, driver 580.178.04, NCCL 2.28.9. Submission CPU 47; four launch workers per NUMA node; ring uses 16 CTAs, 256 threads, and two host banks. See [topology](topology.txt) and the full-refresh hardware record.
+`wxz-l4`: eight NVIDIA L4 GPUs, two Intel Xeon sockets reported as CPU @ 2.20 GHz, ranks 0–3 on NUMA 0 and 4–7 on NUMA 1. CUDA 12.9, driver 580.178.04, NCCL 2.28.9. Submission CPU 47; four launch workers per NUMA node; ring uses 16 CTAs, 256 threads, and two host banks. See [topology](../full_refresh_8l4_20261114/topology.txt) and the full-refresh hardware record.
 
 Two opposite-order sweeps per mode, 21 powers of two from 1 KiB to 1 GiB, three rotated backend repetitions, five warmups and ten timed calls per repetition. Total: 7,560 checked timed calls and 3,780 checked warmups. Every call changes the signed input and checks the complete output plus guards. Input producers finish before timing. The slowest-GPU CUDA-event interval includes host submission gaps and ends after the output is ready; preparation and validation are excluded. The table takes the median of the two sweep medians, each the median of three repetition medians.
 
@@ -42,7 +42,26 @@ GPU mode leaves NCCL P2P at default; SHM disables P2P explicitly. UCCL uses mapp
 
 `PacketPipelineOptions::hostRingReduceScatter` is disabled by default. Applications must opt in and calibrate exact dtype, size, placement, topology, software and timing scope. Unsupported or unmeasured Auto workloads retain the caller fallback without router allocation. The benchmark uses Force for the fixed measured schedule. No automatic production policy or serving hook is enabled.
 
-CPU packet/worker/interleave/direct-result tuning, CPU loop unrolling, flat GPU reduction, recursive halving, and hierarchical alternatives did not yield a reliable improvement across all four sizes. [WORKLOG.md](WORKLOG.md), raw candidate logs, source snapshots and the reverted CPU trial preserve these negative results. Interrupted runs and the accidentally stale parallel-launch binaries are explicitly excluded.
+CPU packet/worker/interleave/direct-result tuning, CPU loop unrolling, flat GPU
+reduction, recursive halving, and hierarchical alternatives did not yield a
+reliable improvement across all four sizes. The [screening table](screening.csv),
+raw candidate logs, [source snapshots](reproduction/) and
+[reverted CPU trial](cpu_unroll_trial.patch) preserve these negative results:
+
+- Destination stripes with 512 KiB packets and eight workers helped 4–8 MiB
+  but hurt 1 MiB. CPU BF16 loop unrolling passed scalar-oracle checks without
+  a reliable end-to-end gain and was reverted.
+- Flat mapped-host GPU reduction, recursive halving and hierarchical reduction
+  did not beat the retained ring across the target sizes. Upload elision and
+  vectorized final adds did not establish a hierarchical win.
+- Nsight traces suggested upload/remote-partial waits rather than CPU arithmetic
+  dominated; tracing perturbed launch costs and is not timing evidence.
+- `ring_parallel_b8` and `ring_parallel_b16` accidentally used the preceding
+  serial-launch binary after a failed build. They are excluded as parallel
+  measurements. `core_ring_check_8` and `core_shm` were interrupted by foreign
+  GPU work and are excluded; the final checks and confirmations above supersede
+  them. Early `final_*` checks preceded the option-field relocation; the
+  accepted rebuilt revision is recorded in `final_source_hashes.json`.
 
 ## Correctness and limitations
 
@@ -92,3 +111,7 @@ python3 benchmarks/data/overview_8l4_20261114/plot.py --op reduce_scatter --prev
 ```
 
 The runner refuses existing raw run names; use a new data directory for another run. It also rejects occupied GPUs and aborts its own job if foreign GPU users appear. Source hashes, executable hashes, complete commands, environments and exit statuses are retained. Generated binaries and traces live under `build/`. AR/AG figures retain their earlier full-refresh measurements; the separate fresh controls validate behavior without replacing those historical curves.
+
+Shared archived records: [GPU topology](../full_refresh_8l4_20261114/topology.txt).
+These files are byte-identical to this experiment's recorded copies; fresh
+runs must capture their own environment and software identities.

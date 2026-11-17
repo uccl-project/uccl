@@ -12,7 +12,7 @@ result of 51.94 GB/s. Across the complete size grid, speedups are
 **1.021–1.879× for AllGather** and **1.015–1.766× for ReduceScatter**.
 This remains an experimental, hardware-specific standalone implementation.
 
-[Every size and observed range](results.md) · [AllGather samples](allgather.csv) ·
+[AllGather samples](allgather.csv) ·
 [ReduceScatter samples](reducescatter.csv) · [frozen policy](policy.json) ·
 [raw evidence](measurements.tar.gz)
 

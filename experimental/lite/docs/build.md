@@ -229,7 +229,7 @@ The `--graph` peer harness supports SM pull/push-serial and NCCL through 1 MiB;
 CE peer copies and host-generation LL/fence candidates are excluded. Its timing
 is graph-versus-graph, separate from the eager README curves.
 Native AR `-a 8` selects only the existing ring for diagnostics; omitting `-a`
-retains the original candidate sweep. See the [complete execution record](../benchmarks/data/optimization_4l4_20261113/EXPERIMENTS.md).
+retains the original candidate sweep. See the [additional optimization results](../benchmarks/data/optimization_4l4_20261113/README.md#reducescatter-granularity).
 
 ## Full-size and small/medium follow-up
 

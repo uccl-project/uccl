@@ -53,7 +53,7 @@ The **1 KiB–1 MiB latency panel** uses the [fresh checked sweep](../benchmarks
 from current source: FP32, two four-L4 hosts, four MPI processes/two GPUs each,
 slowest-process host enqueue-to-completion timing. Three independent rounds use
 20 warmups/50 calls for UCCL and CE, and 100 warmups/200 calls for the
-[rechecked default/SM curves](../benchmarks/data/ag_latency_2x4l4_20261116/retest/README.md), checking every output. The host router keeps 256-KiB
+[rechecked default/SM curves](../benchmarks/data/ag_latency_2x4l4_20261116/README.md#nccl-spike-recheck), checking every output. The host router keeps 256-KiB
 chunks. Default LL-path spikes remain measured; the latency SM tuned curve
 now uses fixed SIMPLE at all sizes. Points are medians of round
 means, not a best-variant-per-size selection.

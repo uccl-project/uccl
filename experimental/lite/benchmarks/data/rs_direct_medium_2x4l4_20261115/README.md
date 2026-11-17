@@ -51,7 +51,7 @@ The 8- and 16-MiB round-mean ranges are disjoint between baseline and candidate.
 No large-message improvement is claimed: unchanged 32-MiB–1-GiB paths measure
 0.06–0.30% slower medians in this record, with overlapping ranges. Small-message
 results fluctuate as well; their algorithm is unchanged. The
-[complete table](results_table.md) and CSV retain every point and regression.
+[complete CSV](summary.csv) retain every point and regression.
 All 1,260 paired timed calls and their warmups pass full-output checks.
 
 ## Correctness and reproduction

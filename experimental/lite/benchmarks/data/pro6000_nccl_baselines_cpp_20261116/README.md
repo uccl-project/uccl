@@ -7,7 +7,7 @@ baseline is newly calibrated across SM and CE configurations. The earlier
 and [AG/RS result](../pro6000_ag_rs_cpp_20261116/README.md) remain historical
 records; their timings do not enter these figures.
 
-[Every size](results.md) · [AllReduce samples](allreduce.csv) ·
+[AllReduce samples](allreduce.csv) ·
 [AllGather samples](allgather.csv) · [ReduceScatter samples](reducescatter.csv) ·
 [frozen policy](policy.json) · [configuration catalog](configurations.json) ·
 [raw evidence](measurements.tar.gz) · [provenance](provenance.json)

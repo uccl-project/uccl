@@ -42,13 +42,12 @@
     "four_l4": 56
   },
   "files": {
-    "README.md": "42496718e02780b268c2cded5962cdaa32a6d3e0935bce6f02d3a55d5b98788f",
+    "README.md": "cc629a2509f5e8e4993997915096a6c25f10c35a0b43956fe6d513772506a486",
     "allgather.csv": "62639db86971414a507c70c60c3180f6665c10f6ca97c05f61c9ca27fa9a5268",
     "logging-control.csv": "cbee0aaf397ca3ac51486b009e72f983ce8fcd59731b64831d24149661c696c9",
     "measurements.tar.gz": "c1c4b15ff29ea0786fe1ea961af434d8524c75056873f6b537652240f8fdf55e",
     "policy.json": "bf65382c8ef3d4f5b0195c6cc1482bda190ab5bccde5c6f0da8990ef97c65470",
     "reducescatter.csv": "9e4b22716b74d4b2f63ae11e97e1294680f087de37fabdf0288cac692ab2de9c",
-    "results.md": "689b39ec0bd0e371bc8059aaf251e4ff6ade0ece4f44307440a3d94cce16d0d8",
     "summary.json": "eb613cc2acc9ca48e94c7da0a0f70b688f7364ca8a9c3fe3643b9b2b69ba9fcd"
   },
   "figures": {

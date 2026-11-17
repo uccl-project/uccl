@@ -10,6 +10,7 @@ import statistics as stats
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "benchmarks/data/rs_recovery_8l4_20261114"
+REPORT = ROOT / "build/reports" / DATA.name
 SIZES = [1 << p for p in range(10, 31)]
 VARIANTS = ("nccl", "previous", "current")
 
@@ -164,7 +165,8 @@ def main():
              "| --- | ---: | ---: | ---: | ---: | ---: |"]
     for r in rows:
         lines.append(f'| {r["testbed"]} | {r["bytes"]} | {r["previous_median_us"]:.2f} | {r["uccl_median_us"]:.2f} | {r["nccl_median_us"]:.2f} | {r["speedup"]:.3f}× |')
-    (DATA / "results.md").write_text("\n".join(lines) + "\n")
+    REPORT.mkdir(parents=True, exist_ok=True)
+    (REPORT / "results.md").write_text("\n".join(lines) + "\n")
     print(json.dumps(validation, indent=2))
     assert validation["all_target_sweeps_beat_previous"], "recovery not confirmed against previous"
     assert validation["all_target_sweeps_beat_nccl"], "target NCCL regressions remain"

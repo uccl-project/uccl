@@ -11,7 +11,7 @@ and no CPU reduction workers; it uses the router module's NUMA-pinned memory.
 
 `wxz-l4`: eight NVIDIA L4s, GPUs 0–3 on NUMA 0 and 4–7 on NUMA 1, Intel Xeon
 2.20-GHz CPU, 96 logical CPUs, driver 580.178.04, CUDA 12.9, NCCL 2.28.9.
-See `hardware.csv`, `topology.txt`, and `cpu.json`. NCCL uses its default local
+See `hardware.csv`, [GPU topology](../full_refresh_8l4_20261114/topology.txt), and `cpu.json`. NCCL uses its default local
 P2P/SHM choices; P2P is not disabled. Submission is pinned to CPU 47 after
 discovering the full permitted CPU set. The runner checks GPU ownership before,
 during, and after each run and aborts its own child if another process appears.
@@ -83,7 +83,7 @@ insert 5 ms before each producer fill; the idle interval is outside timing.
 ## Results
 
 The complete checked results are in `summary.csv`; the concise confirmed tables
-are in `results.md`. Screens, reversed confirmation, extended tuning, and
+are in [summary.csv](summary.csv). Screens, reversed confirmation, extended tuning, and
 sparse-call probes remain separate experiments.
 
 The attribution experiment narrows the useful new mini-host range to the

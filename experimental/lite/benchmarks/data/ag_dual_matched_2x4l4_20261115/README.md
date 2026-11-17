@@ -186,3 +186,7 @@ Per-call checks use host barriers; the consecutive batch checks its final output
 and a fresh generation. This does not establish arbitrary application-stream or
 CUDA-graph behavior. Compute Sanitizer was not run. The CPU-router core and
 production dispatch policies remain unchanged.
+
+Shared archived records: [local software identity](../ag_1m_1g_2x4l4_20261115/software_local.txt), [local GPU topology](../ag_1m_1g_2x4l4_20261115/topology_local.txt).
+These files are byte-identical to this experiment's recorded copies; fresh
+runs must capture their own environment and software identities.

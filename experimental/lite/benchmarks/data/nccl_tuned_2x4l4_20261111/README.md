@@ -6,7 +6,7 @@ Eight FP32 ranks run on `mibura-sky-test-02` and `l40` with four GPUs and two
 IB rails per node. AllReduce is in place; AllGather and ReduceScatter are
 out of place. Both sides use slowest-rank host enqueue+completion timing,
 20 warmups, three alternating paired rounds of ten calls, and complete
-output checks on every invocation. `hardware_software.txt` records the
+output checks on every invocation. [hardware and software identity](../multinode_serial_20261111/hardware_software.txt) records the
 matching executable/library hashes, topology, and software versions.
 
 ## Explicit NCCL protocol policy

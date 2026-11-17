@@ -1,5 +1,5 @@
 {
-  "README.md": "dbf8fd8a746fb8a75149fccc695f85d29d6df58ae663b8450640852349fa90a6",
+  "README.md": "416d65f89843256d8a6eac3050d5361fc4fba38ed101f0dcfd4c6cbd2fda1e55",
   "allgather.png": "7547ac23d56472d547cb5376d37e68de44e45783837b360ab1fef35282366256",
   "allgather.svg": "8798b3a7524e7a16b210e370d85102e16e179ea02e7b1ef7d9e80f2bed196051",
   "allreduce.png": "d7fd34548a6e67120bcae9485ab54fd99d13e3f4a7c723d4ed64e0320d3bf0d2",
@@ -17,7 +17,6 @@
   "plot.py": "a1a115a71fbb39d06bd6a920644f45ae34b02cba5b96c7acca27502e9a32875b",
   "reducescatter.png": "ba4777618c29a47d976aa30bba1fd758ae1af61fb47a2234f04ce2c9ecf0cb83",
   "reducescatter.svg": "f10926bae2a7b2f5f30e3cd3de5fe5013a82da511f561a3ddbd704a590bdfc2b",
-  "results_table.md": "792d12ca204d8fa66e457d4e33635615f6387a58b96ea1e2d963ca005c8bce16",
   "run.py": "10a1887b49e693aa933470e44975a9333e9be85002799928d2f740078b543dd4",
   "schedule.json": "bde09a79fe5e41f4032f53c2e9fe5940df91fd1772f041be7a99a22184aa92ef",
   "schedule_initial.json": "32dd0ffcc30c7c1d49b435110a8025db4b0b3d53b8bb27818dbedeeb976a7d2c",

@@ -22,7 +22,7 @@ was repaired and the entire failed epoch is preserved below; none of its
 validation measurements are reused. The implementation and per-size policies
 remain experimental.
 
-[Every size and every loss](results.md) · [all five measurements per size](summary.csv)
+[all five measurements per size](summary.csv)
 
 ![Frozen-policy FP32/C++ AllReduce](../../../docs/assets/collectives-pro6000x8-allreduce-fp32-ce-optimized.svg)
 

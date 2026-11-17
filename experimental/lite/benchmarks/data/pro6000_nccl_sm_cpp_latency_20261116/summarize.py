@@ -13,6 +13,7 @@ sys.dont_write_bytecode = True
 from run import CONFIGS, SIZES, parse
 
 DATA = Path(__file__).resolve().parent
+REPORT = DATA.parents[2] / "build/reports" / DATA.name
 
 
 def sha(path):
@@ -100,8 +101,9 @@ def main():
         table.append(f"| {row['bytes'] // 1024} KiB | {row['nccl_default_median_us']:.2f} | "
                      f"{row['nccl_sm_tuned_median_us']:.2f} | {row['pcieccl_original_median_us']:.2f} | {row['selected_config']} |")
     table += ["", "All accepted size/run pre-timing checks reported zero maximum relative error.",
-              "See [README.md](README.md) for the frozen policies, raw records, limitations and reproduction.", ""]
-    (DATA / "results.md").write_text("\n".join(table))
+              "See [README.md](../../../benchmarks/data/pro6000_nccl_sm_cpp_latency_20261116/README.md) for the frozen policies, raw records, limitations and reproduction.", ""]
+    REPORT.mkdir(parents=True, exist_ok=True)
+    (REPORT / "results.md").write_text("\n".join(table))
     accepted = sum(record.get("status") == "pass" for record in manifest["runs"])
     validation = [record for record in manifest["runs"] if record["label"].startswith("validation-")]
     checks = sum(39 if record["config"] == "original" else 11 for record in validation)

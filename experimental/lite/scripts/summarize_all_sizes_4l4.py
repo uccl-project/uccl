@@ -14,6 +14,7 @@ from plot_4l4_collectives import plot, size_name
 
 root = Path(__file__).resolve().parents[1]
 data = root / 'benchmarks/data/small_medium_4l4_20261113'
+report = root / 'build/reports' / data.name
 new = {'mini-host', 'scatter-hier-ll', 'push-grid', 'scatter-grid'}
 
 def save(name, rows):
@@ -82,12 +83,13 @@ lookup = [{r['bytes']:r for r in rows} for rows in [ar,ag,rs]]
 lines=['| Full bytes/GPU | AllReduce | AllGather | ReduceScatter |', '| ---: | ---: | ---: | ---: |']
 for n in [1024<<i for i in range(21)]:
     lines.append('| '+size_name(n)+' | '+' | '.join(cell(v[n]) for v in lookup)+' |')
-(data/'ordinary_table.md').write_text('\n'.join(lines)+'\n')
+report.mkdir(parents=True, exist_ok=True)
+(report/'ordinary_table.md').write_text('\n'.join(lines)+'\n')
 rlookup={op:{r['bytes']:r for r in resident if r['operation']==op} for op in ['all_reduce','all_gather','reduce_scatter']}
 lines=['| Full bytes/GPU | Resident AR / NCCL | Resident AG / NCCL | Resident RS / NCCL |', '| ---: | ---: | ---: | ---: |']
 for n in [16,1024,16384,65536,262144,1048576]:
     lines.append('| '+size_name(n)+' | '+' | '.join(cell(rlookup[op][n]) for op in rlookup)+' |')
-(data/'resident_table.md').write_text('\n'.join(lines)+'\n')
+(report/'resident_table.md').write_text('\n'.join(lines)+'\n')
 print('AG medium improvements:')
 for row in ag:
     if row['bytes'] in [2**20,2**21,2**22,2**23,2**24]: print(row)

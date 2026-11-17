@@ -38,7 +38,7 @@ Small-message regressions and outliers are retained.
 All 630 UCCL Lite timed calls and their warmups passed full-output checking
 on the two four-GPU hosts. The 420 retained NCCL timed calls also passed.
 UCCL Lite medians are 71.345 µs at 1 KiB, 177.284 µs at 1 MiB, and
-96.411 ms / 19.49 GB/s at 1 GiB. See the [complete table](results_table.md).
+96.411 ms / 19.49 GB/s at 1 GiB. See the [complete measurements](summary.csv).
 The NCCL 1-MiB round means span 204.509–436.013 µs; this variability is
 preserved in the CSV rather than used to claim a stable gain.
 

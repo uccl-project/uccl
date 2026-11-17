@@ -25,8 +25,8 @@ GPU; AG inputs and RS outputs are one quarter of that extent.
 [AR selected](ar_selected.csv) · [AR candidates](ar_candidates.csv) ·
 [AG selected](ag_selected.csv) · [AG candidates](ag_candidates.csv) ·
 [RS selected](rs_selected.csv) · [RS candidates](rs_candidates.csv).
-The [complete ordinary table](ordinary_table.md) uses UCCL / paired NCCL µs;
-† marks a slower UCCL median, not a significance test.
+These CSVs retain paired UCCL/NCCL timings in microseconds, including every
+slower UCCL median; differences are descriptive, not significance tests.
 
 The new ordinary-path gains are concentrated where the previous report was
 weak: fused host AG at 1–16 MiB, phased LL RS at 16–32 KiB, and reduced-block
@@ -112,8 +112,7 @@ and integration into application graphs are not validated.
 `resident_doorbell_final.log` covers 16 B–1 MiB, 17 sizes × 3 operations,
 20 warmups and 3 alternating rounds × 20 calls. All configured warmups and
 all **6,120 timed invocations** check changed signed-random inputs against an
-independent GPU sum/reference. [Full resident data](resident_selected.csv) and
-[representative paired table](resident_table.md) are separate from eager curves.
+independent GPU sum/reference. [Full resident data](resident_selected.csv) are separate from eager curves.
 At 1 KiB, AR / AG / RS take **7.65 / 6.03 / 7.42 µs**, versus their paired eager
 NCCL controls **33.80 / 30.15 / 29.95 µs**.
 

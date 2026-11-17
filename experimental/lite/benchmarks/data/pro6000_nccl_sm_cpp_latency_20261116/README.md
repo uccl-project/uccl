@@ -12,7 +12,7 @@ original standalone implementation recorded as `PCIeCCL` in historical source
 and raw logs. Raw names, source bytes, hashes and measurement values retain
 their original identities.
 
-[Latency comparison](results.md) · [all five-run values and ranges](summary.csv)
+[all five-run values and ranges](summary.csv)
 
 ![Matched FP32/C++ AllReduce latency](../../../docs/assets/collectives-pro6000x8-allreduce-fp32-cpp-latency.svg)
 
@@ -106,7 +106,8 @@ effects of Python enqueue, dtype, graph capture or other timing-scope changes.
   packaged in `debug-logs.tar.gz`), hardware
   identity, build log, source/library/binary hashes, commands and policy records.
 - `summary.csv`: all selected/default/original validation values and ranges.
-- `results.md`: complete 1-KiB–1-MiB latency comparison.
+- `summary.csv`: complete 1-KiB–1-MiB latency comparison; the summarizer writes
+  a readable table under `build/reports/pro6000_nccl_sm_cpp_latency_20261116/`.
 - `provenance.json`: packaged raw-data and measured-source hashes.
 - `summarize.py`: dependency-free verification of all raw records, selection,
   source identities, size coverage, zero-error checks and non-CE transport logs.
@@ -141,3 +142,7 @@ make nccl-sm-cpp-latency-figures
 The figure uses the shared collective colors, markers, fonts, legend, grid and
 metric direction. It shows the measured 1-KiB–1-MiB latency range; shading is
 the five-run observed range.
+
+Shared archived records: [CPU identity](../pro6000_original_cpp_latency_20261116/raw/cpu-identity.txt), [GPU topology](../pro6000_original_cpp_latency_20261116/raw/topology.txt), [CUDA compiler identity](../pro6000_original_cpp_latency_20261116/raw/compiler.txt).
+These files are byte-identical to this experiment's recorded copies; fresh
+runs must capture their own environment and software identities.
