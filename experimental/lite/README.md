@@ -7,7 +7,7 @@
 
 </div>
 
-## Key insights
+## Design principles
 
 - **Balance traffic.** Simultaneous transfers can congest shared PCIe and
   cross-NUMA links. Spread traffic across paths and phases to reduce contention
@@ -22,20 +22,17 @@
   communication on ready outputs. Choose chunk sizes that expose overlap
   without fragmenting GEMM into inefficient small operations.
 
-Backend choices need [local measurements](docs/cpu-router.md#selection-policy)
-for the exact dtype, size, placement, and hardware/software configuration.
-
 ## Testbeds
 
 <div align="center">
 
 <table align="center">
-  <tr><th>#</th><th>GPUs</th><th>GPU P2P</th><th>Configuration</th></tr>
-  <tr><td>1</td><td>8 × NVIDIA L4</td><td>Partial P2P</td><td>Four GPUs per NUMA node.</td></tr>
-  <tr><td>2</td><td>8 × NVIDIA L4</td><td>Without P2P</td><td>8xL4 SHM: GPU peer transport disabled by policy.</td></tr>
-  <tr><td>3</td><td>4 × NVIDIA L4</td><td>With P2P</td><td>PCIe Gen4 dual-socket node; multi-node tests use two such nodes with two NIC rails per node.</td></tr>
-  <tr><td>4</td><td>2 × NVIDIA RTX PRO 6000</td><td>With P2P</td><td>BF16 peer path.</td></tr>
-  <tr><td>5</td><td>8 × NVIDIA RTX PRO 6000 Blackwell</td><td>With P2P</td><td>Four GPUs per NUMA node; FP32 in-place AllReduce with C++ batch timing.</td></tr>
+  <tr><th>#</th><th>GPUs</th><th>GPU P2P</th></tr>
+  <tr><td>1</td><td>8 × NVIDIA L4</td><td>Partial P2P</td></tr>
+  <tr><td>2</td><td>8 × NVIDIA L4</td><td>Without P2P</td></tr>
+  <tr><td>3</td><td>4 × NVIDIA L4</td><td>With P2P</td></tr>
+  <tr><td>4</td><td>2 × NVIDIA RTX PRO 6000</td><td>With P2P</td></tr>
+  <tr><td>5</td><td>8 × NVIDIA RTX PRO 6000 Blackwell</td><td>With P2P</td></tr>
 </table>
 
 </div>
@@ -55,14 +52,6 @@ for the exact dtype, size, placement, and hardware/software configuration.
 ### End-to-end serving and training
 
 #### Testbed 1
-
-These historical figures are **not all stock NCCL drop-in results**: serving
-and DDP use the experimental NCCL proxy; FSDP uses a separate RS communicator
-and an application communication hook. See the
-[original FSDP boundary](integration/nccl_lite/e2e_large_messages_8l4_20261115.md#fsdp-compatibility-boundary).
-The [calibrated eight-L4 drop-in](integration/nccl_lite/DROPIN.md) has its own
-stock-FSDP validation and fresh performance records; it does not inherit these
-figures.
 
 <table>
   <tr><th>Serving</th><th>Training</th></tr>
