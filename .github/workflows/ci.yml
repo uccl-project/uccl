@@ -249,6 +249,7 @@ jobs:
     if: always() && github.event_name == 'workflow_dispatch' && inputs.reply_comment_id != ''
     runs-on: ubuntu-24.04
     permissions:
+      actions: read
       contents: read
       issues: write
       pull-requests: write
@@ -259,11 +260,21 @@ jobs:
           repository: ${{ github.repository }}
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
+      # Keep PR-produced data outside the trusted checkout. The helper reads
+      # only the plan and result JSON; missing data must never imply a pass.
+      - name: Download suite results
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ci-*
+          path: ${{ runner.temp }}/uccl-ci-artifacts
       - name: Post command result
         uses: actions/github-script@v7
         env:
           CI_JOB_RESULTS: ${{ toJSON(needs) }}
+          CI_ARTIFACTS: ${{ runner.temp }}/uccl-ci-artifacts
         with:
           script: |
             const results = JSON.parse(process.env.CI_JOB_RESULTS);
-            await require('./ci/github_comments.js').update({github, context, status: 'complete', results});
+            const suites = require('./ci/github_results.js').readSuiteResults(process.env.CI_ARTIFACTS);
+            await require('./ci/github_comments.js').update({github, context, status: 'complete', results, suites});

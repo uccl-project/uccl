@@ -1,6 +1,10 @@
 const assert = require('node:assert/strict');
 const {test} = require('node:test');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const {dispatch, update} = require('../github_comments.js');
+const {readSuiteResults} = require('../github_results.js');
 
 function fixture(command = '/run-ci l4 p2p.*', permission = 'write') {
   const calls = [];
@@ -43,6 +47,7 @@ function fixture(command = '/run-ci l4 p2p.*', permission = 'write') {
   const core = {summary: {addRaw() {}, async write() {}}, warning() {}};
   return {
     github, context, core, calls, pr, reply, comments, attempt: '1',
+    suites: {gpu: {executed: 1, skipped: 0, failed: 0, missing: 0, infrastructure: false}},
     startRun() {
       context.eventName = 'workflow_dispatch';
       context.runId = 101;
@@ -138,7 +143,7 @@ test('dispatch failure updates the queued comment instead of leaving it queued',
   assert.match(f.reply.body, /Status: ⚠️ Failed to dispatch/);
 });
 
-test('running, completion, retries and reruns update the same status comment', async () => {
+test('one detailed comment and one short notification per completed attempt', async () => {
   for (const command of ['/run-ci l4', '/run-benchmark gh200']) {
     const f = fixture(command);
     await dispatch(f);
@@ -153,17 +158,22 @@ test('running, completion, retries and reruns update the same status comment', a
     assert.ok(f.reply.body.includes(command));
     assert.ok(f.reply.body.includes(f.pr.head.sha));
     assert.match(f.reply.body, /\| CPU \| — Skipped \|/);
-    assert.equal(f.comments.length, 1);
+    assert.equal(f.comments.length, 2);
+    assert.match(f.comments[1].body, /@maintainer \*\*Status: ✅ Pass\*\*/);
+    assert.match(f.comments[1].body, /actions\/runs\/101\/attempts\/1/);
+    assert.doesNotMatch(f.comments[1].body, /\| Job \||Requested by:|Commit:/);
     await update({...f, status: 'complete', results: results()});
-    assert.equal(f.comments.length, 1, 'retry must keep the original comment');
+    assert.equal(f.comments.length, 2, 'retry must not repeat the notification');
     await update({...f, status: 'running', attempt: '2'});
     assert.match(f.reply.body, /Status: 🔄 Running/);
     assert.match(f.reply.body, /actions\/runs\/101\/attempts\/2/);
     await update({...f, status: 'complete', attempt: '2', results: results()});
     assert.match(f.reply.body, /Status: ✅ Pass/);
     assert.match(f.reply.body, /actions\/runs\/101\/attempts\/2/);
-    assert.equal(f.comments.length, 1, 'a new attempt reuses the original comment');
-    assert.equal(f.calls.filter(([kind]) => kind === 'create').length, 1);
+    assert.equal(f.comments.length, 3, 'a new attempt gets one new notification');
+    assert.match(f.comments[2].body, /actions\/runs\/101\/attempts\/2/);
+    assert.equal(f.comments.filter(comment => comment.body.includes('| Job |')).length, 1);
+    assert.equal(f.calls.filter(([kind]) => kind === 'create').length, 3);
     assert.ok(f.calls.filter(([kind]) => kind === 'update').every(([, args]) => args.comment_id === 200));
   }
 });
@@ -180,8 +190,8 @@ test('a transient completion update failure retries the original comment', async
   f.github.rest.issues.updateComment = edit;
   await update({...f, status: 'complete', results: results()});
   assert.match(f.reply.body, /Status: ✅ Pass/);
-  assert.equal(f.comments.length, 1);
-  assert.equal(f.calls.filter(([kind]) => kind === 'create').length, 1);
+  assert.equal(f.comments.length, 2);
+  assert.equal(f.calls.filter(([kind]) => kind === 'create').length, 2);
   assert.ok(f.calls.filter(([kind]) => kind === 'update').every(([, args]) => args.comment_id === 200));
 });
 
@@ -198,8 +208,9 @@ test('final status covers setup/test failures, cancellation and skipped executio
     await dispatch(f); f.startRun();
     await update({...f, status: 'complete', results: results(changes)});
     assert.ok(f.reply.body.includes(`**Status: ${label}**`));
-    assert.equal(f.comments.length, 1);
-    assert.equal(f.calls.filter(([kind]) => kind === 'create').length, 1);
+    assert.equal(f.comments.length, 2);
+    assert.ok(f.comments[1].body.includes(`@maintainer **Status: ${label}**`));
+    assert.doesNotMatch(f.comments[1].body, /\| Job \|/);
     if (changes['comment-start']) assert.match(f.reply.body, /initial running-status update did not succeed/);
   }
 });
@@ -233,4 +244,130 @@ test('malformed inputs, PR events and missing results cannot report success', as
   f.context.payload.inputs.reply_comment_id = 'invalid';
   await assert.rejects(update({...f, status: 'running'}), /Invalid CI reply identifiers/);
   assert.equal(f.calls.filter(([kind]) => kind === 'update').length, 0);
+});
+
+test('completion notification retries recover before and after an accepted POST', async () => {
+  for (const accepted of [false, true]) {
+    const f = fixture();
+    await dispatch(f); f.startRun();
+    const create = f.github.rest.issues.createComment;
+    f.github.rest.issues.createComment = async args => {
+      if (accepted) await create(args);
+      throw new Error('lost API response');
+    };
+    await assert.rejects(update({...f, status: 'complete', results: results()}), /lost API response/);
+    assert.match(f.reply.body, /Status: ✅ Pass/);
+    f.github.rest.issues.createComment = create;
+    await update({...f, status: 'complete', results: results()});
+    assert.equal(f.comments.length, 2);
+    assert.equal(f.comments.filter(comment => comment.body.includes('| Job |')).length, 1);
+  }
+});
+
+test('a user cannot suppress the completion notification by copying its marker', async () => {
+  const f = fixture();
+  await dispatch(f); f.startRun();
+  f.comments.push({user: {login: 'github-actions[bot]', type: 'User'}, body: '<!-- uccl-ci-complete-101-1 -->\nspoof'});
+  await update({...f, status: 'complete', results: results()});
+  assert.equal(f.comments.length, 3);
+  assert.match(f.comments.at(-1).body, /@maintainer \*\*Status: ✅ Pass/);
+});
+
+function artifacts(t, plan, records) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'uccl-comment-test-'));
+  t.after(() => fs.rmSync(root, {recursive: true, force: true}));
+  const write = (name, data) => {
+    const file = path.join(root, name);
+    fs.mkdirSync(path.dirname(file), {recursive: true});
+    fs.writeFileSync(file, JSON.stringify(data));
+    return file;
+  };
+  write('ci-plan/ci-plan.json', {include: Object.entries(plan).map(([target, tests]) => ({target, tests}))});
+  for (const [target, results] of Object.entries(records)) {
+    write(`${target === 'cpu' ? 'ci-cpu' : `ci-gpu-${target}`}/${target}/results.json`, {results});
+  }
+  return {root, write};
+}
+
+const record = (id, extra = {}) => ({id, node: 0, exit_code: 0, seconds: 1, ...extra});
+
+test('11 unreachable GB10 rank results become seven skipped suites, not a pass', async t => {
+  const ids = Array.from({length: 7}, (_, i) => `ep.case_${i}`);
+  const a = artifacts(t, {gb10: ids}, {
+    gb10: ids.flatMap((id, i) => (i < 4 ? [0, 1] : [0]).map(node => record(id, {node, skip_reason: 'SSH unavailable: private-host'}))),
+  });
+  const f = fixture('/run-ci gb10 ep.*');
+  f.suites = readSuiteResults(a.root);
+  assert.deepEqual(f.suites.gpu, {executed: 0, skipped: 7, failed: 0, missing: 0, infrastructure: false});
+  await dispatch(f); f.startRun();
+  await update({...f, status: 'complete', results: results()});
+  assert.match(f.reply.body, /\*\*Status: — Skipped\*\*/);
+  assert.match(f.reply.body, /\| GPU \| — Skipped \(0 executed, 7 skipped\) \|/);
+  assert.match(f.comments[1].body, /@maintainer \*\*Status: — Skipped\*\*/);
+  assert.doesNotMatch(f.reply.body, /private-host|SSH unavailable/);
+});
+
+test('CPU success cannot hide skipped GPU work, and GPU targets aggregate separately', async t => {
+  const a = artifacts(t, {cpu: ['ci.selftest'], gb10: ['ep.a'], l4: ['ep.a']}, {
+    cpu: [record('ci.selftest')],
+    gb10: [record('ep.a', {skip_reason: 'GPU busy'})],
+    l4: [record('ep.a'), record('ep.a', {node: 1}), record('ep.a', {node: 2, not_participating: true})],
+  });
+  const f = fixture('/run-ci all');
+  await dispatch(f); f.startRun();
+  for (const gpuExecutes of [true, false]) {
+    if (!gpuExecutes) a.write('ci-gpu-l4/l4/results.json', {results: [record('ep.a', {skip_reason: 'GPU busy'})]});
+    f.suites = readSuiteResults(a.root);
+    await update({...f, status: 'complete', results: results({cpu: 'success'})});
+    assert.match(f.reply.body, /\*\*Status: ⚠️ Incomplete\*\*/);
+    assert.match(f.reply.body, /\| CPU \| ✅ Pass \(1 executed, 0 skipped\) \|/);
+    assert.ok(f.reply.body.includes(gpuExecutes ? '⚠️ Incomplete (1 executed, 1 skipped)' : '— Skipped (0 executed, 2 skipped)'));
+  }
+});
+
+test('artifact failures, missing results and partial skips do not report a pass', async t => {
+  const a = artifacts(t, {l4: ['ep.a', 'ep.b']}, {});
+  const f = fixture();
+  await dispatch(f); f.startRun();
+  for (const [records, extra, label] of [
+    [[record('ep.a'), record('ep.b')], {}, '✅ Pass'],
+    [[record('ep.a'), record('ep.b', {skip_reason: 'GPU busy'})], {}, '⚠️ Incomplete'],
+    [[record('ep.a'), record('ep.b', {exit_code: 1})], {}, '❌ Failed'],
+    [[record('ep.a'), record('ep.b')], {infrastructure_error: 'collection failed'}, '❌ Failed'],
+    [[record('ep.a')], {}, '❔ Unknown or unclassified'],
+    [[record('ep.a'), record('ep.b', {not_participating: true})], {}, '❔ Unknown or unclassified'],
+    [[record('ep.a'), record('ep.b', {exit_code: null})], {}, '❔ Unknown or unclassified'],
+  ]) {
+    a.write('ci-gpu-l4/l4/results.json', {results: records, ...extra});
+    f.suites = readSuiteResults(a.root);
+    await update({...f, status: 'complete', results: results()});
+    assert.ok(f.reply.body.includes(`**Status: ${label}**`));
+  }
+  // Job failures/cancellation take precedence even when no artifacts survived.
+  for (const [state, label] of [['failure', '❌ Failed'], ['cancelled', '⚠️ Cancelled']]) {
+    await update({...f, suites: {}, status: 'complete', results: results({gpu: state})});
+    assert.ok(f.reply.body.includes(`**Status: ${label}**`));
+  }
+});
+
+test('missing, malformed, oversized and symlinked artifacts are unknown', async t => {
+  const a = artifacts(t, {l4: ['ep.a']}, {});
+  const f = fixture();
+  await dispatch(f); f.startRun();
+  const file = path.join(a.root, 'ci-gpu-l4/l4/results.json');
+  for (const mutate of [
+    () => {}, // Artifact missing.
+    () => {a.write('ci-gpu-l4/l4/results.json', {}); fs.writeFileSync(file, 'bad json');},
+    () => fs.writeFileSync(file, JSON.stringify({results: null})),
+    () => fs.truncateSync(file, 16 * 1024 * 1024 + 1),
+    () => {fs.unlinkSync(file); fs.symlinkSync(a.write('outside.json', {results: [record('ep.a')]}), file);},
+    () => {a.write('ci-plan/ci-plan.json', {include: [{target: '../../outside', tests: ['ep.a']}]});},
+    () => {a.write('ci-plan/ci-plan.json', {include: [{target: 'l4', tests: null}]});},
+    () => fs.unlinkSync(path.join(a.root, 'ci-plan/ci-plan.json')),
+  ]) {
+    mutate();
+    await update({...f, suites: readSuiteResults(a.root), status: 'complete', results: results()});
+    assert.match(f.reply.body, /\*\*Status: ❔ Unknown or unclassified\*\*/);
+    assert.doesNotMatch(f.reply.body, /\| GPU \| ✅ Pass/);
+  }
 });

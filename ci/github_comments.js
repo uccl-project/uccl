@@ -1,4 +1,5 @@
 // Loaded only from the trusted workflow commit by jobs with comment permission.
+const {suiteResult} = require('./github_results.js');
 const STATUS_MARKER = '\n<!-- uccl-ci-status -->\n';
 const ALLOWED_PERMISSIONS = new Set(['write', 'maintain', 'admin']);
 const USAGE = 'Usage: /run-ci|/run-benchmark <all|cpu|l4|gb10|gh200> [test IDs/globs]';
@@ -10,12 +11,16 @@ const STATUS_LABELS = {
   'failed to dispatch': '⚠️ Failed to dispatch',
   cancelled: '⚠️ Cancelled',
   skipped: '— Skipped',
+  incomplete: '⚠️ Incomplete',
+  unknown: '❔ Unknown or unclassified',
 };
 const RESULT_LABELS = {
   success: '✅ Pass',
   failure: '❌ Failed',
   cancelled: '⚠️ Cancelled',
   skipped: '— Skipped',
+  incomplete: '⚠️ Incomplete',
+  unknown: '❔ Unknown or unclassified',
 };
 
 function runUrl(context, attempt) {
@@ -23,13 +28,21 @@ function runUrl(context, attempt) {
   return `${context.serverUrl || 'https://github.com'}/${owner}/${repo}/actions/runs/${context.runId}/attempts/${attempt}`;
 }
 
-function bodyWithStatus(header, status, url, results) {
+function jobResult(results, id, suites) {
+  const state = results[id].result;
+  return state === 'success' && ['cpu', 'gpu'].includes(id) ? suiteResult(suites[id]) : state;
+}
+
+function bodyWithStatus(header, status, url, results, suites = {}) {
   const lines = [header, `**Status: ${STATUS_LABELS[status] || '❔ Unknown or unclassified'}**`, '', `[Workflow run and logs](${url})`];
   if (results) {
     lines.push('', '| Job | Result |', '|---|---|');
     for (const [id, label] of [['plan', 'Plan'], ['cpu', 'CPU'], ['gpu', 'GPU'], ['status', 'CI status']]) {
-      lines.push(`| ${label} | ${RESULT_LABELS[results[id].result] || '❔ Unknown or unclassified'} |`);
+      const counts = ['cpu', 'gpu'].includes(id) && results[id].result !== 'skipped' ? suites[id] : null;
+      const detail = counts ? ` (${counts.executed} executed, ${counts.skipped} skipped${counts.missing ? `, ${counts.missing} missing` : ''})` : '';
+      lines.push(`| ${label} | ${RESULT_LABELS[jobResult(results, id, suites)] || '❔ Unknown or unclassified'}${detail} |`);
     }
+    lines.push('', 'CPU/GPU counts are suites per target, not ranks. Missing or unreadable results are unknown; CI status is the workflow gate.');
     lines.push('', 'Per-suite results, skips and timings are in the run summary and artifacts.');
     if (['failure', 'cancelled'].includes(results['comment-start']?.result)) {
       lines.push('', '⚠️ Note: the initial running-status update did not succeed. The CI result above reflects the test jobs, not that notification failure.');
@@ -38,14 +51,18 @@ function bodyWithStatus(header, status, url, results) {
   return lines.join('\n');
 }
 
-function completionStatus(results) {
+function completionStatus(results, suites = {}) {
   const states = ['plan', 'cpu', 'gpu', 'status'].map(id => results[id]?.result);
   if (states.some(state => !['success', 'failure', 'cancelled', 'skipped'].includes(state))) {
     throw new Error('Missing or invalid CI job results');
   }
   if (states.includes('cancelled')) return 'cancelled';
   if (states.includes('failure')) return 'failed';
-  if (results.cpu.result === 'skipped' && results.gpu.result === 'skipped') return 'skipped';
+  const tests = ['cpu', 'gpu'].map(id => jobResult(results, id, suites));
+  if (tests.includes('failure')) return 'failed';
+  if (tests.includes('unknown')) return 'unknown';
+  if (tests.every(state => state === 'skipped')) return 'skipped';
+  if (tests.includes('incomplete') || ['cpu', 'gpu'].some(id => results[id].result === 'success' && suiteResult(suites[id]) === 'skipped')) return 'incomplete';
   return 'completed successfully';
 }
 
@@ -108,7 +125,7 @@ async function dispatch({github, context, core, attempt = process.env.GITHUB_RUN
   await core.summary.write();
 }
 
-async function update({github, context, status, results, attempt = process.env.GITHUB_RUN_ATTEMPT || '1'}) {
+async function update({github, context, status, results, suites = {}, attempt = process.env.GITHUB_RUN_ATTEMPT || '1'}) {
   if (context.eventName !== 'workflow_dispatch') throw new Error('Comment updates require a dispatched run');
   const inputs = context.payload.inputs;
   if (!/^\d+$/.test(inputs.pr || '') || !/^\d+$/.test(inputs.reply_comment_id || '') ||
@@ -128,11 +145,29 @@ async function update({github, context, status, results, attempt = process.env.G
     throw new Error('CI reply does not match this request, PR and source commit');
   }
   if (status !== 'running' && status !== 'complete') throw new Error('Invalid CI comment status');
-  const label = status === 'complete' ? completionStatus(results) : 'running';
-  const body = bodyWithStatus(parts[0] + STATUS_MARKER.trimEnd(), label, runUrl(context, attempt), status === 'complete' ? results : null);
+  const requester = parts[0].match(/^Requested by: @([a-z0-9][a-z0-9-]{0,38}(?:\[bot\])?) \(\[request\]\(/im)?.[1];
+  if (status === 'complete' && !requester) throw new Error('CI reply has no valid requester');
+  const label = status === 'complete' ? completionStatus(results, suites) : 'running';
+  const url = runUrl(context, attempt);
+  const body = bodyWithStatus(parts[0] + STATUS_MARKER.trimEnd(), label, url, status === 'complete' ? results : null, suites);
   await github.rest.issues.updateComment({
     owner, repo, comment_id, body,
   });
+  if (status === 'complete') {
+    // Editing the detailed comment is silent. Notify once per run attempt,
+    // without repeating its table, and tolerate retries after a lost response.
+    const marker = `<!-- uccl-ci-complete-${context.runId}-${attempt} -->`;
+    const comments = await github.paginate(github.rest.issues.listComments, {
+      owner, repo, issue_number: Number(inputs.pr), per_page: 100,
+    });
+    if (!comments.some(comment => comment.user?.login === 'github-actions[bot]' &&
+        comment.user?.type === 'Bot' && comment.body?.startsWith(`${marker}\n`))) {
+      await github.rest.issues.createComment({
+        owner, repo, issue_number: Number(inputs.pr),
+        body: `${marker}\n@${requester} **Status: ${STATUS_LABELS[label]}**\n\n[Workflow run and logs](${url})`,
+      });
+    }
+  }
 }
 
 module.exports = {dispatch, update, completionStatus};
