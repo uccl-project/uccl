@@ -310,7 +310,7 @@ int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
 
   if (conn->is_local) {
     IpcTransferInfo info;
-    if (!get_ipc_info_for_addr(fifo_item.addr, size, info)) {
+    if (!get_ipc_info_for_addr(fifo_item.addr, fifo_item.size, info)) {
       UCCL_LOG(ERROR) << "Failed to get IPC info";
       return -1;
     }
@@ -357,6 +357,7 @@ int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
       deserialize_ipc_info(ipc_bufs[i], info_v[i]);
       if (conn->same_process) {
         info_v[i].direct_addr = fifo_items[i].addr;
+        info_v[i].size = fifo_items[i].size;
       }
     }
     return conn->engine->endpoint->readv_ipc_async(
@@ -412,7 +413,7 @@ int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
     // uses the virtual address directly, while keeping its stream/event
     // optimizations.
     IpcTransferInfo info;
-    if (!get_ipc_info_for_addr(fifo_item.addr, size, info)) {
+    if (!get_ipc_info_for_addr(fifo_item.addr, fifo_item.size, info)) {
       UCCL_LOG(ERROR) << "Failed to get IPC info";
       return -1;
     }
@@ -459,6 +460,7 @@ int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
       deserialize_ipc_info(ipc_bufs[i], info_v[i]);
       if (conn->same_process) {
         info_v[i].direct_addr = fifo_items[i].addr;
+        info_v[i].size = fifo_items[i].size;
       }
     }
     return conn->engine->endpoint->writev_ipc_async(
