@@ -59,7 +59,6 @@ class Proxy {
     bool use_normal_mode =
         false;  // Runtime flag for normal mode (batching optimization)
     bool is_intranode = false;
-    bool free_buffer_with_cuda_free_host = false;
   };
 
   Proxy(Config const& cfg);
@@ -83,7 +82,7 @@ class Proxy {
   void run_dual();
   void pin_thread_to_cpu_wrapper();
   void pin_thread_to_numa_wrapper();
-  void destroy(bool free_gpu_buffer);
+  void destroy();
 
   double avg_rdma_write_us() const;
   double avg_wr_latency_us() const;
