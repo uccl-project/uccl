@@ -1087,11 +1087,11 @@ bool Endpoint::readv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                            std::vector<FifoItem> slot_item_v, size_t num_iovs,
                            uint64_t* transfer_id) {
   *transfer_id = 0;
-  if (!remote_extents_fit(size_v, slot_item_v, size_v.size())) return false;
+  if (!remote_extents_fit(size_v, slot_item_v, num_iovs)) return false;
   // Use move semantics to reduce memory copies
   auto task_ptr =
       create_readv_task(conn_id, std::move(dst_v), std::move(size_v),
-                        std::move(mr_id_v), std::move(slot_item_v));
+                        std::move(mr_id_v), std::move(slot_item_v), num_iovs);
   if (unlikely(task_ptr == nullptr)) {
     return false;
   }
@@ -1422,11 +1422,11 @@ bool Endpoint::writev_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                             std::vector<FifoItem> slot_item_v, size_t num_iovs,
                             uint64_t* transfer_id) {
   *transfer_id = 0;
-  if (!remote_extents_fit(size_v, slot_item_v, size_v.size())) return false;
+  if (!remote_extents_fit(size_v, slot_item_v, num_iovs)) return false;
   // Use move semantics to reduce memory copies
   auto task_ptr =
       create_writev_task(conn_id, std::move(src_v), std::move(size_v),
-                         std::move(mr_id_v), std::move(slot_item_v));
+                         std::move(mr_id_v), std::move(slot_item_v), num_iovs);
   if (unlikely(task_ptr == nullptr)) {
     return false;
   }
@@ -2791,12 +2791,12 @@ std::shared_ptr<UnifiedTask> Endpoint::create_batch_task(uint64_t conn_id,
 
 std::shared_ptr<UnifiedTask> Endpoint::create_writev_task(
     uint64_t conn_id, std::vector<void*>&& data_v, std::vector<size_t>&& size_v,
-    std::vector<uint64_t>&& mr_id_v, std::vector<FifoItem>&& slot_item_v) {
+    std::vector<uint64_t>&& mr_id_v, std::vector<FifoItem>&& slot_item_v,
+    size_t num_iovs) {
   if (data_v.size() != size_v.size() || size_v.size() != mr_id_v.size() ||
-      mr_id_v.size() != slot_item_v.size()) {
+      mr_id_v.size() != slot_item_v.size() || num_iovs > data_v.size()) {
     return nullptr;
   }
-  size_t num_iovs = data_v.size();
   auto data_ptr = std::make_shared<std::vector<void*>>(std::move(data_v));
   auto size_ptr = std::make_shared<std::vector<size_t>>(std::move(size_v));
   auto mr_id_ptr = std::make_shared<std::vector<uint64_t>>(std::move(mr_id_v));
@@ -2813,12 +2813,12 @@ std::shared_ptr<UnifiedTask> Endpoint::create_writev_task(
 
 std::shared_ptr<UnifiedTask> Endpoint::create_readv_task(
     uint64_t conn_id, std::vector<void*>&& data_v, std::vector<size_t>&& size_v,
-    std::vector<uint64_t>&& mr_id_v, std::vector<FifoItem>&& slot_item_v) {
+    std::vector<uint64_t>&& mr_id_v, std::vector<FifoItem>&& slot_item_v,
+    size_t num_iovs) {
   if (data_v.size() != size_v.size() || size_v.size() != mr_id_v.size() ||
-      mr_id_v.size() != slot_item_v.size()) {
+      mr_id_v.size() != slot_item_v.size() || num_iovs > data_v.size()) {
     return nullptr;
   }
-  size_t num_iovs = data_v.size();
   auto data_ptr = std::make_shared<std::vector<void*>>(std::move(data_v));
   auto size_ptr = std::make_shared<std::vector<size_t>>(std::move(size_v));
   auto mr_id_ptr = std::make_shared<std::vector<uint64_t>>(std::move(mr_id_v));

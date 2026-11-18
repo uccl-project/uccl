@@ -495,11 +495,11 @@ class Endpoint {
   std::shared_ptr<UnifiedTask> create_writev_task(
       uint64_t conn_id, std::vector<void*>&& data_v,
       std::vector<size_t>&& size_v, std::vector<uint64_t>&& mr_id_v,
-      std::vector<FifoItem>&& slot_item_v);
+      std::vector<FifoItem>&& slot_item_v, size_t num_iovs);
   std::shared_ptr<UnifiedTask> create_readv_task(
       uint64_t conn_id, std::vector<void*>&& data_v,
       std::vector<size_t>&& size_v, std::vector<uint64_t>&& mr_id_v,
-      std::vector<FifoItem>&& slot_item_v);
+      std::vector<FifoItem>&& slot_item_v, size_t num_iovs);
   bool run_raw_one_sided_pipeline(SendConnection* send_group,
                                   SendType send_type,
                                   std::vector<P2PMhandle*> const& mhandle_v,
