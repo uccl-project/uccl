@@ -39,7 +39,13 @@ function fixture(command = '/run-ci l4 p2p.*', permission = 'write') {
         return {data: comment};
       },
       getComment: async args => {calls.push(['get', args]); return {data: reply};},
-      updateComment: async args => {calls.push(['update', args]); reply.body = args.body; return {data: reply};},
+      updateComment: async args => {
+        calls.push(['update', args]);
+        const comment = comments.find(c => c.id === args.comment_id);
+        assert.ok(comment, 'comment being updated must exist');
+        comment.body = args.body;
+        return {data: comment};
+      },
       listComments: async args => {calls.push(['list', args]); return {data: comments};},
     },
     actions: {createWorkflowDispatch: async args => {calls.push(['dispatch', args]); inputs = args.inputs;}},
@@ -62,6 +68,10 @@ function results(overrides = {}) {
   }).map(([id, result]) => [id, {result}]));
 }
 
+function visible(body) {
+  return body.replace(/<!--[\s\S]*?-->/g, '').trim();
+}
+
 test('both commands authorize against the base repo and dispatch the exact fork SHA', async () => {
   for (const command of ['/run-ci all', '/run-benchmark gh200 ep.bench.*,p2p.*']) {
     const f = fixture(command);
@@ -81,6 +91,9 @@ test('both commands authorize against the base repo and dispatch the exact fork 
     assert.equal(request.inputs.targets, command.startsWith('/run-ci') ? '' : 'gh200');
     assert.equal(request.inputs.tests, command.startsWith('/run-ci') ? '' : 'ep.bench.*,p2p.*');
     assert.match(f.reply.body, /Status: ⏳ Queued/);
+    assert.doesNotMatch(visible(f.reply.body), /Commit:|Requested by:|\| Job \||###/);
+    assert.match(visible(f.reply.body), /^@maintainer \*\*Status: ⏳ Queued/);
+    assert.equal(visible(f.reply.body).split('\n').length, 3);
   }
 });
 
@@ -143,7 +156,7 @@ test('dispatch failure updates the queued comment instead of leaving it queued',
   assert.match(f.reply.body, /Status: ⚠️ Failed to dispatch/);
 });
 
-test('one detailed comment and one short notification per completed attempt', async () => {
+test('short startup acknowledgement followed by one full report per attempt', async () => {
   for (const command of ['/run-ci l4', '/run-benchmark gh200']) {
     const f = fixture(command);
     await dispatch(f);
@@ -152,16 +165,21 @@ test('one detailed comment and one short notification per completed attempt', as
     assert.equal(f.comments.length, 1);
     assert.match(f.reply.body, /Status: 🔄 Running/);
     assert.match(f.reply.body, /actions\/runs\/101\/attempts\/1/);
+    assert.doesNotMatch(visible(f.reply.body), /Commit:|Requested by:|\| Job \||###/);
+    assert.equal(visible(f.reply.body).split('\n').length, 3);
     await update({...f, status: 'complete', results: results()});
     assert.match(f.reply.body, /Status: ✅ Pass/);
-    assert.match(f.reply.body, /Requested by: @maintainer/);
-    assert.ok(f.reply.body.includes(command));
-    assert.ok(f.reply.body.includes(f.pr.head.sha));
-    assert.match(f.reply.body, /\| CPU \| — Skipped \|/);
+    assert.equal(visible(f.reply.body).split('\n').length, 1);
+    assert.doesNotMatch(f.reply.body, /\| Job \|/);
     assert.equal(f.comments.length, 2);
-    assert.match(f.comments[1].body, /@maintainer \*\*Status: ✅ Pass\*\*/);
+    const report = visible(f.comments[1].body);
+    assert.match(report, /Requested by: @maintainer/);
+    assert.ok(report.includes(command));
+    assert.ok(report.includes(f.pr.head.sha));
+    assert.match(report, /\*\*Status: ✅ Pass\*\*/);
+    assert.match(report, /\| CPU \| — Skipped \|/);
+    assert.match(report, /\| GPU \| ✅ Pass \(1 executed, 0 skipped\) \|/);
     assert.match(f.comments[1].body, /actions\/runs\/101\/attempts\/1/);
-    assert.doesNotMatch(f.comments[1].body, /\| Job \||Requested by:|Commit:/);
     await update({...f, status: 'complete', results: results()});
     assert.equal(f.comments.length, 2, 'retry must not repeat the notification');
     await update({...f, status: 'running', attempt: '2'});
@@ -172,7 +190,7 @@ test('one detailed comment and one short notification per completed attempt', as
     assert.match(f.reply.body, /actions\/runs\/101\/attempts\/2/);
     assert.equal(f.comments.length, 3, 'a new attempt gets one new notification');
     assert.match(f.comments[2].body, /actions\/runs\/101\/attempts\/2/);
-    assert.equal(f.comments.filter(comment => comment.body.includes('| Job |')).length, 1);
+    assert.equal(f.comments.filter(comment => comment.body.includes('| Job |')).length, 2);
     assert.equal(f.calls.filter(([kind]) => kind === 'create').length, 3);
     assert.ok(f.calls.filter(([kind]) => kind === 'update').every(([, args]) => args.comment_id === 200));
   }
@@ -209,9 +227,10 @@ test('final status covers setup/test failures, cancellation and skipped executio
     await update({...f, status: 'complete', results: results(changes)});
     assert.ok(f.reply.body.includes(`**Status: ${label}**`));
     assert.equal(f.comments.length, 2);
-    assert.ok(f.comments[1].body.includes(`@maintainer **Status: ${label}**`));
-    assert.doesNotMatch(f.comments[1].body, /\| Job \|/);
-    if (changes['comment-start']) assert.match(f.reply.body, /initial running-status update did not succeed/);
+    assert.ok(f.comments[1].body.includes(`**Status: ${label}**`));
+    assert.match(visible(f.comments[1].body), /Requested by: @maintainer/);
+    assert.match(f.comments[1].body, /\| Job \|/);
+    if (changes['comment-start']) assert.match(f.comments[1].body, /initial running-status update did not succeed/);
   }
 });
 
@@ -246,7 +265,7 @@ test('malformed inputs, PR events and missing results cannot report success', as
   assert.equal(f.calls.filter(([kind]) => kind === 'update').length, 0);
 });
 
-test('completion notification retries recover before and after an accepted POST', async () => {
+test('full report retries recover before and after an accepted POST', async () => {
   for (const accepted of [false, true]) {
     const f = fixture();
     await dispatch(f); f.startRun();
@@ -264,13 +283,41 @@ test('completion notification retries recover before and after an accepted POST'
   }
 });
 
-test('a user cannot suppress the completion notification by copying its marker', async () => {
+test('a user cannot suppress the completion report by copying its marker', async () => {
   const f = fixture();
   await dispatch(f); f.startRun();
   f.comments.push({user: {login: 'github-actions[bot]', type: 'User'}, body: '<!-- uccl-ci-complete-101-1 -->\nspoof'});
   await update({...f, status: 'complete', results: results()});
   assert.equal(f.comments.length, 3);
-  assert.match(f.comments.at(-1).body, /@maintainer \*\*Status: ✅ Pass/);
+  assert.match(visible(f.comments.at(-1).body), /Requested by: @maintainer/);
+  assert.match(f.comments.at(-1).body, /\*\*Status: ✅ Pass/);
+  assert.match(f.comments.at(-1).body, /\| Job \|/);
+});
+
+test('retries refresh an existing full report when previously missing artifacts arrive', async () => {
+  const f = fixture();
+  await dispatch(f); f.startRun();
+  await update({...f, status: 'complete', results: results(), suites: {}});
+  const reportId = f.comments[1].id;
+  assert.match(f.comments[1].body, /Status: ❔ Unknown or unclassified/);
+  await update({...f, status: 'complete', results: results()});
+  assert.equal(f.comments.length, 2);
+  assert.equal(f.comments[1].id, reportId);
+  assert.match(f.comments[1].body, /Status: ✅ Pass/);
+  assert.match(f.comments[1].body, /\| GPU \| ✅ Pass \(1 executed, 0 skipped\) \|/);
+  assert.doesNotMatch(f.reply.body, /\| Job \|/);
+});
+
+test('acknowledgements from the previous helper still validate and complete', async () => {
+  const f = fixture();
+  await dispatch(f); f.startRun();
+  f.reply.body = f.reply.body.replace('\n<!--\n', '\n').replace('\n-->\n', '\n');
+  await update({...f, status: 'running'});
+  await update({...f, status: 'complete', results: results()});
+  assert.match(visible(f.reply.body), /^@maintainer \*\*Status: ✅ Pass/);
+  assert.doesNotMatch(visible(f.reply.body), /Commit:|\| Job \|/);
+  assert.match(visible(f.comments[1].body), /Commit:/);
+  assert.match(f.comments[1].body, /\| Job \|/);
 });
 
 function artifacts(t, plan, records) {
@@ -302,9 +349,9 @@ test('11 unreachable GB10 rank results become seven skipped suites, not a pass',
   await dispatch(f); f.startRun();
   await update({...f, status: 'complete', results: results()});
   assert.match(f.reply.body, /\*\*Status: — Skipped\*\*/);
-  assert.match(f.reply.body, /\| GPU \| — Skipped \(0 executed, 7 skipped\) \|/);
-  assert.match(f.comments[1].body, /@maintainer \*\*Status: — Skipped\*\*/);
-  assert.doesNotMatch(f.reply.body, /private-host|SSH unavailable/);
+  assert.match(f.comments[1].body, /\| GPU \| — Skipped \(0 executed, 7 skipped\) \|/);
+  assert.match(f.comments[1].body, /\*\*Status: — Skipped\*\*/);
+  assert.doesNotMatch(f.comments[1].body, /private-host|SSH unavailable/);
 });
 
 test('CPU success cannot hide skipped GPU work, and GPU targets aggregate separately', async t => {
@@ -320,8 +367,8 @@ test('CPU success cannot hide skipped GPU work, and GPU targets aggregate separa
     f.suites = readSuiteResults(a.root);
     await update({...f, status: 'complete', results: results({cpu: 'success'})});
     assert.match(f.reply.body, /\*\*Status: ⚠️ Incomplete\*\*/);
-    assert.match(f.reply.body, /\| CPU \| ✅ Pass \(1 executed, 0 skipped\) \|/);
-    assert.ok(f.reply.body.includes(gpuExecutes ? '⚠️ Incomplete (1 executed, 1 skipped)' : '— Skipped (0 executed, 2 skipped)'));
+    assert.match(f.comments[1].body, /\| CPU \| ✅ Pass \(1 executed, 0 skipped\) \|/);
+    assert.ok(f.comments[1].body.includes(gpuExecutes ? '⚠️ Incomplete (1 executed, 1 skipped)' : '— Skipped (0 executed, 2 skipped)'));
   }
 });
 
@@ -342,11 +389,13 @@ test('artifact failures, missing results and partial skips do not report a pass'
     f.suites = readSuiteResults(a.root);
     await update({...f, status: 'complete', results: results()});
     assert.ok(f.reply.body.includes(`**Status: ${label}**`));
+    assert.ok(f.comments[1].body.includes(`**Status: ${label}**`));
   }
   // Job failures/cancellation take precedence even when no artifacts survived.
   for (const [state, label] of [['failure', '❌ Failed'], ['cancelled', '⚠️ Cancelled']]) {
     await update({...f, suites: {}, status: 'complete', results: results({gpu: state})});
     assert.ok(f.reply.body.includes(`**Status: ${label}**`));
+    assert.ok(f.comments[1].body.includes(`**Status: ${label}**`));
   }
 });
 
@@ -368,6 +417,7 @@ test('missing, malformed, oversized and symlinked artifacts are unknown', async 
     mutate();
     await update({...f, suites: readSuiteResults(a.root), status: 'complete', results: results()});
     assert.match(f.reply.body, /\*\*Status: ❔ Unknown or unclassified\*\*/);
-    assert.doesNotMatch(f.reply.body, /\| GPU \| ✅ Pass/);
+    assert.match(f.comments[1].body, /\*\*Status: ❔ Unknown or unclassified\*\*/);
+    assert.doesNotMatch(f.comments[1].body, /\| GPU \| ✅ Pass/);
   }
 });

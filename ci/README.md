@@ -121,13 +121,14 @@ Supported targets: `all`, `cpu`, `l4`, `gb10`, `gh200`.
 GPU jobs queue per target (up to 100 waiting runs), so newer requests do not
 cancel waiting runs. `CI status` reports job outcomes; cancelled work is incomplete.
 
-Each valid, authorized command creates one detailed status comment, updated from
-queued to running and then completed, failed, cancelled or skipped, with a run/log
-link. Completion also posts a short requester mention, status and run link so the
-requester is notified, without repeating the results table. Retries deduplicate
-that notification; a rerun updates the original table and notifies once for its
-new attempt. An initial status-update failure is noted separately and does not
-turn passing CI jobs into a failed test result.
+Each valid, authorized command creates a short acknowledgement with the requester
+mention, queued/running status and run/log link. Completion updates that short
+status and posts a separate full report with the command, source commit, requester
+mention, result table and run link. The full report notifies the requester and is
+the only comment containing results for that attempt. Retries update the existing
+report without creating another copy; a rerun gets its own completion report.
+An initial status-update failure is noted separately and does not turn passing
+CI jobs into a failed test result.
 Status labels use ⏳ Queued, 🔄 Running, ✅ Pass, ❌ Failed, ⚠️ Cancelled or
 failed to dispatch, and — Skipped. CPU/GPU rows also show executed and skipped
 suite counts, aggregated across targets without counting ranks twice. Successful

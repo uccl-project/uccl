@@ -33,6 +33,17 @@ function jobResult(results, id, suites) {
   return state === 'success' && ['cpu', 'gpu'].includes(id) ? suiteResult(suites[id]) : state;
 }
 
+function briefBodyWithStatus(header, requester, status, url) {
+  const [marker, ...details] = header.split('\n');
+  // Keep request validation metadata out of the short visible acknowledgement.
+  const lines = [marker, '<!--', ...details, '-->', STATUS_MARKER.trim(),
+    `@${requester} **Status: ${STATUS_LABELS[status]}** · [Workflow run and logs](${url})`];
+  if (status === 'queued' || status === 'running') {
+    lines.push('', 'I’ll post the full results when the run finishes.');
+  }
+  return lines.join('\n');
+}
+
 function bodyWithStatus(header, status, url, results, suites = {}) {
   const lines = [header, `**Status: ${STATUS_LABELS[status] || '❔ Unknown or unclassified'}**`, '', `[Workflow run and logs](${url})`];
   if (results) {
@@ -93,12 +104,11 @@ async function dispatch({github, context, core, attempt = process.env.GITHUB_RUN
     '',
     `Commit: \`${pr.head.sha}\` from \`${pr.head.repo.full_name}\``,
     `Requested by: @${requester} ([request](${context.payload.comment.html_url}))`,
-    STATUS_MARKER.trim(),
   ].join('\n');
   const dispatcherUrl = runUrl(context, attempt);
   const {data: reply} = await github.rest.issues.createComment({
     owner, repo, issue_number: pr.number,
-    body: bodyWithStatus(header, 'queued', dispatcherUrl),
+    body: briefBodyWithStatus(header, requester, 'queued', dispatcherUrl),
   });
   try {
     await github.rest.actions.createWorkflowDispatch({
@@ -114,7 +124,7 @@ async function dispatch({github, context, core, attempt = process.env.GITHUB_RUN
     try {
       await github.rest.issues.updateComment({
         owner, repo, comment_id: reply.id,
-        body: bodyWithStatus(header, 'failed to dispatch', dispatcherUrl),
+        body: briefBodyWithStatus(header, requester, 'failed to dispatch', dispatcherUrl),
       });
     } catch (commentError) {
       core.warning(`Unable to mark the CI comment as failed: ${commentError.message}`);
@@ -145,27 +155,36 @@ async function update({github, context, status, results, suites = {}, attempt = 
     throw new Error('CI reply does not match this request, PR and source commit');
   }
   if (status !== 'running' && status !== 'complete') throw new Error('Invalid CI comment status');
-  const requester = parts[0].match(/^Requested by: @([a-z0-9][a-z0-9-]{0,38}(?:\[bot\])?) \(\[request\]\(/im)?.[1];
-  if (status === 'complete' && !requester) throw new Error('CI reply has no valid requester');
+  // Also accept acknowledgements created before request details were hidden.
+  const headerLines = parts[0].split('\n');
+  if (headerLines[1] === '<!--' && headerLines.at(-1) === '-->') {
+    headerLines.splice(1, 1);
+    headerLines.pop();
+  }
+  const header = headerLines.join('\n');
+  const requester = header.match(/^Requested by: @([a-z0-9][a-z0-9-]{0,38}(?:\[bot\])?) \(\[request\]\(/im)?.[1];
+  if (!requester) throw new Error('CI reply has no valid requester');
   const label = status === 'complete' ? completionStatus(results, suites) : 'running';
   const url = runUrl(context, attempt);
-  const body = bodyWithStatus(parts[0] + STATUS_MARKER.trimEnd(), label, url, status === 'complete' ? results : null, suites);
   await github.rest.issues.updateComment({
-    owner, repo, comment_id, body,
+    owner, repo, comment_id, body: briefBodyWithStatus(header, requester, label, url),
   });
   if (status === 'complete') {
-    // Editing the detailed comment is silent. Notify once per run attempt,
-    // without repeating its table, and tolerate retries after a lost response.
+    // The new full report notifies the requester. Retries update that report
+    // without posting another copy, including after an accepted but lost POST.
     const marker = `<!-- uccl-ci-complete-${context.runId}-${attempt} -->`;
+    const body = `${marker}\n${bodyWithStatus(header + STATUS_MARKER.trimEnd(), label, url, results, suites)}`;
     const comments = await github.paginate(github.rest.issues.listComments, {
       owner, repo, issue_number: Number(inputs.pr), per_page: 100,
     });
-    if (!comments.some(comment => comment.user?.login === 'github-actions[bot]' &&
-        comment.user?.type === 'Bot' && comment.body?.startsWith(`${marker}\n`))) {
+    const previous = comments.find(comment => comment.user?.login === 'github-actions[bot]' &&
+      comment.user?.type === 'Bot' && comment.body?.startsWith(`${marker}\n`));
+    if (!previous) {
       await github.rest.issues.createComment({
-        owner, repo, issue_number: Number(inputs.pr),
-        body: `${marker}\n@${requester} **Status: ${STATUS_LABELS[label]}**\n\n[Workflow run and logs](${url})`,
+        owner, repo, issue_number: Number(inputs.pr), body,
       });
+    } else if (previous.body !== body) {
+      await github.rest.issues.updateComment({owner, repo, comment_id: previous.id, body});
     }
   }
 }
