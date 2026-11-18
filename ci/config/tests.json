@@ -257,6 +257,28 @@
       "command": "python3 -m pytest -q p2p/tests/test_python_signals.py --junitxml=\"$CI_TEST_JUNIT\""
     },
     {
+      "id": "p2p.cpu.ipc_shutdown",
+      "sources": [
+        "p2p/tests/scenario_ipc_shutdown.py"
+      ],
+      "tier": "cpu",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "p2p/**",
+        "include/util/jring*"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "python3 p2p/tests/scenario_ipc_shutdown.py"
+    },
+    {
       "id": "p2p.cpu.rdma_request_lifetime",
       "sources": [
         "p2p/tests/scenario_rdma_request_lifetime.py"

@@ -2658,17 +2658,19 @@ void Endpoint::ipc_poller_thread_func() {
   int cur_device = -1;
   ipc_proxy_adaptive_sleeper_.update_timer();
 
-  while (!stop_.load(std::memory_order_acquire) || !active_ops.empty()) {
+  while (true) {
     // only try to sleep if there are no more inflight ops
     if (!active_ops.empty()) {
       ipc_proxy_adaptive_sleeper_.update_timer();
     }
     ipc_proxy_adaptive_sleeper_.maybe_sleep();
 
-    // Drain newly submitted ops into the local active list.
+    // Observe shutdown before draining so the final pass sees accepted work.
+    bool const stopping = stop_.load(std::memory_order_acquire);
     while (jring_sc_dequeue_bulk(ipc_inflight_ring_, buf, 1, nullptr) == 1) {
       active_ops.push_back(*reinterpret_cast<IpcInflightOp**>(buf));
     }
+    if (stopping && active_ops.empty()) break;
 
     for (auto it = active_ops.begin(); it != active_ops.end();) {
       IpcInflightOp* op = *it;
