@@ -211,6 +211,51 @@ jobs:
         if: always()
         run: rm -f ~/.ssh/uccl-ci ~/.ssh/config
 
+  report:
+    name: CI report
+    needs: [plan, cpu, gpu]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: ci
+      # Artifacts can come from PR code: ci/run_report.py treats them as data only.
+      - name: Download CI results
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ci-*
+          path: ci-artifacts
+      # The comparison only classifies failures, so green runs skip it.
+      - name: Download recent main results for comparison
+        if: needs.cpu.result == 'failure' || needs.gpu.result == 'failure'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --branch main --event push \
+            --status completed --limit 5 --json databaseId --jq '.[].databaseId' |
+          while read -r id; do
+            gh run download "$id" -R "$GITHUB_REPOSITORY" --pattern 'ci-*' --dir "ci-baseline/$id" || true
+          done
+      - name: Render cross-target report
+        continue-on-error: true
+        env:
+          CI_JOB_RESULTS: ${{ toJSON(needs) }}
+          SHA: ${{ inputs.sha || github.event.pull_request.head.sha || github.sha }}
+        run: |
+          repo_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          python3 ci/run_report.py ci-artifacts --baseline ci-baseline --repo-url "$repo_url" \
+            --run-url "$repo_url/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" \
+            --sha "$SHA" --jobs-env CI_JOB_RESULTS --out ci-report.md
+          cat ci-report.md >> "$GITHUB_STEP_SUMMARY"
+
   status:
     name: CI status
     needs: [plan, cpu, gpu]
