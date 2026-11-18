@@ -257,6 +257,27 @@
       "command": "python3 -m pytest -q p2p/tests/test_python_signals.py --junitxml=\"$CI_TEST_JUNIT\""
     },
     {
+      "id": "p2p.cpu.rdma_request_lifetime",
+      "sources": [
+        "p2p/tests/scenario_rdma_request_lifetime.py"
+      ],
+      "tier": "cpu",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "python3 p2p/tests/scenario_rdma_request_lifetime.py"
+    },
+    {
       "id": "p2p.cpu.transport_factory",
       "sources": [
         "p2p/tests/test_transport_factory.py"
@@ -3499,6 +3520,36 @@
       "env": {
         "UCCL_P2P_COMPRESS_STRATEGY": "split_only",
         "UCCL_P2P_COMPRESS_BUFFER_BYTES": "16777216"
+      }
+    },
+    {
+      "id": "p2p.compressed_registered_range",
+      "sources": [
+        "p2p/tests/scenario_compressed_registered_range.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gh200"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cuda",
+        "gpu-rdma"
+      ],
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 300,
+      "command": "for api in write write_async writev writev_async; do bash ci/torchrun.sh p2p/tests/scenario_compressed_registered_range.py --api=\"$api\" || exit $?; done",
+      "setup": [
+        "compression"
+      ],
+      "env": {
+        "UCCL_P2P_COMPRESS_STRATEGY": "split_only",
+        "UCCL_P2P_COMPRESS_BUFFER_BYTES": "134217728"
       }
     },
     {
