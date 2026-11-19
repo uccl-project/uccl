@@ -1,0 +1,97 @@
+{
+  "threshold": 0.05,
+  "passed": false,
+  "rows": 126,
+  "failures": [
+    {
+      "operation": "all_gather",
+      "bytes": 65536,
+      "layout": "out-of-place",
+      "ratio": 1.0666666666666667
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 65536,
+      "layout": "in-place",
+      "ratio": 1.0785276073619632
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 131072,
+      "layout": "out-of-place",
+      "ratio": 1.0800696257615319
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 131072,
+      "layout": "in-place",
+      "ratio": 1.0771478667445937
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 4194304,
+      "layout": "out-of-place",
+      "ratio": 1.081173300246215
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 4194304,
+      "layout": "in-place",
+      "ratio": 1.0906484427163112
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 8388608,
+      "layout": "out-of-place",
+      "ratio": 1.0691687807789882
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 8388608,
+      "layout": "in-place",
+      "ratio": 1.0729744787537232
+    },
+    {
+      "operation": "all_reduce",
+      "bytes": 65536,
+      "layout": "out-of-place",
+      "ratio": 1.0553715097018457
+    },
+    {
+      "operation": "all_reduce",
+      "bytes": 65536,
+      "layout": "in-place",
+      "ratio": 1.0534195712061325
+    },
+    {
+      "operation": "all_reduce",
+      "bytes": 2097152,
+      "layout": "in-place",
+      "ratio": 1.069000391491583
+    },
+    {
+      "operation": "all_reduce",
+      "bytes": 4194304,
+      "layout": "out-of-place",
+      "ratio": 1.1209325660926013
+    },
+    {
+      "operation": "all_reduce",
+      "bytes": 4194304,
+      "layout": "in-place",
+      "ratio": 1.1071541064225403
+    },
+    {
+      "operation": "all_reduce",
+      "bytes": 8388608,
+      "layout": "out-of-place",
+      "ratio": 1.1154343001623035
+    },
+    {
+      "operation": "all_reduce",
+      "bytes": 8388608,
+      "layout": "in-place",
+      "ratio": 1.0951280813047393
+    }
+  ]
+}

@@ -1,0 +1,51 @@
+Traceback (most recent call last):
+  File "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/uccl_reference_protocol/abi/mscclpp_profile.py", line 144, in <module>
+    main()
+  File "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/uccl_reference_protocol/abi/mscclpp_profile.py", line 140, in main
+    os.execvpe(command[0], command, env)
+  File "<frozen os>", line 589, in execvpe
+  File "<frozen os>", line 603, in _execvpe
+PermissionError: [Errno 13] Permission denied: '/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/uccl_reference_protocol/abi/reference_timing_check'
+Traceback (most recent call last):
+  File "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/uccl_reference_protocol/abi/mscclpp_profile.py", line 144, in <module>
+    main()
+  File "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/uccl_reference_protocol/abi/mscclpp_profile.py", line 140, in main
+    os.execvpe(command[0], command, env)
+  File "<frozen os>", line 589, in execvpe
+  File "<frozen os>", line 603, in _execvpe
+PermissionError: [Errno 13] Permission denied: '/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/uccl_reference_protocol/abi/reference_timing_check'
+--------------------------------------------------------------------------
+Primary job  terminated normally, but 1 process returned
+a non-zero exit code. Per user-direction, the job has been aborted.
+--------------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/uccl_reference_protocol/abi/mscclpp_profile.py", line 144, in <module>
+    main()
+  File "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/uccl_reference_protocol/abi/mscclpp_profile.py", line 140, in main
+    os.execvpe(command[0], command, env)
+  File "<frozen os>", line 589, in execvpe
+  File "<frozen os>", line 603, in _execvpe
+PermissionError: [Errno 13] Permission denied: '/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/uccl_reference_protocol/abi/reference_timing_check'
+Traceback (most recent call last):
+  File "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/uccl_reference_protocol/abi/mscclpp_profile.py", line 144, in <module>
+    main()
+  File "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/uccl_reference_protocol/abi/mscclpp_profile.py", line 140, in main
+    os.execvpe(command[0], command, env)
+  File "<frozen os>", line 589, in execvpe
+  File "<frozen os>", line 603, in _execvpe
+PermissionError: [Errno 13] Permission denied: '/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/uccl_reference_protocol/abi/reference_timing_check'
+Traceback (most recent call last):
+  File "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/uccl_reference_protocol/abi/mscclpp_profile.py", line 144, in <module>
+    main()
+  File "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/uccl_reference_protocol/abi/mscclpp_profile.py", line 140, in main
+    os.execvpe(command[0], command, env)
+  File "<frozen os>", line 589, in execvpe
+  File "<frozen os>", line 603, in _execvpe
+PermissionError: [Errno 13] Permission denied: '/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/uccl_reference_protocol/abi/reference_timing_check'
+--------------------------------------------------------------------------
+mpirun detected that one or more processes exited with non-zero status, thus causing
+the job to be terminated. The first process to do so was:
+
+  Process name: [[20599,1],5]
+  Exit code:    1
+--------------------------------------------------------------------------

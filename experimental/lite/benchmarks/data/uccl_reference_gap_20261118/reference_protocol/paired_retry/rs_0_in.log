@@ -1,0 +1,1354 @@
+UCCL Lite strict: rank=1 native_nccl_loaded=0
+UCCL Lite strict: rank=2 native_nccl_loaded=0
+UCCL Lite strict: rank=3 native_nccl_loaded=0
+UCCL Lite strict: rank=0 native_nccl_loaded=0
+# protocol=UCCL per-call preparation; completion includes internal retirement; fixed pointers; reference AG process layout differs
+# dtype=FP32; warmup=10 iterations=10 max_allocation=1073741824
+UCCL Lite strict: rank=4 native_nccl_loaded=0
+UCCL Lite strict: rank=5 native_nccl_loaded=0
+UCCL Lite strict: rank=6 native_nccl_loaded=0
+UCCL Lite strict: rank=7 native_nccl_loaded=0
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+sample,rs,in,1024,0,36.100000,0.000e+00
+sample,rs,in,1024,1,37.845000,0.000e+00
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+sample,rs,in,1024,2,33.702000,0.000e+00
+sample,rs,in,1024,3,36.110000,0.000e+00
+sample,rs,in,1024,4,31.582000,0.000e+00
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+sample,rs,in,1024,5,34.147000,0.000e+00
+sample,rs,in,1024,6,36.362000,0.000e+00
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+sample,rs,in,1024,7,34.255000,0.000e+00
+sample,rs,in,1024,8,30.904000,0.000e+00
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+sample,rs,in,1024,9,31.353000,0.000e+00
+result,rs,in,1024,34.236000
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+sample,rs,in,2048,0,32.665000,0.000e+00
+sample,rs,in,2048,1,25.344000,0.000e+00
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+sample,rs,in,2048,2,33.013000,0.000e+00
+sample,rs,in,2048,3,33.085000,0.000e+00
+sample,rs,in,2048,4,37.935000,0.000e+00
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+sample,rs,in,2048,5,33.176000,0.000e+00
+sample,rs,in,2048,6,33.049000,0.000e+00
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+sample,rs,in,2048,7,33.167000,0.000e+00
+sample,rs,in,2048,8,32.097000,0.000e+00
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+sample,rs,in,2048,9,31.157000,0.000e+00
+result,rs,in,2048,32.468800
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+sample,rs,in,4096,0,32.054000,0.000e+00
+sample,rs,in,4096,1,32.593000,0.000e+00
+sample,rs,in,4096,2,32.408000,0.000e+00
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+sample,rs,in,4096,3,34.791000,0.000e+00
+sample,rs,in,4096,4,33.307000,0.000e+00
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+sample,rs,in,4096,5,31.511000,0.000e+00
+sample,rs,in,4096,6,33.477000,0.000e+00
+sample,rs,in,4096,7,32.677000,0.000e+00
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+sample,rs,in,4096,8,34.882000,0.000e+00
+sample,rs,in,4096,9,32.906000,0.000e+00
+result,rs,in,4096,33.060600
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+sample,rs,in,8192,0,35.866000,0.000e+00
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+sample,rs,in,8192,1,33.346000,0.000e+00
+sample,rs,in,8192,2,37.823000,0.000e+00
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+sample,rs,in,8192,3,39.069000,0.000e+00
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+sample,rs,in,8192,4,32.092000,0.000e+00
+sample,rs,in,8192,5,33.149000,0.000e+00
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+sample,rs,in,8192,6,32.862000,0.000e+00
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+sample,rs,in,8192,7,33.880000,0.000e+00
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+sample,rs,in,8192,8,32.338000,0.000e+00
+sample,rs,in,8192,9,31.915000,0.000e+00
+result,rs,in,8192,34.234000
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+sample,rs,in,16384,0,35.538000,0.000e+00
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+sample,rs,in,16384,1,33.946000,0.000e+00
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+sample,rs,in,16384,2,36.360000,0.000e+00
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+sample,rs,in,16384,3,34.724000,0.000e+00
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+sample,rs,in,16384,4,34.987000,0.000e+00
+sample,rs,in,16384,5,26.517000,0.000e+00
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+sample,rs,in,16384,6,35.655000,0.000e+00
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+sample,rs,in,16384,7,34.874000,0.000e+00
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+sample,rs,in,16384,8,34.530000,0.000e+00
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+sample,rs,in,16384,9,34.667000,0.000e+00
+result,rs,in,16384,34.179800
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+sample,rs,in,32768,0,36.834000,0.000e+00
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+sample,rs,in,32768,1,37.268000,0.000e+00
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+sample,rs,in,32768,2,36.741000,0.000e+00
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+sample,rs,in,32768,3,39.354000,0.000e+00
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+sample,rs,in,32768,4,36.791000,0.000e+00
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+sample,rs,in,32768,5,38.392000,0.000e+00
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+sample,rs,in,32768,6,37.338000,0.000e+00
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+sample,rs,in,32768,7,34.848000,0.000e+00
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+sample,rs,in,32768,8,37.164000,0.000e+00
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=1 reason=synchronize
+UCCL Lite IB drain: rank=0 reason=synchronize
+UCCL Lite IB drain: rank=2 reason=synchronize
+UCCL Lite IB drain: rank=3 reason=synchronize
+sample,rs,in,32768,9,39.975000,0.000e+00
+result,rs,in,32768,37.470500
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+sample,rs,in,65536,0,31.247000,0.000e+00
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+sample,rs,in,65536,1,31.431000,0.000e+00
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+sample,rs,in,65536,2,31.534000,0.000e+00
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+sample,rs,in,65536,3,31.062000,0.000e+00
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+sample,rs,in,65536,4,30.963000,0.000e+00
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+sample,rs,in,65536,5,31.429000,0.000e+00
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+sample,rs,in,65536,6,31.831000,0.000e+00
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+sample,rs,in,65536,7,30.930000,0.000e+00
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+sample,rs,in,65536,8,31.151000,0.000e+00
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+sample,rs,in,65536,9,31.586000,0.000e+00
+result,rs,in,65536,31.316400
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+UCCL Lite IB drain: rank=5 reason=synchronize
+UCCL Lite IB drain: rank=4 reason=synchronize
+UCCL Lite IB drain: rank=6 reason=synchronize
+UCCL Lite IB drain: rank=7 reason=synchronize
+sample,rs,in,131072,0,34.882000,0.000e+00
+sample,rs,in,131072,1,37.679000,0.000e+00
+sample,rs,in,131072,2,36.049000,0.000e+00
+sample,rs,in,131072,3,34.910000,0.000e+00
+sample,rs,in,131072,4,36.372000,0.000e+00
+sample,rs,in,131072,5,36.662000,0.000e+00
+sample,rs,in,131072,6,36.373000,0.000e+00
+sample,rs,in,131072,7,36.937000,0.000e+00
+sample,rs,in,131072,8,35.579000,0.000e+00
+sample,rs,in,131072,9,36.968000,0.000e+00
+result,rs,in,131072,36.241100
+sample,rs,in,262144,0,46.351000,0.000e+00
+sample,rs,in,262144,1,46.743000,0.000e+00
+sample,rs,in,262144,2,45.306000,0.000e+00
+sample,rs,in,262144,3,49.484000,0.000e+00
+sample,rs,in,262144,4,49.653000,0.000e+00
+sample,rs,in,262144,5,50.306000,0.000e+00
+sample,rs,in,262144,6,48.156000,0.000e+00
+sample,rs,in,262144,7,50.319000,0.000e+00
+sample,rs,in,262144,8,45.436000,0.000e+00
+sample,rs,in,262144,9,54.844000,0.000e+00
+result,rs,in,262144,48.659800
+sample,rs,in,524288,0,80.171000,0.000e+00
+sample,rs,in,524288,1,87.369000,0.000e+00
+sample,rs,in,524288,2,80.247000,0.000e+00
+sample,rs,in,524288,3,80.325000,0.000e+00
+sample,rs,in,524288,4,83.041000,0.000e+00
+sample,rs,in,524288,5,79.393000,0.000e+00
+sample,rs,in,524288,6,81.297000,0.000e+00
+sample,rs,in,524288,7,78.147000,0.000e+00
+sample,rs,in,524288,8,83.851000,0.000e+00
+sample,rs,in,524288,9,80.444000,0.000e+00
+result,rs,in,524288,81.428500
+sample,rs,in,1048576,0,87.663000,0.000e+00
+sample,rs,in,1048576,1,92.888000,0.000e+00
+sample,rs,in,1048576,2,87.701000,0.000e+00
+sample,rs,in,1048576,3,86.388000,0.000e+00
+sample,rs,in,1048576,4,93.009000,0.000e+00
+sample,rs,in,1048576,5,93.679000,0.000e+00
+sample,rs,in,1048576,6,88.162000,0.000e+00
+sample,rs,in,1048576,7,87.719000,0.000e+00
+sample,rs,in,1048576,8,86.433000,0.000e+00
+sample,rs,in,1048576,9,87.690000,0.000e+00
+result,rs,in,1048576,89.133200
+sample,rs,in,2097152,0,144.987000,0.000e+00
+sample,rs,in,2097152,1,144.468000,0.000e+00
+sample,rs,in,2097152,2,145.694000,0.000e+00
+sample,rs,in,2097152,3,146.395000,0.000e+00
+sample,rs,in,2097152,4,145.168000,0.000e+00
+sample,rs,in,2097152,5,144.580000,0.000e+00
+sample,rs,in,2097152,6,145.184000,0.000e+00
+sample,rs,in,2097152,7,145.450000,0.000e+00
+sample,rs,in,2097152,8,144.497000,0.000e+00
+sample,rs,in,2097152,9,146.293000,0.000e+00
+result,rs,in,2097152,145.271600
+sample,rs,in,4194304,0,261.302000,0.000e+00
+sample,rs,in,4194304,1,266.425000,0.000e+00
+sample,rs,in,4194304,2,268.773000,0.000e+00
+sample,rs,in,4194304,3,262.719000,0.000e+00
+sample,rs,in,4194304,4,262.347000,0.000e+00
+sample,rs,in,4194304,5,264.175000,0.000e+00
+sample,rs,in,4194304,6,264.894000,0.000e+00
+sample,rs,in,4194304,7,263.435000,0.000e+00
+sample,rs,in,4194304,8,263.334000,0.000e+00
+sample,rs,in,4194304,9,261.951000,0.000e+00
+result,rs,in,4194304,263.935500
+sample,rs,in,8388608,0,500.616000,0.000e+00
+sample,rs,in,8388608,1,505.501000,0.000e+00
+sample,rs,in,8388608,2,499.166000,0.000e+00
+sample,rs,in,8388608,3,502.262000,0.000e+00
+sample,rs,in,8388608,4,500.401000,0.000e+00
+sample,rs,in,8388608,5,500.222000,0.000e+00
+sample,rs,in,8388608,6,499.287000,0.000e+00
+sample,rs,in,8388608,7,500.585000,0.000e+00
+sample,rs,in,8388608,8,501.462000,0.000e+00
+sample,rs,in,8388608,9,499.838000,0.000e+00
+result,rs,in,8388608,500.934000
+sample,rs,in,16777216,0,928.342000,0.000e+00
+sample,rs,in,16777216,1,937.151000,0.000e+00
+sample,rs,in,16777216,2,906.513000,0.000e+00
+sample,rs,in,16777216,3,928.627000,0.000e+00
+sample,rs,in,16777216,4,914.906000,0.000e+00
+sample,rs,in,16777216,5,917.003000,0.000e+00
+sample,rs,in,16777216,6,919.761000,0.000e+00
+sample,rs,in,16777216,7,926.382000,0.000e+00
+sample,rs,in,16777216,8,928.260000,0.000e+00
+sample,rs,in,16777216,9,924.427000,0.000e+00
+result,rs,in,16777216,923.137200
+sample,rs,in,33554432,0,1847.789000,0.000e+00
+sample,rs,in,33554432,1,1821.656000,0.000e+00
+sample,rs,in,33554432,2,1838.440000,0.000e+00
+sample,rs,in,33554432,3,1819.503000,0.000e+00
+sample,rs,in,33554432,4,1841.211000,0.000e+00
+sample,rs,in,33554432,5,1817.818000,0.000e+00
+sample,rs,in,33554432,6,2216.609000,0.000e+00
+sample,rs,in,33554432,7,1839.472000,0.000e+00
+sample,rs,in,33554432,8,1840.306000,0.000e+00
+sample,rs,in,33554432,9,1840.256000,0.000e+00
+result,rs,in,33554432,1872.306000
+sample,rs,in,67108864,0,3476.112000,0.000e+00
+sample,rs,in,67108864,1,3511.834000,0.000e+00
+sample,rs,in,67108864,2,3451.090000,0.000e+00
+sample,rs,in,67108864,3,3456.866000,0.000e+00
+sample,rs,in,67108864,4,3519.497000,0.000e+00
+sample,rs,in,67108864,5,3445.779000,0.000e+00
+sample,rs,in,67108864,6,3491.968000,0.000e+00
+sample,rs,in,67108864,7,3572.554000,0.000e+00
+sample,rs,in,67108864,8,3494.700000,0.000e+00
+sample,rs,in,67108864,9,3492.326000,0.000e+00
+result,rs,in,67108864,3491.272600
+sample,rs,in,134217728,0,6716.390000,0.000e+00
+sample,rs,in,134217728,1,6708.396000,0.000e+00
+sample,rs,in,134217728,2,6727.931000,0.000e+00
+sample,rs,in,134217728,3,6691.200000,0.000e+00
+sample,rs,in,134217728,4,6795.412000,0.000e+00
+sample,rs,in,134217728,5,6741.871000,0.000e+00
+sample,rs,in,134217728,6,6816.654000,0.000e+00
+sample,rs,in,134217728,7,6717.988000,0.000e+00
+sample,rs,in,134217728,8,6853.820000,0.000e+00
+sample,rs,in,134217728,9,6737.443000,0.000e+00
+result,rs,in,134217728,6750.710500
+sample,rs,in,268435456,0,13587.795000,0.000e+00
+sample,rs,in,268435456,1,13432.886000,0.000e+00
+sample,rs,in,268435456,2,13343.841000,0.000e+00
+sample,rs,in,268435456,3,13363.615000,0.000e+00
+sample,rs,in,268435456,4,13385.163000,0.000e+00
+sample,rs,in,268435456,5,13527.903000,0.000e+00
+sample,rs,in,268435456,6,13374.460000,0.000e+00
+sample,rs,in,268435456,7,13418.418000,0.000e+00
+sample,rs,in,268435456,8,13344.242000,0.000e+00
+sample,rs,in,268435456,9,13472.478000,0.000e+00
+result,rs,in,268435456,13425.080100
+sample,rs,in,536870912,0,26670.996000,0.000e+00
+sample,rs,in,536870912,1,26668.269000,0.000e+00
+sample,rs,in,536870912,2,26768.357000,0.000e+00
+sample,rs,in,536870912,3,26716.307000,0.000e+00
+sample,rs,in,536870912,4,26899.220000,0.000e+00
+sample,rs,in,536870912,5,26690.640000,0.000e+00
+sample,rs,in,536870912,6,26726.868000,0.000e+00
+sample,rs,in,536870912,7,26767.684000,0.000e+00
+sample,rs,in,536870912,8,26848.991000,0.000e+00
+sample,rs,in,536870912,9,26769.221000,0.000e+00
+result,rs,in,536870912,26752.655300
+sample,rs,in,1073741824,0,53498.188000,0.000e+00
+sample,rs,in,1073741824,1,53501.514000,0.000e+00
+sample,rs,in,1073741824,2,53509.150000,0.000e+00
+sample,rs,in,1073741824,3,53768.446000,0.000e+00
+sample,rs,in,1073741824,4,53374.834000,0.000e+00
+sample,rs,in,1073741824,5,53639.217000,0.000e+00
+sample,rs,in,1073741824,6,53483.825000,0.000e+00
+sample,rs,in,1073741824,7,53409.474000,0.000e+00
+sample,rs,in,1073741824,8,53469.965000,0.000e+00
+sample,rs,in,1073741824,9,53616.694000,0.000e+00
+result,rs,in,1073741824,53527.130700
+UCCL Lite strict route: rank=3 op=2 bytes=1024 calls=20
+UCCL Lite strict route: rank=0 op=2 bytes=1024 calls=20
+UCCL Lite strict route: rank=1 op=2 bytes=1024 calls=20
+UCCL Lite strict route: rank=1 op=2 bytes=2048 calls=20
+UCCL Lite strict route: rank=1 op=2 bytes=4096 calls=20
+UCCL Lite strict route: rank=1 op=2 bytes=8192 calls=20
+UCCL Lite strict route: rank=1 op=2 bytes=16384 calls=20
+UCCL Lite strict route: rank=1 op=2 bytes=32768 calls=20
+UCCL Lite strict route: rank=1 op=2 bytes=65536 calls=20
+UCCL Lite strict route: rank=1 op=2 bytes=131072 calls=20
+UCCL Lite strict route: rank=1 op=2 bytes=262144 calls=20
+UCCL Lite strict route: rank=1 op=2 bytes=524288 calls=20
+UCCL Lite strict route: rank=1 op=2 bytes=1048576 calls=20
+UCCL Lite strict route: rank=1 op=2 bytes=2097152 calls=20
+UCCL Lite strict route: rank=1 op=2 bytes=4194304 calls=20
+UCCL Lite strict route: rank=1 op=2 bytes=8388608 calls=20
+UCCL Lite strict route: rank=1 op=2 bytes=16777216 calls=20
+UCCL Lite strict route: rank=2 op=2 bytes=1024 calls=20
+UCCL Lite strict route: rank=2 op=2 bytes=2048 calls=20
+UCCL Lite strict route: rank=2 op=2 bytes=4096 calls=20
+UCCL Lite strict route: rank=2 op=2 bytes=8192 calls=20
+UCCL Lite strict route: rank=2 op=2 bytes=16384 calls=20
+UCCL Lite strict route: rank=2 op=2 bytes=32768 calls=20
+UCCL Lite strict route: rank=2 op=2 bytes=65536 calls=20
+UCCL Lite strict route: rank=2 op=2 bytes=131072 calls=20
+UCCL Lite strict route: rank=2 op=2 bytes=262144 calls=20
+UCCL Lite strict route: rank=2 op=2 bytes=524288 calls=20
+UCCL Lite strict route: rank=2 op=2 bytes=1048576 calls=20
+UCCL Lite strict route: rank=2 op=2 bytes=2097152 calls=20
+UCCL Lite strict route: rank=2 op=2 bytes=4194304 calls=20
+UCCL Lite strict route: rank=2 op=2 bytes=8388608 calls=20
+UCCL Lite strict route: rank=2 op=2 bytes=16777216 calls=20
+UCCL Lite strict route: rank=2 op=2 bytes=33554432 calls=20
+UCCL Lite strict route: rank=2 op=2 bytes=67108864 calls=20
+UCCL Lite strict route: rank=2 op=2 bytes=134217728 calls=20
+UCCL Lite strict route: rank=2 op=2 bytes=268435456 calls=20
+UCCL Lite strict route: rank=2 op=2 bytes=536870912 calls=20
+UCCL Lite strict route: rank=2 op=2 bytes=1073741824 calls=20
+UCCL Lite strict: rank=2 fallback=0
+UCCL Lite strict route: rank=0 op=2 bytes=2048 calls=20
+UCCL Lite strict route: rank=0 op=2 bytes=4096 calls=20
+UCCL Lite strict route: rank=0 op=2 bytes=8192 calls=20
+UCCL Lite strict route: rank=0 op=2 bytes=16384 calls=20
+UCCL Lite strict route: rank=0 op=2 bytes=32768 calls=20
+UCCL Lite strict route: rank=0 op=2 bytes=65536 calls=20
+UCCL Lite strict route: rank=0 op=2 bytes=131072 calls=20
+UCCL Lite strict route: rank=0 op=2 bytes=262144 calls=20
+UCCL Lite strict route: rank=0 op=2 bytes=524288 calls=20
+UCCL Lite strict route: rank=0 op=2 bytes=1048576 calls=20
+UCCL Lite strict route: rank=0 op=2 bytes=2097152 calls=20
+UCCL Lite strict route: rank=0 op=2 bytes=4194304 calls=20
+UCCL Lite strict route: rank=0 op=2 bytes=8388608 calls=20
+UCCL Lite strict route: rank=0 op=2 bytes=16777216 calls=20
+UCCL Lite strict route: rank=0 op=2 bytes=33554432 calls=20
+UCCL Lite strict route: rank=0 op=2 bytes=67108864 calls=20
+UCCL Lite strict route: rank=0 op=2 bytes=134217728 calls=20
+UCCL Lite strict route: rank=0 op=2 bytes=268435456 calls=20
+UCCL Lite strict route: rank=0 op=2 bytes=536870912 calls=20
+UCCL Lite strict route: rank=0 op=2 bytes=1073741824 calls=20
+UCCL Lite strict: rank=0 fallback=0
+UCCL Lite strict route: rank=3 op=2 bytes=2048 calls=20
+UCCL Lite strict route: rank=3 op=2 bytes=4096 calls=20
+UCCL Lite strict route: rank=3 op=2 bytes=8192 calls=20
+UCCL Lite strict route: rank=3 op=2 bytes=16384 calls=20
+UCCL Lite strict route: rank=3 op=2 bytes=32768 calls=20
+UCCL Lite strict route: rank=3 op=2 bytes=65536 calls=20
+UCCL Lite strict route: rank=3 op=2 bytes=131072 calls=20
+UCCL Lite strict route: rank=3 op=2 bytes=262144 calls=20
+UCCL Lite strict route: rank=3 op=2 bytes=524288 calls=20
+UCCL Lite strict route: rank=3 op=2 bytes=1048576 calls=20
+UCCL Lite strict route: rank=3 op=2 bytes=2097152 calls=20
+UCCL Lite strict route: rank=3 op=2 bytes=4194304 calls=20
+UCCL Lite strict route: rank=3 op=2 bytes=8388608 calls=20
+UCCL Lite strict route: rank=3 op=2 bytes=16777216 calls=20
+UCCL Lite strict route: rank=3 op=2 bytes=33554432 calls=20
+UCCL Lite strict route: rank=3 op=2 bytes=67108864 calls=20
+UCCL Lite strict route: rank=3 op=2 bytes=134217728 calls=20
+UCCL Lite strict route: rank=3 op=2 bytes=268435456 calls=20
+UCCL Lite strict route: rank=3 op=2 bytes=536870912 calls=20
+UCCL Lite strict route: rank=3 op=2 bytes=1073741824 calls=20
+UCCL Lite strict: rank=3 fallback=0
+UCCL Lite strict route: rank=1 op=2 bytes=33554432 calls=20
+UCCL Lite strict route: rank=1 op=2 bytes=67108864 calls=20
+UCCL Lite strict route: rank=1 op=2 bytes=134217728 calls=20
+UCCL Lite strict route: rank=1 op=2 bytes=268435456 calls=20
+UCCL Lite strict route: rank=1 op=2 bytes=536870912 calls=20
+UCCL Lite strict route: rank=1 op=2 bytes=1073741824 calls=20
+UCCL Lite strict: rank=1 fallback=0
+UCCL Lite strict route: rank=4 op=2 bytes=1024 calls=20
+UCCL Lite strict route: rank=6 op=2 bytes=1024 calls=20
+UCCL Lite strict route: rank=6 op=2 bytes=2048 calls=20
+UCCL Lite strict route: rank=6 op=2 bytes=4096 calls=20
+UCCL Lite strict route: rank=6 op=2 bytes=8192 calls=20
+UCCL Lite strict route: rank=6 op=2 bytes=16384 calls=20
+UCCL Lite strict route: rank=6 op=2 bytes=32768 calls=20
+UCCL Lite strict route: rank=6 op=2 bytes=65536 calls=20
+UCCL Lite strict route: rank=6 op=2 bytes=131072 calls=20
+UCCL Lite strict route: rank=6 op=2 bytes=262144 calls=20
+UCCL Lite strict route: rank=6 op=2 bytes=524288 calls=20
+UCCL Lite strict route: rank=6 op=2 bytes=1048576 calls=20
+UCCL Lite strict route: rank=6 op=2 bytes=2097152 calls=20
+UCCL Lite strict route: rank=6 op=2 bytes=4194304 calls=20
+UCCL Lite strict route: rank=6 op=2 bytes=8388608 calls=20
+UCCL Lite strict route: rank=6 op=2 bytes=16777216 calls=20
+UCCL Lite strict route: rank=6 op=2 bytes=33554432 calls=20
+UCCL Lite strict route: rank=6 op=2 bytes=67108864 calls=20
+UCCL Lite strict route: rank=6 op=2 bytes=134217728 calls=20
+UCCL Lite strict route: rank=6 op=2 bytes=268435456 calls=20
+UCCL Lite strict route: rank=6 op=2 bytes=536870912 calls=20
+UCCL Lite strict route: rank=6 op=2 bytes=1073741824 calls=20
+UCCL Lite strict: rank=6 fallback=0
+UCCL Lite strict route: rank=7 op=2 bytes=1024 calls=20
+UCCL Lite strict route: rank=7 op=2 bytes=2048 calls=20
+UCCL Lite strict route: rank=7 op=2 bytes=4096 calls=20
+UCCL Lite strict route: rank=7 op=2 bytes=8192 calls=20
+UCCL Lite strict route: rank=7 op=2 bytes=16384 calls=20
+UCCL Lite strict route: rank=7 op=2 bytes=32768 calls=20
+UCCL Lite strict route: rank=7 op=2 bytes=65536 calls=20
+UCCL Lite strict route: rank=7 op=2 bytes=131072 calls=20
+UCCL Lite strict route: rank=7 op=2 bytes=262144 calls=20
+UCCL Lite strict route: rank=7 op=2 bytes=524288 calls=20
+UCCL Lite strict route: rank=7 op=2 bytes=1048576 calls=20
+UCCL Lite strict route: rank=7 op=2 bytes=2097152 calls=20
+UCCL Lite strict route: rank=7 op=2 bytes=4194304 calls=20
+UCCL Lite strict route: rank=7 op=2 bytes=8388608 calls=20
+UCCL Lite strict route: rank=7 op=2 bytes=16777216 calls=20
+UCCL Lite strict route: rank=7 op=2 bytes=33554432 calls=20
+UCCL Lite strict route: rank=7 op=2 bytes=67108864 calls=20
+UCCL Lite strict route: rank=7 op=2 bytes=134217728 calls=20
+UCCL Lite strict route: rank=7 op=2 bytes=268435456 calls=20
+UCCL Lite strict route: rank=7 op=2 bytes=536870912 calls=20
+UCCL Lite strict route: rank=7 op=2 bytes=1073741824 calls=20
+UCCL Lite strict: rank=7 fallback=0
+UCCL Lite strict route: rank=5 op=2 bytes=1024 calls=20
+UCCL Lite strict route: rank=5 op=2 bytes=2048 calls=20
+UCCL Lite strict route: rank=5 op=2 bytes=4096 calls=20
+UCCL Lite strict route: rank=5 op=2 bytes=8192 calls=20
+UCCL Lite strict route: rank=5 op=2 bytes=16384 calls=20
+UCCL Lite strict route: rank=5 op=2 bytes=32768 calls=20
+UCCL Lite strict route: rank=5 op=2 bytes=65536 calls=20
+UCCL Lite strict route: rank=5 op=2 bytes=131072 calls=20
+UCCL Lite strict route: rank=5 op=2 bytes=262144 calls=20
+UCCL Lite strict route: rank=5 op=2 bytes=524288 calls=20
+UCCL Lite strict route: rank=5 op=2 bytes=1048576 calls=20
+UCCL Lite strict route: rank=5 op=2 bytes=2097152 calls=20
+UCCL Lite strict route: rank=5 op=2 bytes=4194304 calls=20
+UCCL Lite strict route: rank=5 op=2 bytes=8388608 calls=20
+UCCL Lite strict route: rank=5 op=2 bytes=16777216 calls=20
+UCCL Lite strict route: rank=5 op=2 bytes=33554432 calls=20
+UCCL Lite strict route: rank=5 op=2 bytes=67108864 calls=20
+UCCL Lite strict route: rank=5 op=2 bytes=134217728 calls=20
+UCCL Lite strict route: rank=5 op=2 bytes=268435456 calls=20
+UCCL Lite strict route: rank=5 op=2 bytes=536870912 calls=20
+UCCL Lite strict route: rank=5 op=2 bytes=1073741824 calls=20
+UCCL Lite strict: rank=5 fallback=0
+UCCL Lite strict route: rank=4 op=2 bytes=2048 calls=20
+UCCL Lite strict route: rank=4 op=2 bytes=4096 calls=20
+UCCL Lite strict route: rank=4 op=2 bytes=8192 calls=20
+UCCL Lite strict route: rank=4 op=2 bytes=16384 calls=20
+UCCL Lite strict route: rank=4 op=2 bytes=32768 calls=20
+UCCL Lite strict route: rank=4 op=2 bytes=65536 calls=20
+UCCL Lite strict route: rank=4 op=2 bytes=131072 calls=20
+UCCL Lite strict route: rank=4 op=2 bytes=262144 calls=20
+UCCL Lite strict route: rank=4 op=2 bytes=524288 calls=20
+UCCL Lite strict route: rank=4 op=2 bytes=1048576 calls=20
+UCCL Lite strict route: rank=4 op=2 bytes=2097152 calls=20
+UCCL Lite strict route: rank=4 op=2 bytes=4194304 calls=20
+UCCL Lite strict route: rank=4 op=2 bytes=8388608 calls=20
+UCCL Lite strict route: rank=4 op=2 bytes=16777216 calls=20
+UCCL Lite strict route: rank=4 op=2 bytes=33554432 calls=20
+UCCL Lite strict route: rank=4 op=2 bytes=67108864 calls=20
+UCCL Lite strict route: rank=4 op=2 bytes=134217728 calls=20
+UCCL Lite strict route: rank=4 op=2 bytes=268435456 calls=20
+UCCL Lite strict route: rank=4 op=2 bytes=536870912 calls=20
+UCCL Lite strict route: rank=4 op=2 bytes=1073741824 calls=20
+UCCL Lite strict: rank=4 fallback=0
+UCCL reference-protocol checks passed

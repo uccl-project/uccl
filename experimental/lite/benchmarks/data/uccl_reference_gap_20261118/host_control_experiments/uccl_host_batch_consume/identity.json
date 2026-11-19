@@ -1,0 +1,5 @@
+{
+  "binary": "build/uccl_host_batch_consume/nccl_lite/libuccl_lite_nccl_strict.so",
+  "sha256": "8023098843ad692c2f4959a147d0410512a910fcf3367d5d507cfe8fcb71b0b1",
+  "scope": "experimental candidate only; cross-harness reference comparison is diagnostic"
+}

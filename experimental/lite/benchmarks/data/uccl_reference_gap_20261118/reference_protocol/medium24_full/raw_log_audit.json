@@ -1,0 +1,17 @@
+{
+  "scope": "paired protocol only; batch/build/release gates separate",
+  "raw_log_checks_passed": true,
+  "runs": 27,
+  "rows": 126,
+  "zero_slowdown_passed": false,
+  "slower_rows": 1,
+  "failures": [
+    {
+      "operation": "rs",
+      "bytes": 16777216,
+      "layout": "out",
+      "ratio": 1.0003616031621907
+    }
+  ],
+  "candidate_sha256": "b0ba7b498fddcd64d5f1788da56c3e581dfe1e3b5b90b4f9f0c8ec3239639398"
+}

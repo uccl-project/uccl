@@ -1,0 +1,11 @@
+{
+  "before": {
+    "local": "",
+    "remote": ""
+  },
+  "candidate_sha256": "8ad6c2da1808eb85983902e9383138ac6e009d0c228e89406a675d08c6da11a5",
+  "after": {
+    "local": "",
+    "remote": ""
+  }
+}

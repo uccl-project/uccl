@@ -1,0 +1,248 @@
+# nccl-tests version 2.19.7 nccl-headers=22807 nccl-library=22807
+# Collective test starting: reduce_scatter_perf
+# nThread 1 nGpus 1 minBytes 1024 maxBytes 1024 step: 1048576(bytes) warmup iters: 1 iters: 1 agg iters: 1 validation: 1 graph: 1 unalign: 0
+#
+# Using devices
+#  Rank  0 Group  0 Pid 3018720 on mibura-sky-test-02 device  0 [0000:4a:00] NVIDIA L4
+#  Rank  1 Group  0 Pid 3018721 on mibura-sky-test-02 device  1 [0000:61:00] NVIDIA L4
+#  Rank  2 Group  0 Pid 3018722 on mibura-sky-test-02 device  2 [0000:ca:00] NVIDIA L4
+#  Rank  3 Group  0 Pid 3018723 on mibura-sky-test-02 device  3 [0000:e1:00] NVIDIA L4
+#  Rank  4 Group  0 Pid 2596223 on mibura-sky-test-01 device  0 [0000:4a:00] NVIDIA L4
+#  Rank  5 Group  0 Pid 2596224 on mibura-sky-test-01 device  1 [0000:61:00] NVIDIA L4
+#  Rank  6 Group  0 Pid 2596225 on mibura-sky-test-01 device  2 [0000:ca:00] NVIDIA L4
+#  Rank  7 Group  0 Pid 2596226 on mibura-sky-test-01 device  3 [0000:e1:00] NVIDIA L4
+UCCL Lite strict: rank=1 native_nccl_loaded=0
+UCCL Lite strict: rank=3 native_nccl_loaded=0
+UCCL Lite strict: rank=2 native_nccl_loaded=0
+UCCL Lite strict: rank=0 native_nccl_loaded=0
+UCCL Lite strict: rank=4 native_nccl_loaded=0
+UCCL Lite strict: rank=7 native_nccl_loaded=0
+UCCL Lite strict: rank=6 native_nccl_loaded=0
+UCCL Lite strict: rank=5 native_nccl_loaded=0
+#
+#                                                              out-of-place                       in-place          
+#       size         count      type   redop    root     time   algbw   busbw  #wrong     time   algbw   busbw  #wrong 
+#        (B)    (elements)                               (us)  (GB/s)  (GB/s)             (us)  (GB/s)  (GB/s)         
+UCCL Lite strict: network graph capture unsupported (native NCCL is forbidden)
+UCCL Lite strict: network graph capture unsupported (native NCCL is forbidden)
+UCCL Lite strict: network graph capture unsupported (native NCCL is forbidden)
+UCCL Lite strict: network graph capture unsupported (native NCCL is forbidden)
+terminate called without an active exception
+[mibura-sky-test-02:3018720] *** Process received signal ***
+[mibura-sky-test-02:3018720] Signal: Aborted (6)
+[mibura-sky-test-02:3018720] Signal code:  (-6)
+terminate called without an active exception
+[mibura-sky-test-02:3018721] *** Process received signal ***
+[mibura-sky-test-02:3018721] Signal: Aborted (6)
+[mibura-sky-test-02:3018721] Signal code:  (-6)
+terminate called without an active exception
+[mibura-sky-test-02:3018722] *** Process received signal ***
+[mibura-sky-test-02:3018722] Signal: Aborted (6)
+[mibura-sky-test-02:3018722] Signal code:  (-6)
+terminate called without an active exception
+[mibura-sky-test-02:3018723] *** Process received signal ***
+[mibura-sky-test-02:3018723] Signal: Aborted (6)
+[mibura-sky-test-02:3018723] Signal code:  (-6)
+mibura-sky-test-02: Test NCCL failure reduce_scatter.cu:49 'UCCL Lite unsupported usage (fallback forbidden) / '
+ .. mibura-sky-test-02 pid 3018722: Test failure common.cu:597
+ .. mibura-sky-test-02 pid 3018722: Test failure common.cu:734
+ .. mibura-sky-test-02 pid 3018722: Test failure common.cu:939
+ .. mibura-sky-test-02 pid 3018722: Test failure reduce_scatter.cu:98
+ .. mibura-sky-test-02 pid 3018722: Test failure common.cu:972
+ .. mibura-sky-test-02 pid 3018722: Test failure common.cu:1768
+ .. mibura-sky-test-02 pid 3018722: Test failure common.cu:1454
+mibura-sky-test-02: Test NCCL failure reduce_scatter.cu:49 'UCCL Lite unsupported usage (fallback forbidden) / '
+ .. mibura-sky-test-02 pid 3018723: Test failure common.cu:597
+ .. mibura-sky-test-02 pid 3018723: Test failure common.cu:734
+ .. mibura-sky-test-02 pid 3018723: Test failure common.cu:939
+ .. mibura-sky-test-02 pid 3018723: Test failure reduce_scatter.cu:98
+ .. mibura-sky-test-02 pid 3018723: Test failure common.cu:972
+ .. mibura-sky-test-02 pid 3018723: Test failure common.cu:1768
+ .. mibura-sky-test-02 pid 3018723: Test failure common.cu:1454
+        1024            32     float     sum      -1mibura-sky-test-02: Test NCCL failure reduce_scatter.cu:49 'UCCL Lite unsupported usage (fallback forbidden) / '
+ .. mibura-sky-test-02 pid 3018720: Test failure common.cu:597
+ .. mibura-sky-test-02 pid 3018720: Test failure common.cu:734
+ .. mibura-sky-test-02 pid 3018720: Test failure common.cu:939
+ .. mibura-sky-test-02 pid 3018720: Test failure reduce_scatter.cu:98
+ .. mibura-sky-test-02 pid 3018720: Test failure common.cu:972
+ .. mibura-sky-test-02 pid 3018720: Test failure common.cu:1768
+ .. mibura-sky-test-02 pid 3018720: Test failure common.cu:1454
+mibura-sky-test-02: Test NCCL failure reduce_scatter.cu:49 'UCCL Lite unsupported usage (fallback forbidden) / '
+ .. mibura-sky-test-02 pid 3018721: Test failure common.cu:597
+ .. mibura-sky-test-02 pid 3018721: Test failure common.cu:734
+ .. mibura-sky-test-02 pid 3018721: Test failure common.cu:939
+ .. mibura-sky-test-02 pid 3018721: Test failure reduce_scatter.cu:98
+ .. mibura-sky-test-02 pid 3018721: Test failure common.cu:972
+ .. mibura-sky-test-02 pid 3018721: Test failure common.cu:1768
+ .. mibura-sky-test-02 pid 3018721: Test failure common.cu:1454
+[mibura-sky-test-02:3018723] [ 0] /lib/x86_64-linux-gnu/libc.so.6(+0x45330)[0x7f2fb8e45330]
+[mibura-sky-test-02:3018723] [ 1] [mibura-sky-test-02:3018722] [ 0] /lib/x86_64-linux-gnu/libc.so.6(+0x45330)[0x78b600645330]
+[mibura-sky-test-02:3018722] [ 1] [mibura-sky-test-02:3018721] [ 0] /lib/x86_64-linux-gnu/libc.so.6(+0x45330)[0x7be091045330]
+[mibura-sky-test-02:3018721] [ 1] [mibura-sky-test-02:3018720] [ 0] /lib/x86_64-linux-gnu/libc.so.6(+0x45330)[0x724efee45330]
+[mibura-sky-test-02:3018720] [ 1] /lib/x86_64-linux-gnu/libc.so.6(pthread_kill+0x11c)[0x724efee9ebec]
+[mibura-sky-test-02:3018720] [ 2] /lib/x86_64-linux-gnu/libc.so.6(pthread_kill+0x11c)[0x78b60069ebec]
+[mibura-sky-test-02:3018722] [ 2] /lib/x86_64-linux-gnu/libc.so.6(pthread_kill+0x11c)[0x7be09109ebec]
+[mibura-sky-test-02:3018721] [ 2] /lib/x86_64-linux-gnu/libc.so.6(pthread_kill+0x11c)[0x7f2fb8e9ebec]
+[mibura-sky-test-02:3018723] [ 2] /lib/x86_64-linux-gnu/libc.so.6(gsignal+0x1e)[0x78b60064527e]
+[mibura-sky-test-02:3018722] [ 3] /lib/x86_64-linux-gnu/libc.so.6(abort+0xdf)[0x78b6006288ff]
+[mibura-sky-test-02:3018722] [ 4] /lib/x86_64-linux-gnu/libc.so.6(gsignal+0x1e)[0x724efee4527e]
+[mibura-sky-test-02:3018720] [ 3] /lib/x86_64-linux-gnu/libc.so.6(abort+0xdf)[0x724efee288ff]
+[mibura-sky-test-02:3018720] [ 4] /lib/x86_64-linux-gnu/libc.so.6(gsignal+0x1e)[0x7be09104527e]
+[mibura-sky-test-02:3018721] [ 3] /lib/x86_64-linux-gnu/libc.so.6(abort+0xdf)[0x7be0910288ff]
+[mibura-sky-test-02:3018721] [ 4] /lib/x86_64-linux-gnu/libc.so.6(gsignal+0x1e)[0x7f2fb8e4527e]
+[mibura-sky-test-02:3018723] [ 3] /lib/x86_64-linux-gnu/libc.so.6(abort+0xdf)[0x7f2fb8e288ff]
+[mibura-sky-test-02:3018723] [ 4] UCCL Lite strict: network graph capture unsupported (native NCCL is forbidden)
+/lib/x86_64-linux-gnu/libstdc++.so.6(+0xa5ff5)[0x78b600aa5ff5]
+[mibura-sky-test-02:3018722] [ 5] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xa5ff5)[0x7be0914a5ff5]
+[mibura-sky-test-02:3018721] [ 5] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xbb0da)[0x7be0914bb0da]
+[mibura-sky-test-02:3018721] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xa5ff5)[0x724eff2a5ff5]
+[mibura-sky-test-02:3018720] [ 5] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xbb0da)[0x724eff2bb0da]
+[mibura-sky-test-02:3018720] [ 6] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xa5ff5)[0x7f2fb92a5ff5]
+[mibura-sky-test-02:3018723] [ 5] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xbb0da)[0x78b600abb0da]
+[mibura-sky-test-02:3018722] [ 6] [ 6] /lib/x86_64-linux-gnu/libstdc++.so.6(_ZSt10unexpectedv+0x0)[0x7be0914a5a55]
+[mibura-sky-test-02:3018721] [ 7] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xbb0da)[0x7f2fb92bb0da]
+[mibura-sky-test-02:3018723] [ 6] UCCL Lite strict: network graph capture unsupported (native NCCL is forbidden)
+/lib/x86_64-linux-gnu/libstdc++.so.6(_ZSt10unexpectedv+0x0)[0x724eff2a5a55]
+[mibura-sky-test-02:3018720] [ 7] /home/zhongjie/third_party/mscclpp/build-ib-pcieccl/lib/libmscclpp.so.0(+0x157b5c)[0x724efe757b5c]
+[mibura-sky-test-02:3018720] [ 8] /lib/x86_64-linux-gnu/libstdc++.so.6(_ZSt10unexpectedv+0x0)[0x78b600aa5a55]
+[mibura-sky-test-02:3018722] [ 7] /home/zhongjie/third_party/mscclpp/build-ib-pcieccl/lib/libmscclpp.so.0(+0x157b5c)[0x78b5fff57b5c]
+[mibura-sky-test-02:3018722] [ 8] /home/zhongjie/third_party/mscclpp/build-ib-pcieccl/lib/libmscclpp.so.0(+0x157b5c)[0x7be090957b5c]
+[mibura-sky-test-02:3018721] [ 8] /lib/x86_64-linux-gnu/libstdc++.so.6(_ZSt10unexpectedv+0x0)[0x7f2fb92a5a55]
+[mibura-sky-test-02:3018723] [ 7] /home/zhongjie/third_party/mscclpp/build-ib-pcieccl/lib/libmscclpp.so.0(+0x157b5c)[0x7f2fb8757b5c]
+[mibura-sky-test-02:3018723] [ 8] /lib/x86_64-linux-gnu/libc.so.6(+0x47a76)[0x724efee47a76]
+[mibura-sky-test-02:3018720] [ 9] /lib/x86_64-linux-gnu/libc.so.6(+0x47bbe)[0x724efee47bbe]
+[mibura-sky-test-02:3018720] [10] /lib/x86_64-linux-gnu/libc.so.6(+0x47a76)[0x7be091047a76]
+[mibura-sky-test-02:3018721] [ 9] /lib/x86_64-linux-gnu/libc.so.6(+0x47bbe)[0x7be091047bbe]
+[mibura-sky-test-02:3018721] [10] /lib/x86_64-linux-gnu/libc.so.6(+0x47a76)[0x78b600647a76]
+[mibura-sky-test-02:3018722] [ 9] /lib/x86_64-linux-gnu/libc.so.6(+0x47bbe)[0x78b600647bbe]
+[mibura-sky-test-02:3018722] [10] /lib/x86_64-linux-gnu/libc.so.6(+0x2a1d1)[0x724efee2a1d1]
+[mibura-sky-test-02:3018720] [11] /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b)[0x724efee2a28b]
+[mibura-sky-test-02:3018720] [12] /home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_strict_final_correctness/reduce_scatter_perf(+0x9015)[0x575e11e68015]
+/lib/x86_64-linux-gnu/libc.so.6(+0x2a1d1)[0x7be09102a1d1]
+[mibura-sky-test-02:3018721] [11] /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b)[0x7be09102a28b]
+[mibura-sky-test-02:3018721] [12] /home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_strict_final_correctness/reduce_scatter_perf(+0x9015)[0x60b1af7ec015]
+[mibura-sky-test-02:3018721] *** End of error message ***
+/lib/x86_64-linux-gnu/libc.so.6(+0x47a76)[0x7f2fb8e47a76]
+[mibura-sky-test-02:3018723] [ 9] /lib/x86_64-linux-gnu/libc.so.6(+0x47bbe)[0x7f2fb8e47bbe]
+[mibura-sky-test-02:3018723] [10] /lib/x86_64-linux-gnu/libc.so.6(+0x2a1d1)[0x78b60062a1d1]
+[mibura-sky-test-02:3018722] [11] /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b)[0x78b60062a28b]
+[mibura-sky-test-02:3018722] [12] /home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_strict_final_correctness/reduce_scatter_perf(+0x9015)[0x63175579a015]
+[mibura-sky-test-02:3018722] *** End of error message ***
+[mibura-sky-test-02:3018720] *** End of error message ***
+UCCL Lite strict: network graph capture unsupported (native NCCL is forbidden)
+/lib/x86_64-linux-gnu/libc.so.6(+0x2a1d1)[0x7f2fb8e2a1d1]
+[mibura-sky-test-02:3018723] [11] /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b)[0x7f2fb8e2a28b]
+[mibura-sky-test-02:3018723] [12] /home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_strict_final_correctness/reduce_scatter_perf(+0x9015)[0x5c15e1cda015]
+[mibura-sky-test-02:3018723] *** End of error message ***
+UCCL Lite strict: network graph capture unsupported (native NCCL is forbidden)
+terminate called without an active exception
+mibura-sky-test-01: Test NCCL failure reduce_scatter.cu:49 'UCCL Lite unsupported usage (fallback forbidden) / '
+ .. mibura-sky-test-01 pid 2596223: Test failure common.cu:597
+ .. mibura-sky-test-01 pid 2596223: Test failure common.cu:734
+ .. mibura-sky-test-01 pid 2596223: Test failure common.cu:939
+ .. mibura-sky-test-01 pid 2596223: Test failure reduce_scatter.cu:98
+ .. mibura-sky-test-01 pid 2596223: Test failure common.cu:972
+ .. mibura-sky-test-01 pid 2596223: Test failure common.cu:1768
+ .. mibura-sky-test-01 pid 2596223: Test failure common.cu:1454
+mibura-sky-test-01: Test NCCL failure reduce_scatter.cu:49 'UCCL Lite unsupported usage (fallback forbidden) / '
+ .. mibura-sky-test-01 pid 2596225: Test failure common.cu:597
+ .. mibura-sky-test-01 pid 2596225: Test failure common.cu:734
+ .. mibura-sky-test-01 pid 2596225: Test failure common.cu:939
+ .. mibura-sky-test-01 pid 2596225: Test failure reduce_scatter.cu:98
+ .. mibura-sky-test-01 pid 2596225: Test failure common.cu:972
+ .. mibura-sky-test-01 pid 2596225: Test failure common.cu:1768
+ .. mibura-sky-test-01 pid 2596225: Test failure common.cu:1454
+mibura-sky-test-01: Test NCCL failure reduce_scatter.cu:49 'UCCL Lite unsupported usage (fallback forbidden) / '
+ .. mibura-sky-test-01 pid 2596224: Test failure common.cu:597
+ .. mibura-sky-test-01 pid 2596224: Test failure common.cu:734
+ .. mibura-sky-test-01 pid 2596224: Test failure common.cu:939
+ .. mibura-sky-test-01 pid 2596224: Test failure reduce_scatter.cu:98
+ .. mibura-sky-test-01 pid 2596224: Test failure common.cu:972
+ .. mibura-sky-test-01 pid 2596224: Test failure common.cu:1768
+ .. mibura-sky-test-01 pid 2596224: Test failure common.cu:1454
+mibura-sky-test-01: Test NCCL failure reduce_scatter.cu:49 'UCCL Lite unsupported usage (fallback forbidden) / '
+ .. mibura-sky-test-01 pid 2596226: Test failure common.cu:597
+ .. mibura-sky-test-01 pid 2596226: Test failure common.cu:734
+ .. mibura-sky-test-01 pid 2596226: Test failure common.cu:939
+ .. mibura-sky-test-01 pid 2596226: Test failure reduce_scatter.cu:98
+ .. mibura-sky-test-01 pid 2596226: Test failure common.cu:972
+ .. mibura-sky-test-01 pid 2596226: Test failure common.cu:1768
+ .. mibura-sky-test-01 pid 2596226: Test failure common.cu:1454
+terminate called without an active exception
+[mibura-sky-test-01:2596225] *** Process received signal ***
+[mibura-sky-test-01:2596225] Signal: Aborted (6)
+[mibura-sky-test-01:2596225] Signal code:  (-6)
+[mibura-sky-test-01:2596225] [ 0] terminate called without an active exception
+[mibura-sky-test-01:2596226] *** Process received signal ***
+[mibura-sky-test-01:2596226] Signal: Aborted (6)
+[mibura-sky-test-01:2596226] Signal code:  (-6)
+[mibura-sky-test-01:2596226] [ 0] /lib/x86_64-linux-gnu/libc.so.6(+0x45330)[0x7b3e2d645330]
+[mibura-sky-test-01:2596226] [ 1] terminate called without an active exception
+[mibura-sky-test-01:2596223] *** Process received signal ***
+[mibura-sky-test-01:2596223] Signal: Aborted (6)
+[mibura-sky-test-01:2596223] Signal code:  (-6)
+[mibura-sky-test-01:2596223] [ 0] /lib/x86_64-linux-gnu/libc.so.6(+0x45330)[0x7ae43ba45330]
+[mibura-sky-test-01:2596223] [ 1] [mibura-sky-test-01:2596224] *** Process received signal ***
+[mibura-sky-test-01:2596224] Signal: Aborted (6)
+[mibura-sky-test-01:2596224] Signal code:  (-6)
+[mibura-sky-test-01:2596224] [ 0] /lib/x86_64-linux-gnu/libc.so.6(+0x45330)[0x7c6318c45330]
+[mibura-sky-test-01:2596224] [ 1] /lib/x86_64-linux-gnu/libc.so.6(+0x45330)[0x79b9b1845330]
+[mibura-sky-test-01:2596225] [ 1] /lib/x86_64-linux-gnu/libc.so.6(pthread_kill+0x11c)[0x79b9b189ebec]
+[mibura-sky-test-01:2596225] [ 2] /lib/x86_64-linux-gnu/libc.so.6(gsignal+0x1e)[0x79b9b184527e]
+[mibura-sky-test-01:2596225] [ 3] /lib/x86_64-linux-gnu/libc.so.6(abort+0xdf)[0x79b9b18288ff]
+[mibura-sky-test-01:2596225] [ 4] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xa5ff5)[0x79b9b1ca5ff5]
+[mibura-sky-test-01:2596225] [ 5] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xbb0da)[0x79b9b1cbb0da]
+[mibura-sky-test-01:2596225] [ 6] /lib/x86_64-linux-gnu/libstdc++.so.6(_ZSt10unexpectedv+0x0)[0x79b9b1ca5a55]
+[mibura-sky-test-01:2596225] [ 7] /lib/x86_64-linux-gnu/libc.so.6(pthread_kill+0x11c)[0x7b3e2d69ebec]
+[mibura-sky-test-01:2596226] [ 2] /lib/x86_64-linux-gnu/libc.so.6(gsignal+0x1e)[0x7b3e2d64527e]
+[mibura-sky-test-01:2596226] [ 3] /lib/x86_64-linux-gnu/libc.so.6(abort+0xdf)[0x7b3e2d6288ff]
+[mibura-sky-test-01:2596226] [ 4] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xa5ff5)[0x7b3e2daa5ff5]
+[mibura-sky-test-01:2596226] [ 5] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xbb0da)[0x7b3e2dabb0da]
+[mibura-sky-test-01:2596226] [ 6] /lib/x86_64-linux-gnu/libstdc++.so.6(_ZSt10unexpectedv+0x0)[0x7b3e2daa5a55]
+[mibura-sky-test-01:2596226] [ 7] /home/zhongjie/third_party/mscclpp/build-ib-pcieccl/lib/libmscclpp.so.0(+0x157b5c)[0x7b3e2cf57b5c]
+[mibura-sky-test-01:2596226] [ 8] /lib/x86_64-linux-gnu/libc.so.6(pthread_kill+0x11c)[0x7c6318c9ebec]
+[mibura-sky-test-01:2596224] [ 2] /lib/x86_64-linux-gnu/libc.so.6(gsignal+0x1e)[0x7c6318c4527e]
+[mibura-sky-test-01:2596224] [ 3] /lib/x86_64-linux-gnu/libc.so.6(abort+0xdf)[0x7c6318c288ff]
+[mibura-sky-test-01:2596224] [ 4] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xa5ff5)[0x7c63190a5ff5]
+[mibura-sky-test-01:2596224] [ 5] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xbb0da)[0x7c63190bb0da]
+[mibura-sky-test-01:2596224] [ 6] /lib/x86_64-linux-gnu/libstdc++.so.6(_ZSt10unexpectedv+0x0)[0x7c63190a5a55]
+[mibura-sky-test-01:2596224] [ 7] /home/zhongjie/third_party/mscclpp/build-ib-pcieccl/lib/libmscclpp.so.0(+0x157b5c)[0x7c6318557b5c]
+[mibura-sky-test-01:2596224] [ 8] /lib/x86_64-linux-gnu/libc.so.6(pthread_kill+0x11c)[0x7ae43ba9ebec]
+[mibura-sky-test-01:2596223] [ 2] /lib/x86_64-linux-gnu/libc.so.6(gsignal+0x1e)[0x7ae43ba4527e]
+[mibura-sky-test-01:2596223] [ 3] /lib/x86_64-linux-gnu/libc.so.6(abort+0xdf)[0x7ae43ba288ff]
+[mibura-sky-test-01:2596223] [ 4] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xa5ff5)[0x7ae43bea5ff5]
+[mibura-sky-test-01:2596223] [ 5] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xbb0da)[0x7ae43bebb0da]
+[mibura-sky-test-01:2596223] [ 6] /lib/x86_64-linux-gnu/libstdc++.so.6(_ZSt10unexpectedv+0x0)[0x7ae43bea5a55]
+[mibura-sky-test-01:2596223] [ 7] /home/zhongjie/third_party/mscclpp/build-ib-pcieccl/lib/libmscclpp.so.0(+0x157b5c)[0x7ae43b357b5c]
+[mibura-sky-test-01:2596223] [ 8] /home/zhongjie/third_party/mscclpp/build-ib-pcieccl/lib/libmscclpp.so.0(+0x157b5c)[0x79b9b1157b5c]
+[mibura-sky-test-01:2596225] [ 8] /lib/x86_64-linux-gnu/libc.so.6(+0x47a76)[0x79b9b1847a76]
+[mibura-sky-test-01:2596225] [ 9] /lib/x86_64-linux-gnu/libc.so.6(+0x47bbe)[0x79b9b1847bbe]
+[mibura-sky-test-01:2596225] [10] /lib/x86_64-linux-gnu/libc.so.6(+0x2a1d1)[0x79b9b182a1d1]
+[mibura-sky-test-01:2596225] [11] /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b)[0x79b9b182a28b]
+[mibura-sky-test-01:2596225] [12] /home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_strict_final_correctness/reduce_scatter_perf(+0x9015)[0x57269e43e015]
+[mibura-sky-test-01:2596225] *** End of error message ***
+/lib/x86_64-linux-gnu/libc.so.6(+0x47a76)[0x7b3e2d647a76]
+[mibura-sky-test-01:2596226] [ 9] /lib/x86_64-linux-gnu/libc.so.6(+0x47bbe)[0x7b3e2d647bbe]
+[mibura-sky-test-01:2596226] [10] /lib/x86_64-linux-gnu/libc.so.6(+0x2a1d1)[0x7b3e2d62a1d1]
+[mibura-sky-test-01:2596226] [11] /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b)[0x7b3e2d62a28b]
+[mibura-sky-test-01:2596226] [12] /home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_strict_final_correctness/reduce_scatter_perf(+0x9015)[0x557608356015]
+[mibura-sky-test-01:2596226] *** End of error message ***
+/lib/x86_64-linux-gnu/libc.so.6(+0x47a76)[0x7c6318c47a76]
+[mibura-sky-test-01:2596224] [ 9] /lib/x86_64-linux-gnu/libc.so.6(+0x47bbe)[0x7c6318c47bbe]
+[mibura-sky-test-01:2596224] [10] /lib/x86_64-linux-gnu/libc.so.6(+0x2a1d1)[0x7c6318c2a1d1]
+[mibura-sky-test-01:2596224] [11] /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b)[0x7c6318c2a28b]
+[mibura-sky-test-01:2596224] [12] /home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_strict_final_correctness/reduce_scatter_perf(+0x9015)[0x6446e999b015]
+[mibura-sky-test-01:2596224] *** End of error message ***
+/lib/x86_64-linux-gnu/libc.so.6(+0x47a76)[0x7ae43ba47a76]
+[mibura-sky-test-01:2596223] [ 9] /lib/x86_64-linux-gnu/libc.so.6(+0x47bbe)[0x7ae43ba47bbe]
+[mibura-sky-test-01:2596223] [10] /lib/x86_64-linux-gnu/libc.so.6(+0x2a1d1)[0x7ae43ba2a1d1]
+[mibura-sky-test-01:2596223] [11] /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b)[0x7ae43ba2a28b]
+[mibura-sky-test-01:2596223] [12] /home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_strict_final_correctness/reduce_scatter_perf(+0x9015)[0x5ab9bd063015]
+[mibura-sky-test-01:2596223] *** End of error message ***
+--------------------------------------------------------------------------
+Primary job  terminated normally, but 1 process returned
+a non-zero exit code. Per user-direction, the job has been aborted.
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+mpirun noticed that process rank 4 with PID 2596223 on node 10.10.55.1 exited on signal 6 (Aborted).
+--------------------------------------------------------------------------

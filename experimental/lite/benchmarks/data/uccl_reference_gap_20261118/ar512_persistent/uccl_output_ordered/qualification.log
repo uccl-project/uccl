@@ -1,0 +1,23 @@
+Starting measure_all.py
+Starting fixed-library ag
+AG diagnostic 0
+AG diagnostic 1
+AG diagnostic 2
+[{'bytes': 8388608, 'layout': 'out-of-place', 'median_us': 332.18, 'min_us': 332.14, 'max_us': 332.79, 'reference_us': 355.3684666666667, 'diagnostic_ratio': 0.9347481027673249}, {'bytes': 8388608, 'layout': 'in-place', 'median_us': 332.62, 'min_us': 331.34, 'max_us': 332.91, 'reference_us': 355.3684666666667, 'diagnostic_ratio': 0.9359862542671672}, {'bytes': 1073741824, 'layout': 'out-of-place', 'median_us': 39139.3, 'min_us': 39122.6, 'max_us': 39231.0, 'reference_us': 41921.7642, 'diagnostic_ratio': 0.9336272160034716}, {'bytes': 1073741824, 'layout': 'in-place', 'median_us': 39261.1, 'min_us': 39200.8, 'max_us': 39301.1, 'reference_us': 41921.7642, 'diagnostic_ratio': 0.9365326280805711}]
+Starting fixed-library ar
+AR diagnostic 0
+AR diagnostic 1
+AR diagnostic 2
+[{'bytes': 8388608, 'layout': 'out-of-place', 'median_us': 845.55, 'min_us': 843.51, 'max_us': 846.82, 'reference_us': 890.3953, 'diagnostic_ratio': 0.9496343927242202}, {'bytes': 8388608, 'layout': 'in-place', 'median_us': 844.88, 'min_us': 840.18, 'max_us': 845.21, 'reference_us': 890.3953, 'diagnostic_ratio': 0.9488819179526217}, {'bytes': 1073741824, 'layout': 'out-of-place', 'median_us': 92609.9, 'min_us': 92576.6, 'max_us': 92714.7, 'reference_us': 96444.88769999999, 'diagnostic_ratio': 0.9602364854016}, {'bytes': 1073741824, 'layout': 'in-place', 'median_us': 92640.6, 'min_us': 92626.9, 'max_us': 92662.8, 'reference_us': 96444.88769999999, 'diagnostic_ratio': 0.960554801910978}]
+Starting fixed-library rs
+RS diagnostic 0
+RS diagnostic 1
+RS diagnostic 2
+[{'bytes': 8388608, 'layout': 'out-of-place', 'median_us': 489.4, 'min_us': 489.17, 'max_us': 490.76, 'reference_us': 494.3986, 'diagnostic_ratio': 0.9898895344768371}, {'bytes': 8388608, 'layout': 'in-place', 'median_us': 489.76, 'min_us': 489.74, 'max_us': 490.19, 'reference_us': 494.3986, 'diagnostic_ratio': 0.9906176918785773}, {'bytes': 1073741824, 'layout': 'out-of-place', 'median_us': 53463.3, 'min_us': 53440.4, 'max_us': 53477.7, 'reference_us': 53692.5432, 'diagnostic_ratio': 0.9957304462344783}, {'bytes': 1073741824, 'layout': 'in-place', 'median_us': 53362.0, 'min_us': 53342.0, 'max_us': 53392.4, 'reference_us': 53692.5432, 'diagnostic_ratio': 0.9938437782921037}]
+{"ag": {"rows": 42, "slower_rows": 0, "worst_ratio": 0.9552292299941506}, "ar": {"rows": 42, "slower_rows": 0, "worst_ratio": 0.9665116958346498}, "rs": {"rows": 42, "slower_rows": 0, "worst_ratio": 0.9968894353013981}}
+Starting paired.py
+Running ag_0_reference
+Completed ag_0_reference 8.3 s
+Running ag_0_out
+Completed ag_0_out 9.6 s
+Running ag_0_in

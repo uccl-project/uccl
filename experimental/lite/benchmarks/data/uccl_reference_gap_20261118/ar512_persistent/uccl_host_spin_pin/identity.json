@@ -1,0 +1,5 @@
+{
+  "binary": "build/uccl_host_spin_pin/nccl_lite/libuccl_lite_nccl_strict.so",
+  "sha256": "afa91b990de59cdfea108791261a220e1d41abef61bf1b6bf6e2d7c3ae6ad57a",
+  "scope": "fixed experimental build; comparisons to original UCCL are diagnostic, not matched admission"
+}

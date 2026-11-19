@@ -1,0 +1,12 @@
+mkdir -p build/nccl_lite
+/usr/local/cuda/bin/nvcc -O3 -arch=sm_89 -MMD -MP  -std=c++20 -Xcompiler=-fPIC -Xcompiler=-fvisibility=hidden -Iinclude -I/home/zhongjie/third_party/mscclpp/include -I/home/zhongjie/third_party/mscclpp/build-ib-pcieccl/include -c src/multinode/mscclpp_backend.cu -o build/nccl_lite/mscclpp_backend.o
+src/multinode/mscclpp_backend.cu(894): error: no instance of function template "uccl_lite::multinode_kernels::hierarchicalAllGatherRing" matches the argument list
+            argument types are: (uccl_lite::multinode_kernels::DirectRingChan, uccl_lite::multinode_kernels::DirectRingChan, uccl_lite::multinode_kernels::PortChan, float *, size_t, uccl_lite::multinode_kernels::Layout, int, int, int, const uint32_t *, uint32_t *)
+          hierarchicalAllGatherRing<DirectRingChan, true>
+          ^
+src/multinode/device_collectives.cuh(877): note #3323-D: substituting explicit template arguments "<uccl_lite::multinode_kernels::DirectRingChan, <expression>>" for function template "uccl_lite::multinode_kernels::hierarchicalAllGatherRing" failed
+      hierarchicalAllGatherRing(LocalChan localSend, LocalChan localRecv,
+      ^
+
+1 error detected in the compilation of "src/multinode/mscclpp_backend.cu".
+make: *** [Makefile:153: build/nccl_lite/mscclpp_backend.o] Error 2

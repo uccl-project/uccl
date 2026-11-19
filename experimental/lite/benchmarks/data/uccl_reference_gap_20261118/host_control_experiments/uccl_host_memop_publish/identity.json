@@ -1,0 +1,5 @@
+{
+  "binary": "build/uccl_host_memop_publish/nccl_lite/libuccl_lite_nccl_strict.so",
+  "sha256": "2c2b252bf056d503055f01aeb8460f872579a769cd70c00216dfdbc479c0054d",
+  "scope": "experimental candidate only; cross-harness reference comparison is diagnostic"
+}

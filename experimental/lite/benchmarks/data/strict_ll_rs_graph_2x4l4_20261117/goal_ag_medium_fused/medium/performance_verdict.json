@@ -1,0 +1,31 @@
+{
+  "threshold": 0.05,
+  "passed": false,
+  "rows": 90,
+  "failures": [
+    {
+      "operation": "all_gather",
+      "bytes": 8388608,
+      "layout": "out-of-place",
+      "ratio": 1.08838864609926
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 8388608,
+      "layout": "in-place",
+      "ratio": 1.0918854415274464
+    },
+    {
+      "operation": "all_reduce",
+      "bytes": 8388608,
+      "layout": "out-of-place",
+      "ratio": 1.0580184949082518
+    },
+    {
+      "operation": "all_reduce",
+      "bytes": 8388608,
+      "layout": "in-place",
+      "ratio": 1.053322479433297
+    }
+  ]
+}

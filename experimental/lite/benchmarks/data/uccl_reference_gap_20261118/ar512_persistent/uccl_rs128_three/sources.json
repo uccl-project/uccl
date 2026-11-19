@@ -1,0 +1,8 @@
+{
+  "src/multinode/mscclpp_backend.cu": "67d21a9e4bfc79bd1c2c21ff6b500e070f686fef566b702106cefca8d424edca",
+  "src/multinode/device_collectives.cuh": "24534eb2ec34aa589e549157e020d86843ef9ccd39b31efe13890e58f108b629",
+  "src/multinode/async_host_gather.cuh": "1875e5389d27682a9702156a4adc27f117e1333b482cb8f19b642903a810fc98",
+  "tests/nccl_mscclpp/strict_abi.cu": "56474fa5c70bd0295e9b23839198e4a302568a49b29ed68bfc0e9da6658fe137",
+  "tests/nccl_mscclpp/run.py": "f74a9f1756cf73fc99750399fc431e75624e301b760febe147ac28c3ddcaebfd",
+  "Makefile": "6508bf93e4a9dedfbbfad2dd587eac2ea3ed73ae7bf288efb51b18c732ec8f3f"
+}

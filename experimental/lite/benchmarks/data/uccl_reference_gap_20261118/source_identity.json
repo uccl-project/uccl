@@ -1,0 +1,12 @@
+{
+  "rs": {
+    "commit": "833e4ac6c07e80deaae60d09dcc60225887a509e",
+    "source_sha256": "0ec50589d3ca50d8b2d85f41cba690d085ab9616caa9fc0f1b5c3130ab9e8b05",
+    "header_sha256": "2a1f486238ea78488ea0508dd46f5519e8ae5ebd3d4306ba2412ecf7fa65078c"
+  },
+  "ar": {
+    "commit": "39ce6ad9dc290a96b6808916f11c0ed57862619a",
+    "source_sha256": "68b74030e9a9ca6a653afc0a7b709aef75f2d194070d870baa9e36ba0f7e7326",
+    "header_sha256": "2a1f486238ea78488ea0508dd46f5519e8ae5ebd3d4306ba2412ecf7fa65078c"
+  }
+}

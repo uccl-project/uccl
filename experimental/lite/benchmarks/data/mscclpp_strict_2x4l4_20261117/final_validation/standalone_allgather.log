@@ -1,0 +1,73 @@
+# UCCL Lite two-node hierarchical AllGather, float32
+# timing=host enqueue+completion; slowest of eight ranks
+# rank 0 node mibura-sky-test-02 gpu 0 NVIDIA L4 rail 0 (mlx5_0)
+# rank 1 node mibura-sky-test-02 gpu 1 NVIDIA L4 rail 0 (mlx5_0)
+# rank 2 node mibura-sky-test-02 gpu 2 NVIDIA L4 rail 1 (mlx5_1)
+# rank 3 node mibura-sky-test-02 gpu 3 NVIDIA L4 rail 1 (mlx5_1)
+# rank 4 node mibura-sky-test-01 gpu 0 NVIDIA L4 rail 0 (mlx5_0)
+# rank 5 node mibura-sky-test-01 gpu 1 NVIDIA L4 rail 0 (mlx5_0)
+# rank 6 node mibura-sky-test-01 gpu 2 NVIDIA L4 rail 1 (mlx5_1)
+# rank 7 node mibura-sky-test-01 gpu 3 NVIDIA L4 rail 1 (mlx5_1)
+# local adaptive ring/multicast, remote-rank IB exchange; rail map 0,0,1,1; RS pieces 1
+# local ring 0->1->3->2->0; AG ring; rail map 0,0,1,1; piece 2097152 B; pipeline >= 4194304 B
+#      size(B)        count   pieces   time(us)      algbw      busbw  maxrelerr
+# selected,allgather,1024,serial-local
+# sample,allgather,1024,1,46.280,0.000e+00
+# sample,allgather,1024,2,32.466,0.000e+00
+          1024          256        1      39.37       0.03       0.02    0.0e+00
+# selected,allgather,2048,serial-local
+# sample,allgather,2048,1,28.941,0.000e+00
+# sample,allgather,2048,2,28.777,0.000e+00
+          2048          512        1      28.86       0.07       0.06    0.0e+00
+# selected,allgather,4096,serial-local
+# sample,allgather,4096,1,29.199,0.000e+00
+# sample,allgather,4096,2,29.448,0.000e+00
+          4096         1024        1      29.32       0.14       0.12    0.0e+00
+# selected,allgather,8192,serial-local
+# sample,allgather,8192,1,30.415,0.000e+00
+# sample,allgather,8192,2,29.110,0.000e+00
+          8192         2048        1      29.76       0.28       0.24    0.0e+00
+# selected,allgather,16384,serial-local
+# sample,allgather,16384,1,29.075,0.000e+00
+# sample,allgather,16384,2,30.122,0.000e+00
+         16384         4096        1      29.60       0.55       0.48    0.0e+00
+# selected,allgather,32768,serial-local
+# sample,allgather,32768,1,31.030,0.000e+00
+# sample,allgather,32768,2,29.543,0.000e+00
+         32768         8192        1      30.29       1.08       0.95    0.0e+00
+# selected,allgather,65536,serial-local
+# sample,allgather,65536,1,36.567,0.000e+00
+# sample,allgather,65536,2,33.453,0.000e+00
+         65536        16384        1      35.01       1.87       1.64    0.0e+00
+# selected,allgather,131072,serial-local
+# sample,allgather,131072,1,37.991,0.000e+00
+# sample,allgather,131072,2,36.083,0.000e+00
+        131072        32768        1      37.04       3.54       3.10    0.0e+00
+# selected,allgather,262144,serial-local
+# sample,allgather,262144,1,41.961,0.000e+00
+# sample,allgather,262144,2,42.434,0.000e+00
+        262144        65536        1      42.20       6.21       5.44    0.0e+00
+# selected,allgather,524288,serial-local
+# sample,allgather,524288,1,58.266,0.000e+00
+# sample,allgather,524288,2,57.309,0.000e+00
+        524288       131072        1      57.79       9.07       7.94    0.0e+00
+# selected,allgather,1048576,serial-local
+# sample,allgather,1048576,1,85.426,0.000e+00
+# sample,allgather,1048576,2,84.732,0.000e+00
+       1048576       262144        1      85.08      12.32      10.78    0.0e+00
+# selected,allgather,2097152,serial-local
+# sample,allgather,2097152,1,168.206,0.000e+00
+# sample,allgather,2097152,2,163.215,0.000e+00
+       2097152       524288        1     165.71      12.66      11.07    0.0e+00
+# selected,allgather,4194304,ring
+# sample,allgather,4194304,1,295.477,0.000e+00
+# sample,allgather,4194304,2,291.521,0.000e+00
+       4194304      1048576        1     293.50      14.29      12.50    0.0e+00
+# selected,allgather,8388608,ring
+# sample,allgather,8388608,1,480.059,0.000e+00
+# sample,allgather,8388608,2,476.462,0.000e+00
+       8388608      2097152        1     478.26      17.54      15.35    0.0e+00
+# selected,allgather,16777216,ring
+# sample,allgather,16777216,1,871.328,0.000e+00
+# sample,allgather,16777216,2,862.507,0.000e+00
+      16777216      4194304        1     866.92      19.35      16.93    0.0e+00

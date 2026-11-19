@@ -1,0 +1,6 @@
+{
+  "correct": true,
+  "scope": "instrumented phase attribution, not acceptance performance",
+  "calls_per_rank": 50,
+  "header_sha256": "99456bf371cce37079418572d607e12789ef2fce51a43e9eafea7c4a4bdb5952"
+}

@@ -1,0 +1,76 @@
+UCCL Lite strict: rank=2 native_nccl_loaded=0
+UCCL Lite strict: rank=3 native_nccl_loaded=0
+UCCL Lite strict: rank=1 native_nccl_loaded=0
+UCCL Lite strict: rank=0 native_nccl_loaded=0
+UCCL Lite strict: rank=4 native_nccl_loaded=0
+UCCL Lite strict: rank=5 native_nccl_loaded=0
+UCCL Lite strict: rank=6 native_nccl_loaded=0
+UCCL Lite strict: rank=7 native_nccl_loaded=0
+# protocol=UCCL per-call preparation; completion includes internal retirement; fixed pointers; reference AG process layout differs
+# dtype=FP32; warmup=20 iterations=10 max_allocation=1073741824
+sample,rs,out,4194304,0,263.342000,0.000e+00
+sample,rs,out,4194304,1,271.416000,0.000e+00
+sample,rs,out,4194304,2,271.217000,0.000e+00
+sample,rs,out,4194304,3,266.181000,0.000e+00
+sample,rs,out,4194304,4,263.289000,0.000e+00
+sample,rs,out,4194304,5,264.661000,0.000e+00
+sample,rs,out,4194304,6,262.815000,0.000e+00
+sample,rs,out,4194304,7,264.313000,0.000e+00
+sample,rs,out,4194304,8,264.532000,0.000e+00
+sample,rs,out,4194304,9,266.295000,0.000e+00
+result,rs,out,4194304,265.806100
+sample,rs,out,8388608,0,501.928000,0.000e+00
+sample,rs,out,8388608,1,504.351000,0.000e+00
+sample,rs,out,8388608,2,502.063000,0.000e+00
+sample,rs,out,8388608,3,501.679000,0.000e+00
+sample,rs,out,8388608,4,500.967000,0.000e+00
+sample,rs,out,8388608,5,501.923000,0.000e+00
+sample,rs,out,8388608,6,503.912000,0.000e+00
+sample,rs,out,8388608,7,515.650000,0.000e+00
+sample,rs,out,8388608,8,501.708000,0.000e+00
+sample,rs,out,8388608,9,502.335000,0.000e+00
+result,rs,out,8388608,503.651600
+sample,rs,out,16777216,0,958.475000,0.000e+00
+sample,rs,out,16777216,1,930.990000,0.000e+00
+sample,rs,out,16777216,2,910.768000,0.000e+00
+sample,rs,out,16777216,3,936.846000,0.000e+00
+sample,rs,out,16777216,4,914.511000,0.000e+00
+sample,rs,out,16777216,5,912.663000,0.000e+00
+sample,rs,out,16777216,6,920.296000,0.000e+00
+sample,rs,out,16777216,7,931.107000,0.000e+00
+sample,rs,out,16777216,8,910.459000,0.000e+00
+sample,rs,out,16777216,9,947.711000,0.000e+00
+result,rs,out,16777216,927.382600
+UCCL Lite strict route: rank=0 op=2 bytes=4194304 calls=30
+UCCL Lite strict route: rank=1 op=2 bytes=4194304 calls=30
+UCCL Lite strict route: rank=1 op=2 bytes=8388608 calls=30
+UCCL Lite strict route: rank=1 op=2 bytes=16777216 calls=30
+UCCL Lite strict: rank=1 fallback=0
+UCCL Lite strict route: rank=2 op=2 bytes=4194304 calls=30
+UCCL Lite strict route: rank=2 op=2 bytes=8388608 calls=30
+UCCL Lite strict route: rank=2 op=2 bytes=16777216 calls=30
+UCCL Lite strict: rank=2 fallback=0
+UCCL Lite strict route: rank=3 op=2 bytes=4194304 calls=30
+UCCL Lite strict route: rank=3 op=2 bytes=8388608 calls=30
+UCCL Lite strict route: rank=3 op=2 bytes=16777216 calls=30
+UCCL Lite strict: rank=3 fallback=0
+UCCL Lite strict route: rank=0 op=2 bytes=8388608 calls=30
+UCCL Lite strict route: rank=0 op=2 bytes=16777216 calls=30
+UCCL Lite strict: rank=0 fallback=0
+UCCL Lite strict route: rank=7 op=2 bytes=4194304 calls=30
+UCCL Lite strict route: rank=7 op=2 bytes=8388608 calls=30
+UCCL Lite strict route: rank=7 op=2 bytes=16777216 calls=30
+UCCL Lite strict: rank=7 fallback=0
+UCCL Lite strict route: rank=6 op=2 bytes=4194304 calls=30
+UCCL Lite strict route: rank=6 op=2 bytes=8388608 calls=30
+UCCL Lite strict route: rank=6 op=2 bytes=16777216 calls=30
+UCCL Lite strict: rank=6 fallback=0
+UCCL Lite strict route: rank=5 op=2 bytes=4194304 calls=30
+UCCL Lite strict route: rank=5 op=2 bytes=8388608 calls=30
+UCCL Lite strict route: rank=5 op=2 bytes=16777216 calls=30
+UCCL Lite strict: rank=5 fallback=0
+UCCL Lite strict route: rank=4 op=2 bytes=4194304 calls=30
+UCCL Lite strict route: rank=4 op=2 bytes=8388608 calls=30
+UCCL Lite strict route: rank=4 op=2 bytes=16777216 calls=30
+UCCL Lite strict: rank=4 fallback=0
+UCCL reference-protocol checks passed

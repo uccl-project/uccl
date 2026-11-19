@@ -1,0 +1,92 @@
+UCCL Lite strict: rank=2 native_nccl_loaded=0
+UCCL Lite strict: rank=3 native_nccl_loaded=0
+UCCL Lite strict: rank=0 native_nccl_loaded=0
+UCCL Lite strict: rank=1 native_nccl_loaded=0
+# protocol=UCCL per-call preparation; completion includes internal retirement; fixed pointers; reference AG process layout differs
+# dtype=FP32; warmup=20 iterations=10 max_allocation=1073741824
+UCCL Lite strict: rank=5 native_nccl_loaded=0
+UCCL Lite strict: rank=4 native_nccl_loaded=0
+UCCL Lite strict: rank=6 native_nccl_loaded=0
+UCCL Lite strict: rank=7 native_nccl_loaded=0
+sample,ar,in,1048576,0,151.653000,0.000e+00
+sample,ar,in,1048576,1,151.632000,0.000e+00
+sample,ar,in,1048576,2,151.649000,0.000e+00
+sample,ar,in,1048576,3,152.910000,0.000e+00
+sample,ar,in,1048576,4,152.131000,0.000e+00
+sample,ar,in,1048576,5,156.534000,0.000e+00
+sample,ar,in,1048576,6,149.952000,0.000e+00
+sample,ar,in,1048576,7,171.483000,0.000e+00
+sample,ar,in,1048576,8,151.583000,0.000e+00
+sample,ar,in,1048576,9,151.096000,0.000e+00
+result,ar,in,1048576,154.062300
+sample,ar,in,2097152,0,382.557000,0.000e+00
+sample,ar,in,2097152,1,253.876000,0.000e+00
+sample,ar,in,2097152,2,250.495000,0.000e+00
+sample,ar,in,2097152,3,250.516000,0.000e+00
+sample,ar,in,2097152,4,250.778000,0.000e+00
+sample,ar,in,2097152,5,249.745000,0.000e+00
+sample,ar,in,2097152,6,250.121000,0.000e+00
+sample,ar,in,2097152,7,249.590000,0.000e+00
+sample,ar,in,2097152,8,251.343000,0.000e+00
+sample,ar,in,2097152,9,281.623000,0.000e+00
+result,ar,in,2097152,267.064400
+sample,ar,in,4194304,0,451.335000,0.000e+00
+sample,ar,in,4194304,1,448.127000,0.000e+00
+sample,ar,in,4194304,2,501.030000,0.000e+00
+sample,ar,in,4194304,3,450.739000,0.000e+00
+sample,ar,in,4194304,4,448.517000,0.000e+00
+sample,ar,in,4194304,5,455.084000,0.000e+00
+sample,ar,in,4194304,6,452.935000,0.000e+00
+sample,ar,in,4194304,7,450.094000,0.000e+00
+sample,ar,in,4194304,8,451.251000,0.000e+00
+sample,ar,in,4194304,9,451.438000,0.000e+00
+result,ar,in,4194304,456.055000
+UCCL Lite strict route: rank=0 op=3 bytes=1048576 calls=30
+UCCL Lite strict route: rank=0 op=3 bytes=2097152 calls=30
+UCCL Lite strict route: rank=0 op=3 bytes=4194304 calls=30
+UCCL Lite strict: rank=0 fallback=0
+UCCL Lite strict route: rank=3 op=3 bytes=1048576 calls=30
+UCCL Lite strict route: rank=3 op=3 bytes=2097152 calls=30
+UCCL Lite strict route: rank=3 op=3 bytes=4194304 calls=30
+UCCL Lite strict: rank=3 fallback=0
+UCCL Lite graph bindings: rank=3 hits=0 updates=0 recycled=0
+UCCL Lite graph descriptor: rank=3 reused=0 pending=0
+UCCL Lite strict route: rank=2 op=3 bytes=1048576 calls=30
+UCCL Lite strict route: rank=2 op=3 bytes=2097152 calls=30
+UCCL Lite strict route: rank=2 op=3 bytes=4194304 calls=30
+UCCL Lite strict: rank=2 fallback=0
+UCCL Lite graph bindings: rank=2 hits=0 updates=0 recycled=0
+UCCL Lite graph descriptor: rank=2 reused=0 pending=0
+UCCL Lite strict route: rank=1 op=3 bytes=1048576 calls=30
+UCCL Lite strict route: rank=1 op=3 bytes=2097152 calls=30
+UCCL Lite strict route: rank=1 op=3 bytes=4194304 calls=30
+UCCL Lite strict: rank=1 fallback=0
+UCCL Lite graph bindings: rank=1 hits=0 updates=0 recycled=0
+UCCL Lite graph descriptor: rank=1 reused=0 pending=0
+UCCL Lite graph bindings: rank=0 hits=0 updates=0 recycled=0
+UCCL Lite graph descriptor: rank=0 reused=0 pending=0
+UCCL Lite strict route: rank=7 op=3 bytes=1048576 calls=30
+UCCL Lite strict route: rank=7 op=3 bytes=2097152 calls=30
+UCCL Lite strict route: rank=7 op=3 bytes=4194304 calls=30
+UCCL Lite strict: rank=7 fallback=0
+UCCL Lite graph bindings: rank=7 hits=0 updates=0 recycled=0
+UCCL Lite graph descriptor: rank=7 reused=0 pending=0
+UCCL Lite strict route: rank=6 op=3 bytes=1048576 calls=30
+UCCL Lite strict route: rank=6 op=3 bytes=2097152 calls=30
+UCCL Lite strict route: rank=6 op=3 bytes=4194304 calls=30
+UCCL Lite strict: rank=6 fallback=0
+UCCL Lite graph bindings: rank=6 hits=0 updates=0 recycled=0
+UCCL Lite graph descriptor: rank=6 reused=0 pending=0
+UCCL Lite strict route: rank=4 op=3 bytes=1048576 calls=30
+UCCL Lite strict route: rank=4 op=3 bytes=2097152 calls=30
+UCCL Lite strict route: rank=4 op=3 bytes=4194304 calls=30
+UCCL Lite strict: rank=4 fallback=0
+UCCL Lite graph bindings: rank=4 hits=0 updates=0 recycled=0
+UCCL Lite graph descriptor: rank=4 reused=0 pending=0
+UCCL Lite strict route: rank=5 op=3 bytes=1048576 calls=30
+UCCL Lite strict route: rank=5 op=3 bytes=2097152 calls=30
+UCCL Lite strict route: rank=5 op=3 bytes=4194304 calls=30
+UCCL Lite strict: rank=5 fallback=0
+UCCL Lite graph bindings: rank=5 hits=0 updates=0 recycled=0
+UCCL Lite graph descriptor: rank=5 reused=0 pending=0
+UCCL reference-protocol checks passed

@@ -1,0 +1,6 @@
+{
+  "threshold": 0.05,
+  "passed": true,
+  "rows": 90,
+  "failures": []
+}

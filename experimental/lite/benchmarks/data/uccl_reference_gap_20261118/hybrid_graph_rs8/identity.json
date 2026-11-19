@@ -1,0 +1,5 @@
+{
+  "binary": "build/uccl_hybrid_graph_rs8/nccl_lite/libuccl_lite_nccl_strict.so",
+  "sha256": "468d1a723c004428abd67f3189f861999f5b2d3a4354497e659dfb7e2cc92c47",
+  "scope": "AR-only performance follow-up plus mixed ABI; not a new complete 126-row timing matrix"
+}

@@ -1,0 +1,8 @@
+[
+  "make",
+  "-j2",
+  "nccl-mscclpp-strict",
+  "build/nccl_lite/mscclpp_strict_abi_medium128_check",
+  "MSCCLPP_IB_BUILD=/home/zhongjie/third_party/mscclpp/build-ib-pcieccl",
+  "MPICXX=/usr/mpi/gcc/openmpi-4.1.7rc1/bin/mpicxx"
+]

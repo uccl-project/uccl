@@ -1,0 +1,16 @@
+[
+  {
+    "variant": "uccl_rs128_prefix",
+    "AG8MiB_samples": 180,
+    "AG8MiB_above700us": 2,
+    "AG16MiB_samples": 180,
+    "AG16MiB_above1000us": 3
+  },
+  {
+    "variant": "uccl_query_completion",
+    "AG8MiB_samples": 180,
+    "AG8MiB_above700us": 0,
+    "AG16MiB_samples": 180,
+    "AG16MiB_above1000us": 1
+  }
+]

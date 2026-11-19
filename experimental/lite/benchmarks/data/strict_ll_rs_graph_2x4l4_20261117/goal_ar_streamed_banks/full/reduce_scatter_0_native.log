@@ -1,0 +1,44 @@
+# nccl-tests version 2.19.7 nccl-headers=22807 nccl-library=22807
+# Collective test starting: reduce_scatter_perf
+# nThread 1 nGpus 1 minBytes 1024 maxBytes 1073741824 step: 2(factor) warmup iters: 5 iters: 20 agg iters: 1 validation: 1 graph: 0 unalign: 0
+#
+# Using devices
+#  Rank  0 Group  0 Pid 3106195 on mibura-sky-test-02 device  0 [0000:4a:00] NVIDIA L4
+#  Rank  1 Group  0 Pid 3106196 on mibura-sky-test-02 device  1 [0000:61:00] NVIDIA L4
+#  Rank  2 Group  0 Pid 3106197 on mibura-sky-test-02 device  2 [0000:ca:00] NVIDIA L4
+#  Rank  3 Group  0 Pid 3106198 on mibura-sky-test-02 device  3 [0000:e1:00] NVIDIA L4
+#  Rank  4 Group  0 Pid 2715197 on mibura-sky-test-01 device  0 [0000:4a:00] NVIDIA L4
+#  Rank  5 Group  0 Pid 2715198 on mibura-sky-test-01 device  1 [0000:61:00] NVIDIA L4
+#  Rank  6 Group  0 Pid 2715199 on mibura-sky-test-01 device  2 [0000:ca:00] NVIDIA L4
+#  Rank  7 Group  0 Pid 2715200 on mibura-sky-test-01 device  3 [0000:e1:00] NVIDIA L4
+#
+#                                                              out-of-place                       in-place          
+#       size         count      type   redop    root     time   algbw   busbw  #wrong     time   algbw   busbw  #wrong 
+#        (B)    (elements)                               (us)  (GB/s)  (GB/s)             (us)  (GB/s)  (GB/s)         
+        1024            32     float     sum      -1    20.14    0.05    0.04       0    18.11    0.06    0.05       0
+        2048            64     float     sum      -1    18.77    0.11    0.10       0    18.36    0.11    0.10       0
+        4096           128     float     sum      -1    19.13    0.21    0.19       0    18.90    0.22    0.19       0
+        8192           256     float     sum      -1    19.46    0.42    0.37       0    19.72    0.42    0.36       0
+       16384           512     float     sum      -1    20.36    0.80    0.70       0    20.43    0.80    0.70       0
+       32768          1024     float     sum      -1    22.45    1.46    1.28       0    22.50    1.46    1.27       0
+       65536          2048     float     sum      -1    28.87    2.27    1.99       0    24.98    2.62    2.30       0
+      131072          4096     float     sum      -1    40.51    3.24    2.83       0    33.02    3.97    3.47       0
+      262144          8192     float     sum      -1    54.16    4.84    4.24       0    51.55    5.09    4.45       0
+      524288         16384     float     sum      -1    94.90    5.52    4.83       0   111.27    4.71    4.12       0
+     1048576         32768     float     sum      -1   103.69   10.11    8.85       0   103.30   10.15    8.88       0
+     2097152         65536     float     sum      -1   164.54   12.75   11.15       0   165.54   12.67   11.09       0
+     4194304        131072     float     sum      -1   272.24   15.41   13.48       0   271.98   15.42   13.49       0
+     8388608        262144     float     sum      -1   487.76   17.20   15.05       0   489.70   17.13   14.99       0
+    16777216        524288     float     sum      -1   974.35   17.22   15.07       0   968.95   17.31   15.15       0
+    33554432       1048576     float     sum      -1  1990.71   16.86   14.75       0  1997.03   16.80   14.70       0
+    67108864       2097152     float     sum      -1  3963.77   16.93   14.81       0  3963.00   16.93   14.82       0
+   134217728       4194304     float     sum      -1  7871.18   17.05   14.92       0  7889.67   17.01   14.89       0
+   268435456       8388608     float     sum      -1  15673.9   17.13   14.99       0  15648.9   17.15   15.01       0
+   536870912      16777216     float     sum      -1  31217.7   17.20   15.05       0  31182.3   17.22   15.07       0
+  1073741824      33554432     float     sum      -1  62064.8   17.30   15.14       0  62183.8   17.27   15.11       0
+# Out of bounds values : 0 OK
+# Avg bus bandwidth    : 8.09572 
+#
+# Collective test concluded: reduce_scatter_perf
+#
+

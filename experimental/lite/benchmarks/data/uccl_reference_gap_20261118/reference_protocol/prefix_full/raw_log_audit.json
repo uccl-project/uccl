@@ -1,0 +1,35 @@
+{
+  "scope": "paired protocol only; batch/build/release gates separate",
+  "raw_log_checks_passed": true,
+  "runs": 27,
+  "rows": 126,
+  "zero_slowdown_passed": false,
+  "slower_rows": 4,
+  "failures": [
+    {
+      "operation": "ag",
+      "bytes": 8388608,
+      "layout": "out",
+      "ratio": 1.0502993945761687
+    },
+    {
+      "operation": "ag",
+      "bytes": 16777216,
+      "layout": "in",
+      "ratio": 1.0529013980652187
+    },
+    {
+      "operation": "rs",
+      "bytes": 16777216,
+      "layout": "in",
+      "ratio": 1.0042393877663383
+    },
+    {
+      "operation": "rs",
+      "bytes": 134217728,
+      "layout": "out",
+      "ratio": 1.0008769561235995
+    }
+  ],
+  "candidate_sha256": "c5bf14aa1f0877d767db5285d4259c93ce0901ffc7a865a25826f0ed6105e446"
+}

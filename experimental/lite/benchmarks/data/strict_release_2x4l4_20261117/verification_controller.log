@@ -1,0 +1,5 @@
+Running all_reduce_4_native
+Running all_reduce_5_candidate
+Running all_reduce_6_candidate
+Running all_reduce_7_native
+{'threshold': 0.05, 'passed': True, 'rows': 126, 'failures': []}

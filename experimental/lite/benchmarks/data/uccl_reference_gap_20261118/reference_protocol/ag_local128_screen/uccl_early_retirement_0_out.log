@@ -1,0 +1,331 @@
+UCCL Lite strict: rank=1 native_nccl_loaded=0
+UCCL Lite strict: rank=2 native_nccl_loaded=0
+UCCL Lite strict: rank=3 native_nccl_loaded=0
+UCCL Lite strict: rank=0 native_nccl_loaded=0
+# protocol=UCCL per-call preparation; completion includes internal retirement; fixed pointers; reference AG process layout differs
+# dtype=FP32; warmup=20 iterations=30 max_allocation=1073741824
+UCCL Lite strict: rank=4 native_nccl_loaded=0
+UCCL Lite strict: rank=6 native_nccl_loaded=0
+UCCL Lite strict: rank=5 native_nccl_loaded=0
+UCCL Lite strict: rank=7 native_nccl_loaded=0
+sample,ag,out,1024,0,18.487000,0.000e+00
+sample,ag,out,1024,1,17.889000,0.000e+00
+sample,ag,out,1024,2,24.131000,0.000e+00
+sample,ag,out,1024,3,18.367000,0.000e+00
+sample,ag,out,1024,4,18.569000,0.000e+00
+sample,ag,out,1024,5,23.845000,0.000e+00
+sample,ag,out,1024,6,17.729000,0.000e+00
+sample,ag,out,1024,7,17.864000,0.000e+00
+sample,ag,out,1024,8,21.416000,0.000e+00
+sample,ag,out,1024,9,19.103000,0.000e+00
+sample,ag,out,1024,10,18.610000,0.000e+00
+sample,ag,out,1024,11,18.616000,0.000e+00
+sample,ag,out,1024,12,18.986000,0.000e+00
+sample,ag,out,1024,13,18.898000,0.000e+00
+sample,ag,out,1024,14,18.013000,0.000e+00
+sample,ag,out,1024,15,18.446000,0.000e+00
+sample,ag,out,1024,16,18.657000,0.000e+00
+sample,ag,out,1024,17,18.394000,0.000e+00
+sample,ag,out,1024,18,17.691000,0.000e+00
+sample,ag,out,1024,19,18.444000,0.000e+00
+sample,ag,out,1024,20,19.276000,0.000e+00
+sample,ag,out,1024,21,19.064000,0.000e+00
+sample,ag,out,1024,22,19.049000,0.000e+00
+sample,ag,out,1024,23,18.013000,0.000e+00
+sample,ag,out,1024,24,19.560000,0.000e+00
+sample,ag,out,1024,25,18.387000,0.000e+00
+sample,ag,out,1024,26,19.177000,0.000e+00
+sample,ag,out,1024,27,19.311000,0.000e+00
+sample,ag,out,1024,28,19.131000,0.000e+00
+sample,ag,out,1024,29,17.863000,0.000e+00
+result,ag,out,1024,19.032867
+sample,ag,out,2048,0,19.204000,0.000e+00
+sample,ag,out,2048,1,18.717000,0.000e+00
+sample,ag,out,2048,2,18.785000,0.000e+00
+sample,ag,out,2048,3,19.485000,0.000e+00
+sample,ag,out,2048,4,19.417000,0.000e+00
+sample,ag,out,2048,5,18.151000,0.000e+00
+sample,ag,out,2048,6,18.686000,0.000e+00
+sample,ag,out,2048,7,17.630000,0.000e+00
+sample,ag,out,2048,8,19.170000,0.000e+00
+sample,ag,out,2048,9,18.141000,0.000e+00
+sample,ag,out,2048,10,18.722000,0.000e+00
+sample,ag,out,2048,11,18.163000,0.000e+00
+sample,ag,out,2048,12,18.138000,0.000e+00
+sample,ag,out,2048,13,18.461000,0.000e+00
+sample,ag,out,2048,14,18.196000,0.000e+00
+sample,ag,out,2048,15,19.751000,0.000e+00
+sample,ag,out,2048,16,18.379000,0.000e+00
+sample,ag,out,2048,17,19.034000,0.000e+00
+sample,ag,out,2048,18,17.942000,0.000e+00
+sample,ag,out,2048,19,19.344000,0.000e+00
+sample,ag,out,2048,20,17.712000,0.000e+00
+sample,ag,out,2048,21,18.626000,0.000e+00
+sample,ag,out,2048,22,18.758000,0.000e+00
+sample,ag,out,2048,23,18.986000,0.000e+00
+sample,ag,out,2048,24,18.372000,0.000e+00
+sample,ag,out,2048,25,19.101000,0.000e+00
+sample,ag,out,2048,26,17.799000,0.000e+00
+sample,ag,out,2048,27,18.988000,0.000e+00
+sample,ag,out,2048,28,18.208000,0.000e+00
+sample,ag,out,2048,29,19.147000,0.000e+00
+result,ag,out,2048,18.640433
+sample,ag,out,4096,0,21.564000,0.000e+00
+sample,ag,out,4096,1,22.134000,0.000e+00
+sample,ag,out,4096,2,18.657000,0.000e+00
+sample,ag,out,4096,3,18.499000,0.000e+00
+sample,ag,out,4096,4,18.185000,0.000e+00
+sample,ag,out,4096,5,18.413000,0.000e+00
+sample,ag,out,4096,6,19.445000,0.000e+00
+sample,ag,out,4096,7,17.611000,0.000e+00
+sample,ag,out,4096,8,19.009000,0.000e+00
+sample,ag,out,4096,9,19.370000,0.000e+00
+sample,ag,out,4096,10,18.709000,0.000e+00
+sample,ag,out,4096,11,18.097000,0.000e+00
+sample,ag,out,4096,12,18.655000,0.000e+00
+sample,ag,out,4096,13,18.870000,0.000e+00
+sample,ag,out,4096,14,18.472000,0.000e+00
+sample,ag,out,4096,15,18.996000,0.000e+00
+sample,ag,out,4096,16,18.164000,0.000e+00
+sample,ag,out,4096,17,24.037000,0.000e+00
+sample,ag,out,4096,18,18.890000,0.000e+00
+sample,ag,out,4096,19,18.777000,0.000e+00
+sample,ag,out,4096,20,21.288000,0.000e+00
+sample,ag,out,4096,21,18.587000,0.000e+00
+sample,ag,out,4096,22,18.926000,0.000e+00
+sample,ag,out,4096,23,20.247000,0.000e+00
+sample,ag,out,4096,24,18.421000,0.000e+00
+sample,ag,out,4096,25,19.128000,0.000e+00
+sample,ag,out,4096,26,18.040000,0.000e+00
+sample,ag,out,4096,27,19.233000,0.000e+00
+sample,ag,out,4096,28,18.320000,0.000e+00
+sample,ag,out,4096,29,18.602000,0.000e+00
+result,ag,out,4096,19.178200
+sample,ag,out,8192,0,20.286000,0.000e+00
+sample,ag,out,8192,1,20.982000,0.000e+00
+sample,ag,out,8192,2,23.213000,0.000e+00
+sample,ag,out,8192,3,20.521000,0.000e+00
+sample,ag,out,8192,4,20.193000,0.000e+00
+sample,ag,out,8192,5,22.029000,0.000e+00
+sample,ag,out,8192,6,20.654000,0.000e+00
+sample,ag,out,8192,7,20.915000,0.000e+00
+sample,ag,out,8192,8,20.939000,0.000e+00
+sample,ag,out,8192,9,20.542000,0.000e+00
+sample,ag,out,8192,10,20.699000,0.000e+00
+sample,ag,out,8192,11,20.336000,0.000e+00
+sample,ag,out,8192,12,20.486000,0.000e+00
+sample,ag,out,8192,13,20.928000,0.000e+00
+sample,ag,out,8192,14,20.442000,0.000e+00
+sample,ag,out,8192,15,20.614000,0.000e+00
+sample,ag,out,8192,16,22.452000,0.000e+00
+sample,ag,out,8192,17,20.638000,0.000e+00
+sample,ag,out,8192,18,20.589000,0.000e+00
+sample,ag,out,8192,19,20.701000,0.000e+00
+sample,ag,out,8192,20,21.151000,0.000e+00
+sample,ag,out,8192,21,20.236000,0.000e+00
+sample,ag,out,8192,22,20.795000,0.000e+00
+sample,ag,out,8192,23,22.125000,0.000e+00
+sample,ag,out,8192,24,21.006000,0.000e+00
+sample,ag,out,8192,25,22.610000,0.000e+00
+sample,ag,out,8192,26,19.583000,0.000e+00
+sample,ag,out,8192,27,21.507000,0.000e+00
+sample,ag,out,8192,28,20.644000,0.000e+00
+sample,ag,out,8192,29,20.308000,0.000e+00
+result,ag,out,8192,20.937467
+sample,ag,out,16384,0,22.609000,0.000e+00
+sample,ag,out,16384,1,25.626000,0.000e+00
+sample,ag,out,16384,2,23.256000,0.000e+00
+sample,ag,out,16384,3,27.234000,0.000e+00
+sample,ag,out,16384,4,24.277000,0.000e+00
+sample,ag,out,16384,5,25.291000,0.000e+00
+sample,ag,out,16384,6,23.638000,0.000e+00
+sample,ag,out,16384,7,26.126000,0.000e+00
+sample,ag,out,16384,8,24.614000,0.000e+00
+sample,ag,out,16384,9,24.442000,0.000e+00
+sample,ag,out,16384,10,25.261000,0.000e+00
+sample,ag,out,16384,11,25.256000,0.000e+00
+sample,ag,out,16384,12,24.445000,0.000e+00
+sample,ag,out,16384,13,25.371000,0.000e+00
+sample,ag,out,16384,14,25.249000,0.000e+00
+sample,ag,out,16384,15,24.789000,0.000e+00
+sample,ag,out,16384,16,25.116000,0.000e+00
+sample,ag,out,16384,17,24.711000,0.000e+00
+sample,ag,out,16384,18,25.028000,0.000e+00
+sample,ag,out,16384,19,25.024000,0.000e+00
+sample,ag,out,16384,20,26.038000,0.000e+00
+sample,ag,out,16384,21,25.821000,0.000e+00
+sample,ag,out,16384,22,25.783000,0.000e+00
+sample,ag,out,16384,23,25.970000,0.000e+00
+sample,ag,out,16384,24,24.733000,0.000e+00
+sample,ag,out,16384,25,25.124000,0.000e+00
+sample,ag,out,16384,26,24.224000,0.000e+00
+sample,ag,out,16384,27,24.695000,0.000e+00
+sample,ag,out,16384,28,23.589000,0.000e+00
+sample,ag,out,16384,29,25.237000,0.000e+00
+result,ag,out,16384,24.952567
+sample,ag,out,32768,0,26.441000,0.000e+00
+sample,ag,out,32768,1,25.594000,0.000e+00
+sample,ag,out,32768,2,25.658000,0.000e+00
+sample,ag,out,32768,3,25.403000,0.000e+00
+sample,ag,out,32768,4,26.322000,0.000e+00
+sample,ag,out,32768,5,25.761000,0.000e+00
+sample,ag,out,32768,6,25.599000,0.000e+00
+sample,ag,out,32768,7,24.973000,0.000e+00
+sample,ag,out,32768,8,26.007000,0.000e+00
+sample,ag,out,32768,9,29.728000,0.000e+00
+sample,ag,out,32768,10,25.768000,0.000e+00
+sample,ag,out,32768,11,25.961000,0.000e+00
+sample,ag,out,32768,12,31.916000,0.000e+00
+sample,ag,out,32768,13,25.020000,0.000e+00
+sample,ag,out,32768,14,25.016000,0.000e+00
+sample,ag,out,32768,15,25.979000,0.000e+00
+sample,ag,out,32768,16,25.698000,0.000e+00
+sample,ag,out,32768,17,25.373000,0.000e+00
+sample,ag,out,32768,18,24.884000,0.000e+00
+sample,ag,out,32768,19,26.555000,0.000e+00
+sample,ag,out,32768,20,26.479000,0.000e+00
+sample,ag,out,32768,21,25.198000,0.000e+00
+sample,ag,out,32768,22,24.876000,0.000e+00
+sample,ag,out,32768,23,25.191000,0.000e+00
+sample,ag,out,32768,24,25.482000,0.000e+00
+sample,ag,out,32768,25,25.107000,0.000e+00
+sample,ag,out,32768,26,26.992000,0.000e+00
+sample,ag,out,32768,27,25.506000,0.000e+00
+sample,ag,out,32768,28,26.229000,0.000e+00
+sample,ag,out,32768,29,30.976000,0.000e+00
+result,ag,out,32768,26.189733
+sample,ag,out,65536,0,29.653000,0.000e+00
+sample,ag,out,65536,1,28.793000,0.000e+00
+sample,ag,out,65536,2,29.774000,0.000e+00
+sample,ag,out,65536,3,29.773000,0.000e+00
+sample,ag,out,65536,4,29.216000,0.000e+00
+sample,ag,out,65536,5,28.860000,0.000e+00
+sample,ag,out,65536,6,29.323000,0.000e+00
+sample,ag,out,65536,7,29.101000,0.000e+00
+sample,ag,out,65536,8,29.609000,0.000e+00
+sample,ag,out,65536,9,29.149000,0.000e+00
+sample,ag,out,65536,10,29.070000,0.000e+00
+sample,ag,out,65536,11,29.897000,0.000e+00
+sample,ag,out,65536,12,29.633000,0.000e+00
+sample,ag,out,65536,13,29.276000,0.000e+00
+sample,ag,out,65536,14,30.336000,0.000e+00
+sample,ag,out,65536,15,29.808000,0.000e+00
+sample,ag,out,65536,16,29.549000,0.000e+00
+sample,ag,out,65536,17,29.793000,0.000e+00
+sample,ag,out,65536,18,29.595000,0.000e+00
+sample,ag,out,65536,19,29.414000,0.000e+00
+sample,ag,out,65536,20,29.384000,0.000e+00
+sample,ag,out,65536,21,30.279000,0.000e+00
+sample,ag,out,65536,22,29.635000,0.000e+00
+sample,ag,out,65536,23,28.723000,0.000e+00
+sample,ag,out,65536,24,28.535000,0.000e+00
+sample,ag,out,65536,25,28.924000,0.000e+00
+sample,ag,out,65536,26,29.469000,0.000e+00
+sample,ag,out,65536,27,28.672000,0.000e+00
+sample,ag,out,65536,28,29.370000,0.000e+00
+sample,ag,out,65536,29,29.538000,0.000e+00
+result,ag,out,65536,29.405033
+sample,ag,out,131072,0,35.499000,0.000e+00
+sample,ag,out,131072,1,35.882000,0.000e+00
+sample,ag,out,131072,2,35.452000,0.000e+00
+sample,ag,out,131072,3,36.013000,0.000e+00
+sample,ag,out,131072,4,36.925000,0.000e+00
+sample,ag,out,131072,5,36.165000,0.000e+00
+sample,ag,out,131072,6,36.065000,0.000e+00
+sample,ag,out,131072,7,35.226000,0.000e+00
+sample,ag,out,131072,8,35.875000,0.000e+00
+sample,ag,out,131072,9,35.697000,0.000e+00
+sample,ag,out,131072,10,35.709000,0.000e+00
+sample,ag,out,131072,11,35.686000,0.000e+00
+sample,ag,out,131072,12,37.349000,0.000e+00
+sample,ag,out,131072,13,36.072000,0.000e+00
+sample,ag,out,131072,14,38.163000,0.000e+00
+sample,ag,out,131072,15,35.337000,0.000e+00
+sample,ag,out,131072,16,36.194000,0.000e+00
+sample,ag,out,131072,17,36.460000,0.000e+00
+sample,ag,out,131072,18,36.218000,0.000e+00
+sample,ag,out,131072,19,36.841000,0.000e+00
+sample,ag,out,131072,20,36.530000,0.000e+00
+sample,ag,out,131072,21,35.939000,0.000e+00
+sample,ag,out,131072,22,34.850000,0.000e+00
+sample,ag,out,131072,23,37.100000,0.000e+00
+sample,ag,out,131072,24,35.938000,0.000e+00
+sample,ag,out,131072,25,36.812000,0.000e+00
+sample,ag,out,131072,26,34.564000,0.000e+00
+sample,ag,out,131072,27,36.557000,0.000e+00
+sample,ag,out,131072,28,36.281000,0.000e+00
+UCCL Lite strict route: rank=0 op=1 bytes=1024 calls=50
+UCCL Lite strict route: rank=0 op=1 bytes=2048 calls=50
+UCCL Lite strict route: rank=0 op=1 bytes=4096 calls=50
+UCCL Lite strict route: rank=0 op=1 bytes=8192 calls=50
+UCCL Lite strict route: rank=0 op=1 bytes=16384 calls=50
+UCCL Lite strict route: rank=0 op=1 bytes=32768 calls=50
+UCCL Lite strict route: rank=0 op=1 bytes=65536 calls=50
+UCCL Lite strict route: rank=0 op=1 bytes=131072 calls=50
+UCCL Lite strict: rank=0 fallback=0
+UCCL Lite strict route: rank=1 op=1 bytes=1024 calls=50
+UCCL Lite strict route: rank=1 op=1 bytes=2048 calls=50
+UCCL Lite strict route: rank=1 op=1 bytes=4096 calls=50
+UCCL Lite strict route: rank=1 op=1 bytes=8192 calls=50
+UCCL Lite strict route: rank=1 op=1 bytes=16384 calls=50
+UCCL Lite strict route: rank=1 op=1 bytes=32768 calls=50
+UCCL Lite strict route: rank=1 op=1 bytes=65536 calls=50
+UCCL Lite strict route: rank=1 op=1 bytes=131072 calls=50
+UCCL Lite strict: rank=1 fallback=0
+UCCL Lite strict route: rank=3 op=1 bytes=1024 calls=50
+UCCL Lite strict route: rank=3 op=1 bytes=2048 calls=50
+UCCL Lite strict route: rank=3 op=1 bytes=4096 calls=50
+UCCL Lite strict route: rank=3 op=1 bytes=8192 calls=50
+UCCL Lite strict route: rank=3 op=1 bytes=16384 calls=50
+UCCL Lite strict route: rank=3 op=1 bytes=32768 calls=50
+UCCL Lite strict route: rank=3 op=1 bytes=65536 calls=50
+UCCL Lite strict route: rank=3 op=1 bytes=131072 calls=50
+UCCL Lite strict: rank=3 fallback=0
+sample,ag,out,131072,29,35.390000,0.000e+00
+result,ag,out,131072,36.092967
+UCCL Lite strict route: rank=2 op=1 bytes=1024 calls=50
+UCCL Lite strict route: rank=2 op=1 bytes=2048 calls=50
+UCCL Lite strict route: rank=2 op=1 bytes=4096 calls=50
+UCCL Lite strict route: rank=2 op=1 bytes=8192 calls=50
+UCCL Lite strict route: rank=2 op=1 bytes=16384 calls=50
+UCCL Lite strict route: rank=2 op=1 bytes=32768 calls=50
+UCCL Lite strict route: rank=2 op=1 bytes=65536 calls=50
+UCCL Lite strict route: rank=2 op=1 bytes=131072 calls=50
+UCCL Lite strict: rank=2 fallback=0
+UCCL Lite strict route: rank=6 op=1 bytes=1024 calls=50
+UCCL Lite strict route: rank=6 op=1 bytes=2048 calls=50
+UCCL Lite strict route: rank=6 op=1 bytes=4096 calls=50
+UCCL Lite strict route: rank=6 op=1 bytes=8192 calls=50
+UCCL Lite strict route: rank=6 op=1 bytes=16384 calls=50
+UCCL Lite strict route: rank=6 op=1 bytes=32768 calls=50
+UCCL Lite strict route: rank=6 op=1 bytes=65536 calls=50
+UCCL Lite strict route: rank=6 op=1 bytes=131072 calls=50
+UCCL Lite strict: rank=6 fallback=0
+UCCL Lite strict route: rank=7 op=1 bytes=1024 calls=50
+UCCL Lite strict route: rank=7 op=1 bytes=2048 calls=50
+UCCL Lite strict route: rank=7 op=1 bytes=4096 calls=50
+UCCL Lite strict route: rank=7 op=1 bytes=8192 calls=50
+UCCL Lite strict route: rank=7 op=1 bytes=16384 calls=50
+UCCL Lite strict route: rank=7 op=1 bytes=32768 calls=50
+UCCL Lite strict route: rank=7 op=1 bytes=65536 calls=50
+UCCL Lite strict route: rank=7 op=1 bytes=131072 calls=50
+UCCL Lite strict: rank=7 fallback=0
+UCCL Lite strict route: rank=4 op=1 bytes=1024 calls=50
+UCCL Lite strict route: rank=4 op=1 bytes=2048 calls=50
+UCCL Lite strict route: rank=4 op=1 bytes=4096 calls=50
+UCCL Lite strict route: rank=4 op=1 bytes=8192 calls=50
+UCCL Lite strict route: rank=4 op=1 bytes=16384 calls=50
+UCCL Lite strict route: rank=4 op=1 bytes=32768 calls=50
+UCCL Lite strict route: rank=4 op=1 bytes=65536 calls=50
+UCCL Lite strict route: rank=4 op=1 bytes=131072 calls=50
+UCCL Lite strict: rank=4 fallback=0
+UCCL Lite strict route: rank=5 op=1 bytes=1024 calls=50
+UCCL Lite strict route: rank=5 op=1 bytes=2048 calls=50
+UCCL Lite strict route: rank=5 op=1 bytes=4096 calls=50
+UCCL Lite strict route: rank=5 op=1 bytes=8192 calls=50
+UCCL Lite strict route: rank=5 op=1 bytes=16384 calls=50
+UCCL Lite strict route: rank=5 op=1 bytes=32768 calls=50
+UCCL Lite strict route: rank=5 op=1 bytes=65536 calls=50
+UCCL Lite strict route: rank=5 op=1 bytes=131072 calls=50
+UCCL Lite strict: rank=5 fallback=0
+UCCL reference-protocol checks passed

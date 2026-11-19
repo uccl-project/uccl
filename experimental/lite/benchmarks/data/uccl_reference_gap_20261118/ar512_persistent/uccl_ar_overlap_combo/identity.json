@@ -1,0 +1,5 @@
+{
+  "binary": "build/uccl_ar_overlap_combo/nccl_lite/libuccl_lite_nccl_strict.so",
+  "sha256": "a469eccad1f39c36d62166738432ebcc6599421ab72c955f3d947f19abda3dd2",
+  "scope": "fixed experimental build; comparisons to original UCCL are diagnostic, not matched admission"
+}

@@ -1,0 +1,26 @@
+[
+  {
+    "variant": "uccl_graph_single64",
+    "n": 180,
+    "median_sample_us": 196.77100000000002,
+    "p95_sample_us": 201.144,
+    "max_us": 1160.386,
+    "over500_us": 1
+  },
+  {
+    "variant": "uccl_host_spin",
+    "n": 180,
+    "median_sample_us": 195.272,
+    "p95_sample_us": 200.326,
+    "max_us": 223.095,
+    "over500_us": 0
+  },
+  {
+    "variant": "uccl_host_spin_pin",
+    "n": 180,
+    "median_sample_us": 195.66699999999997,
+    "p95_sample_us": 199.776,
+    "max_us": 911.084,
+    "over500_us": 1
+  }
+]

@@ -1,0 +1,42 @@
+# nccl-tests version 2.19.7 nccl-headers=22807 nccl-library=22807
+# Collective test starting: all_gather_perf
+# nThread 1 nGpus 1 minBytes 1024 maxBytes 1048576 step: 2(factor) warmup iters: 2 iters: 5 agg iters: 1 validation: 1 graph: 0 unalign: 1
+#
+# Using devices
+#  Rank  0 Group  0 Pid 2994856 on mibura-sky-test-02 device  0 [0000:4a:00] NVIDIA L4
+#  Rank  1 Group  0 Pid 2994857 on mibura-sky-test-02 device  1 [0000:61:00] NVIDIA L4
+#  Rank  2 Group  0 Pid 2994858 on mibura-sky-test-02 device  2 [0000:ca:00] NVIDIA L4
+#  Rank  3 Group  0 Pid 2994859 on mibura-sky-test-02 device  3 [0000:e1:00] NVIDIA L4
+#  Rank  4 Group  0 Pid 2562740 on mibura-sky-test-01 device  0 [0000:4a:00] NVIDIA L4
+#  Rank  5 Group  0 Pid 2562741 on mibura-sky-test-01 device  1 [0000:61:00] NVIDIA L4
+#  Rank  6 Group  0 Pid 2562742 on mibura-sky-test-01 device  2 [0000:ca:00] NVIDIA L4
+#  Rank  7 Group  0 Pid 2562743 on mibura-sky-test-01 device  3 [0000:e1:00] NVIDIA L4
+#
+#                                                              out-of-place                       in-place          
+#       size         count      type   redop    root     time   algbw   busbw  #wrong     time   algbw   busbw  #wrong 
+#        (B)    (elements)                               (us)  (GB/s)  (GB/s)             (us)  (GB/s)  (GB/s)         
+        1024            32     float    none      -1    39.23    0.03    0.02       0    37.90    0.03    0.02       0
+        2048            64     float    none      -1    38.02    0.05    0.05       0    37.96    0.05    0.05       0
+        4096           128     float    none      -1    38.86    0.11    0.09       0    38.33    0.11    0.09       0
+        8192           256     float    none      -1    40.79    0.20    0.18       0    39.23    0.21    0.18       0
+       16384           512     float    none      -1    42.16    0.39    0.34       0    41.90    0.39    0.34       0
+       32768          1024     float    none      -1    44.82    0.73    0.64       0    45.14    0.73    0.64       0
+       65536          2048     float    none      -1    52.63    1.25    1.09       0    52.61    1.25    1.09       0
+      131072          4096     float    none      -1    68.74    1.91    1.67       0    67.20    1.95    1.71       0
+      262144          8192     float    none      -1    97.82    2.68    2.34       0    95.93    2.73    2.39       0
+      524288         16384     float    none      -1  3323.36    0.16    0.14       0  2926.91    0.18    0.16       0
+     1048576         32768     float    none      -1   181.26    5.78    5.06       0   176.58    5.94    5.20       0
+UCCL Lite MSCCL++: rank=0 AG=144 RS=0 AR=0 fallback=32
+UCCL Lite MSCCL++: rank=3 AG=144 RS=0 AR=0 fallback=32
+UCCL Lite MSCCL++: rank=1 AG=144 RS=0 AR=0 fallback=32
+UCCL Lite MSCCL++: rank=2 AG=144 RS=0 AR=0 fallback=32
+UCCL Lite MSCCL++: rank=7 AG=144 RS=0 AR=0 fallback=32
+UCCL Lite MSCCL++: rank=6 AG=144 RS=0 AR=0 fallback=32
+UCCL Lite MSCCL++: rank=5 AG=144 RS=0 AR=0 fallback=32
+UCCL Lite MSCCL++: rank=4 AG=144 RS=0 AR=0 fallback=32
+# Out of bounds values : 0 OK
+# Avg bus bandwidth    : 1.0675 
+#
+# Collective test concluded: all_gather_perf
+#
+

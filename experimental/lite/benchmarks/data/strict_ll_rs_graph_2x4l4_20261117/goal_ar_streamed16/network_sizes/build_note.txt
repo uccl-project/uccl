@@ -1,0 +1,1 @@
+This first check used the preceding 8-CTA cleanup binary: the incremental test link failed before replacing it. The shared library successfully rebuilt with 16 CTAs. A fresh network_sizes16 run checks the rebuilt test after fixing the Make dependency argument list.

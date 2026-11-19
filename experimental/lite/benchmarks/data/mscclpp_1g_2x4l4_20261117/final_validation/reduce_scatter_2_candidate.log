@@ -1,0 +1,52 @@
+# nccl-tests version 2.19.7 nccl-headers=22807 nccl-library=22807
+# Collective test starting: reduce_scatter_perf
+# nThread 1 nGpus 1 minBytes 1024 maxBytes 1073741824 step: 2(factor) warmup iters: 10 iters: 50 agg iters: 1 validation: 1 graph: 0 unalign: 0
+#
+# Using devices
+#  Rank  0 Group  0 Pid 3009879 on mibura-sky-test-02 device  0 [0000:4a:00] NVIDIA L4
+#  Rank  1 Group  0 Pid 3009880 on mibura-sky-test-02 device  1 [0000:61:00] NVIDIA L4
+#  Rank  2 Group  0 Pid 3009881 on mibura-sky-test-02 device  2 [0000:ca:00] NVIDIA L4
+#  Rank  3 Group  0 Pid 3009882 on mibura-sky-test-02 device  3 [0000:e1:00] NVIDIA L4
+#  Rank  4 Group  0 Pid 2583570 on mibura-sky-test-01 device  0 [0000:4a:00] NVIDIA L4
+#  Rank  5 Group  0 Pid 2583571 on mibura-sky-test-01 device  1 [0000:61:00] NVIDIA L4
+#  Rank  6 Group  0 Pid 2583572 on mibura-sky-test-01 device  2 [0000:ca:00] NVIDIA L4
+#  Rank  7 Group  0 Pid 2583573 on mibura-sky-test-01 device  3 [0000:e1:00] NVIDIA L4
+#
+#                                                              out-of-place                       in-place          
+#       size         count      type   redop    root     time   algbw   busbw  #wrong     time   algbw   busbw  #wrong 
+#        (B)    (elements)                               (us)  (GB/s)  (GB/s)             (us)  (GB/s)  (GB/s)         
+        1024            32     float     sum      -1    18.51    0.06    0.05       0    18.04    0.06    0.05       0
+        2048            64     float     sum      -1    18.05    0.11    0.10       0    18.09    0.11    0.10       0
+        4096           128     float     sum      -1    18.36    0.22    0.20       0    18.31    0.22    0.20       0
+        8192           256     float     sum      -1    19.02    0.43    0.38       0    18.97    0.43    0.38       0
+       16384           512     float     sum      -1    20.09    0.82    0.71       0    20.02    0.82    0.72       0
+       32768          1024     float     sum      -1    21.98    1.49    1.30       0    21.96    1.49    1.31       0
+       65536          2048     float     sum      -1    24.12    2.72    2.38       0    23.75    2.76    2.41       0
+      131072          4096     float     sum      -1    35.46    3.70    3.23       0    32.56    4.03    3.52       0
+      262144          8192     float     sum      -1    44.85    5.84    5.11       0    43.79    5.99    5.24       0
+      524288         16384     float     sum      -1    69.11    7.59    6.64       0    68.46    7.66    6.70       0
+     1048576         32768     float     sum      -1   104.07   10.08    8.82       0   104.25   10.06    8.80       0
+     2097152         65536     float     sum      -1   164.77   12.73   11.14       0   164.97   12.71   11.12       0
+     4194304        131072     float     sum      -1   270.81   15.49   13.55       0   270.11   15.53   13.59       0
+     8388608        262144     float     sum      -1   486.84   17.23   15.08       0   487.17   17.22   15.07       0
+    16777216        524288     float     sum      -1   964.33   17.40   15.22       0   963.08   17.42   15.24       0
+    33554432       1048576     float     sum      -1  2058.13   16.30   14.27       0  2033.79   16.50   14.44       0
+    67108864       2097152     float     sum      -1  4043.72   16.60   14.52       0  4042.76   16.60   14.52       0
+   134217728       4194304     float     sum      -1  8035.12   16.70   14.62       0  8034.78   16.70   14.62       0
+   268435456       8388608     float     sum      -1  16015.0   16.76   14.67       0  16005.2   16.77   14.68       0
+   536870912      16777216     float     sum      -1  31893.9   16.83   14.73       0  31903.7   16.83   14.72       0
+  1073741824      33554432     float     sum      -1  63375.0   16.94   14.82       0  63318.8   16.96   14.84       0
+UCCL Lite MSCCL++: rank=7 AG=0 RS=228 AR=0 fallback=2086
+UCCL Lite MSCCL++: rank=4 AG=0 RS=228 AR=0 fallback=2086
+UCCL Lite MSCCL++: rank=5 AG=0 RS=228 AR=0 fallback=2086
+UCCL Lite MSCCL++: rank=6 AG=0 RS=228 AR=0 fallback=2086
+UCCL Lite MSCCL++: rank=2 AG=0 RS=228 AR=0 fallback=2086
+UCCL Lite MSCCL++: rank=3 AG=0 RS=228 AR=0 fallback=2086
+UCCL Lite MSCCL++: rank=0 AG=0 RS=228 AR=0 fallback=2086
+UCCL Lite MSCCL++: rank=1 AG=0 RS=228 AR=0 fallback=2086
+# Out of bounds values : 0 OK
+# Avg bus bandwidth    : 8.18539 
+#
+# Collective test concluded: reduce_scatter_perf
+#
+

@@ -1,0 +1,17 @@
+{
+  "pid": 3677824,
+  "stage": "complete",
+  "started": 1795012860.4939253,
+  "exit_code": 0,
+  "library_sha256": "f3767e686d738755a44d72443933e02760e40eff60652cb265857a06d02eaba3",
+  "measured_library_sha256": "b0ba7b498fddcd64d5f1788da56c3e581dfe1e3b5b90b4f9f0c8ec3239639398",
+  "component_sha256": "ba7eec9eed49ffcfd8383eae728138aa7c515ecae850334ef27c71413e9e5071",
+  "byte_identical_to_measured": false,
+  "runtime_identical_to_measured": true,
+  "runtime_sha256": "17df8679671df9c7467da4b7f3260ebf9bc3b742d991174fe0220d9dae5e460b",
+  "abi_calls_per_rank": 234,
+  "policy_switch_invalidates": true,
+  "unchanged_policy_no_rebuild": true,
+  "scope": "explicit experimental policy build verification; performance/default admission separate",
+  "finished": 1795013563.5401201
+}

@@ -1,0 +1,40 @@
+UCCL Lite strict: rank=1 native_nccl_loaded=0
+UCCL Lite strict: rank=3 native_nccl_loaded=0
+UCCL Lite strict: rank=0 native_nccl_loaded=0
+UCCL Lite strict: rank=2 native_nccl_loaded=0
+UCCL Lite strict: rank=4 native_nccl_loaded=0
+UCCL Lite strict: rank=6 native_nccl_loaded=0
+UCCL Lite strict: rank=7 native_nccl_loaded=0
+UCCL Lite strict: rank=5 native_nccl_loaded=0
+strict ABI begin lifetime=0 generation=0 bytes=1024 op=1
+strict ABI begin lifetime=0 generation=0 bytes=1024 op=2
+strict ABI begin lifetime=0 generation=0 bytes=1024 op=3
+strict ABI begin lifetime=0 generation=0 bytes=16777216 op=1
+strict ABI begin lifetime=0 generation=0 bytes=16777216 op=2
+strict ABI begin lifetime=0 generation=0 bytes=16777216 op=3
+strict ABI begin lifetime=0 generation=0 bytes=16384 op=1
+strict ABI begin lifetime=0 generation=0 bytes=16384 op=2
+strict ABI begin lifetime=0 generation=0 bytes=16384 op=3
+strict ABI begin lifetime=0 generation=0 bytes=1048576 op=1
+rank 4: an illegal memory access was encountered
+--------------------------------------------------------------------------
+MPI_ABORT was invoked on rank 4 in communicator MPI_COMM_WORLD
+with errorcode 1.
+
+NOTE: invoking MPI_ABORT causes Open MPI to kill all MPI processes.
+You may or may not see output from other processes, depending on
+exactly when Open MPI kills them.
+--------------------------------------------------------------------------
+[mibura-sky-test-02:3075352] PMIX ERROR: UNREACHABLE in file server/pmix_server.c at line 2198
+[mibura-sky-test-02:3075352] PMIX ERROR: UNREACHABLE in file server/pmix_server.c at line 2198
+[mibura-sky-test-02:3075352] PMIX ERROR: UNREACHABLE in file server/pmix_server.c at line 2198
+[mibura-sky-test-02:3075352] PMIX ERROR: UNREACHABLE in file server/pmix_server.c at line 2198
+rank 1: an illegal memory access was encountered
+rank 0: an illegal memory access was encountered
+rank 3: an illegal memory access was encountered
+rank 2: an illegal memory access was encountered
+rank 7: an illegal memory access was encountered
+rank 5: an illegal memory access was encountered
+rank 6: an illegal memory access was encountered
+[mibura-sky-test-02:3075352] 7 more processes have sent help message help-mpi-api.txt / mpi-abort
+[mibura-sky-test-02:3075352] Set MCA parameter "orte_base_help_aggregate" to 0 to see all help / error messages

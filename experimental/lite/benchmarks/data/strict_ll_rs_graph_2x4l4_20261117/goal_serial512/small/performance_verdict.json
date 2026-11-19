@@ -1,0 +1,19 @@
+{
+  "threshold": 0.05,
+  "passed": false,
+  "rows": 60,
+  "failures": [
+    {
+      "operation": "all_gather",
+      "bytes": 65536,
+      "layout": "in-place",
+      "ratio": 1.0704711616571891
+    },
+    {
+      "operation": "all_reduce",
+      "bytes": 65536,
+      "layout": "out-of-place",
+      "ratio": 1.0550837461665488
+    }
+  ]
+}

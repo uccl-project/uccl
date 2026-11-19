@@ -1,0 +1,6 @@
+{
+  "correct": true,
+  "scope": "host completion phase diagnostic, not scored admission",
+  "records_per_rank": 1050,
+  "library_sha256": "457de87514655e359fc17ba326c456faf59020475b44cd21f47ff6b2efccb1aa"
+}

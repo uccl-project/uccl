@@ -1,0 +1,5 @@
+{
+  "binary": "build/uccl_coalesced_packet/nccl_lite/libuccl_lite_nccl_strict.so",
+  "sha256": "5b8f33cc4562e400ac609a099e8826f3181992c5c56fee798b0f52036618304b",
+  "scope": "fixed experimental build; comparisons to original UCCL are diagnostic, not matched admission"
+}

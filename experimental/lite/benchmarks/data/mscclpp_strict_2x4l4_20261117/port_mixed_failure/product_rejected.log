@@ -1,0 +1,100 @@
+# nccl-tests version 2.19.7 nccl-headers=22807 nccl-library=22807
+# Collective test starting: all_reduce_perf
+# nThread 1 nGpus 1 minBytes 1024 maxBytes 1024 step: 1048576(bytes) warmup iters: 1 iters: 1 agg iters: 1 validation: 1 graph: 0 unalign: 0
+#
+# Using devices
+#  Rank  0 Group  0 Pid 3019550 on mibura-sky-test-02 device  0 [0000:4a:00] NVIDIA L4
+#  Rank  1 Group  0 Pid 3019551 on mibura-sky-test-02 device  1 [0000:61:00] NVIDIA L4
+#  Rank  2 Group  0 Pid 3019552 on mibura-sky-test-02 device  2 [0000:ca:00] NVIDIA L4
+#  Rank  3 Group  0 Pid 3019553 on mibura-sky-test-02 device  3 [0000:e1:00] NVIDIA L4
+#  Rank  4 Group  0 Pid 2597387 on mibura-sky-test-01 device  0 [0000:4a:00] NVIDIA L4
+#  Rank  5 Group  0 Pid 2597388 on mibura-sky-test-01 device  1 [0000:61:00] NVIDIA L4
+#  Rank  6 Group  0 Pid 2597389 on mibura-sky-test-01 device  2 [0000:ca:00] NVIDIA L4
+#  Rank  7 Group  0 Pid 2597390 on mibura-sky-test-01 device  3 [0000:e1:00] NVIDIA L4
+UCCL Lite strict: rank=1 native_nccl_loaded=0
+UCCL Lite strict: rank=2 native_nccl_loaded=0
+UCCL Lite strict: rank=3 native_nccl_loaded=0
+UCCL Lite strict: rank=0 native_nccl_loaded=0
+UCCL Lite strict: rank=4 native_nccl_loaded=0
+UCCL Lite strict: rank=7 native_nccl_loaded=0
+UCCL Lite strict: rank=5 native_nccl_loaded=0
+UCCL Lite strict: rank=6 native_nccl_loaded=0
+#
+#                                                              out-of-place                       in-place          
+#       size         count      type   redop    root     time   algbw   busbw  #wrong     time   algbw   busbw  #wrong 
+#        (B)    (elements)                               (us)  (GB/s)  (GB/s)             (us)  (GB/s)  (GB/s)         
+UCCL Lite strict: collective dtype/reduction/extent is outside the strict profile (native NCCL is forbidden)
+UCCL Lite strict: collective dtype/reduction/extent is outside the strict profile (native NCCL is forbidden)
+UCCL Lite strict: collective dtype/reduction/extent is outside the strict profile (native NCCL is forbidden)
+UCCL Lite strict: collective dtype/reduction/extent is outside the strict profile (native NCCL is forbidden)
+mibura-sky-test-02: Test NCCL failure all_reduce.cu:507 'UCCL Lite unsupported usage (fallback forbidden) / '
+ .. mibura-sky-test-02 pid 3019550: Test failure common.cu:597
+ .. mibura-sky-test-02 pid 3019550: Test failure common.cu:928
+ .. mibura-sky-test-02 pid 3019550: Test failure all_reduce.cu:574
+ .. mibura-sky-test-02 pid 3019550: Test failure common.cu:972
+ .. mibura-sky-test-02 pid 3019550: Test failure common.cu:1768
+ .. mibura-sky-test-02 pid 3019550: Test failure common.cu:1454
+mibura-sky-test-02: Test NCCL failure all_reduce.cu:507 'UCCL Lite unsupported usage (fallback forbidden) / '
+ .. mibura-sky-test-02 pid 3019552: Test failure common.cu:597
+ .. mibura-sky-test-02 pid 3019552: Test failure common.cu:928
+ .. mibura-sky-test-02 pid 3019552: Test failure all_reduce.cu:574
+ .. mibura-sky-test-02 pid 3019552: Test failure common.cu:972
+ .. mibura-sky-test-02 pid 3019552: Test failure common.cu:1768
+ .. mibura-sky-test-02 pid 3019552: Test failure common.cu:1454
+mibura-sky-test-02: Test NCCL failure all_reduce.cu:507 'UCCL Lite unsupported usage (fallback forbidden) / '
+ .. mibura-sky-test-02 pid 3019551: Test failure common.cu:597
+ .. mibura-sky-test-02 pid 3019551: Test failure common.cu:928
+ .. mibura-sky-test-02 pid 3019551: Test failure all_reduce.cu:574
+ .. mibura-sky-test-02 pid 3019551: Test failure common.cu:972
+ .. mibura-sky-test-02 pid 3019551: Test failure common.cu:1768
+ .. mibura-sky-test-02 pid 3019551: Test failure common.cu:1454
+mibura-sky-test-02: Test NCCL failure all_reduce.cu:507 'UCCL Lite unsupported usage (fallback forbidden) / '
+ .. mibura-sky-test-02 pid 3019553: Test failure common.cu:597
+ .. mibura-sky-test-02 pid 3019553: Test failure common.cu:928
+ .. mibura-sky-test-02 pid 3019553: Test failure all_reduce.cu:574
+ .. mibura-sky-test-02 pid 3019553: Test failure common.cu:972
+ .. mibura-sky-test-02 pid 3019553: Test failure common.cu:1768
+ .. mibura-sky-test-02 pid 3019553: Test failure common.cu:1454
+UCCL Lite strict: collective dtype/reduction/extent is outside the strict profile (native NCCL is forbidden)
+UCCL Lite strict: collective dtype/reduction/extent is outside the strict profile (native NCCL is forbidden)
+UCCL Lite strict: collective dtype/reduction/extent is outside the strict profile (native NCCL is forbidden)
+UCCL Lite strict: collective dtype/reduction/extent is outside the strict profile (native NCCL is forbidden)
+mibura-sky-test-01: Test NCCL failure all_reduce.cu:507 'UCCL Lite unsupported usage (fallback forbidden) / '
+ .. mibura-sky-test-01 pid 2597387: Test failure common.cu:597
+ .. mibura-sky-test-01 pid 2597387: Test failure common.cu:928
+ .. mibura-sky-test-01 pid 2597387: Test failure all_reduce.cu:574
+ .. mibura-sky-test-01 pid 2597387: Test failure common.cu:972
+ .. mibura-sky-test-01 pid 2597387: Test failure common.cu:1768
+ .. mibura-sky-test-01 pid 2597387: Test failure common.cu:1454
+mibura-sky-test-01: Test NCCL failure all_reduce.cu:507 'UCCL Lite unsupported usage (fallback forbidden) / '
+ .. mibura-sky-test-01 pid 2597388: Test failure common.cu:597
+ .. mibura-sky-test-01 pid 2597388: Test failure common.cu:928
+ .. mibura-sky-test-01 pid 2597388: Test failure all_reduce.cu:574
+ .. mibura-sky-test-01 pid 2597388: Test failure common.cu:972
+ .. mibura-sky-test-01 pid 2597388: Test failure common.cu:1768
+ .. mibura-sky-test-01 pid 2597388: Test failure common.cu:1454
+mibura-sky-test-01: Test NCCL failure all_reduce.cu:507 'UCCL Lite unsupported usage (fallback forbidden) / '
+ .. mibura-sky-test-01 pid 2597389: Test failure common.cu:597
+ .. mibura-sky-test-01 pid 2597389: Test failure common.cu:928
+ .. mibura-sky-test-01 pid 2597389: Test failure all_reduce.cu:574
+ .. mibura-sky-test-01 pid 2597389: Test failure common.cu:972
+ .. mibura-sky-test-01 pid 2597389: Test failure common.cu:1768
+ .. mibura-sky-test-01 pid 2597389: Test failure common.cu:1454
+mibura-sky-test-01: Test NCCL failure all_reduce.cu:507 'UCCL Lite unsupported usage (fallback forbidden) / '
+ .. mibura-sky-test-01 pid 2597390: Test failure common.cu:597
+ .. mibura-sky-test-01 pid 2597390: Test failure common.cu:928
+ .. mibura-sky-test-01 pid 2597390: Test failure all_reduce.cu:574
+ .. mibura-sky-test-01 pid 2597390: Test failure common.cu:972
+ .. mibura-sky-test-01 pid 2597390: Test failure common.cu:1768
+ .. mibura-sky-test-01 pid 2597390: Test failure common.cu:1454
+--------------------------------------------------------------------------
+Primary job  terminated normally, but 1 process returned
+a non-zero exit code. Per user-direction, the job has been aborted.
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+mpirun detected that one or more processes exited with non-zero status, thus causing
+the job to be terminated. The first process to do so was:
+
+  Process name: [[27527,1],6]
+  Exit code:    3
+--------------------------------------------------------------------------

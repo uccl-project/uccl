@@ -1,0 +1,5 @@
+{
+  "binary": "build/uccl_warp_publisher/nccl_lite/libuccl_lite_nccl_strict.so",
+  "sha256": "ac4c463e187f9b0fae6f0d818ee07453259eadb3bcc683d98af880f9907dc708",
+  "scope": "fixed experimental build; comparisons to original UCCL are diagnostic, not matched admission"
+}

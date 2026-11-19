@@ -1,0 +1,29 @@
+{
+  "scope": "one fixed experimental library, unchanged nccl-tests, cross-harness UCCL diagnostic only",
+  "matched_admission": false,
+  "baseline": "fresh original README UCCL; no native baseline or fallback",
+  "warmup": 20,
+  "iterations": 30,
+  "repetitions": 3,
+  "dtype": "FP32 SUM (AR/RS), copy (AG)",
+  "timing": "maximum-rank host enqueue/completion batch means",
+  "policy": "compiled policy, no best-per-size envelope",
+  "library_sha256": "f048c3d1529130a6b02856663464f553ed1355051698a56a7d442a98ccc36f50",
+  "operations": {
+    "ag": {
+      "rows": 42,
+      "slower_rows": 0,
+      "worst_ratio": 0.9552292299941506
+    },
+    "ar": {
+      "rows": 42,
+      "slower_rows": 0,
+      "worst_ratio": 0.9665116958346498
+    },
+    "rs": {
+      "rows": 42,
+      "slower_rows": 0,
+      "worst_ratio": 0.9968894353013981
+    }
+  }
+}

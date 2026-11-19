@@ -1,0 +1,16 @@
+{
+  "Makefile": "ac88ec406c634592aae54ffe2c60825dc33bc010eb974c2492ed5823022e66c2",
+  "include/uccl_lite/collectives.h": "cf715b9b5b9bec2a87efbe1db3b6476d0028115aa8dca47415a5a1060c41984a",
+  "src/multinode/device_collectives.cuh": "8a0e8248d06015260ba7372d3df89cceb8e122be6a83789925d9be292f2a44f1",
+  "src/multinode/algorithm_transport.h": "9811d8135bece79924759ae8616495a02c01f47eb36993ceb2697182089615b4",
+  "src/multinode/mscclpp_backend.cu": "278e1ab56770f0a0233a8d5ee6a2abf41359d408e9ea44f0618202e449c8250d",
+  "src/collectives/multinode_allreduce.cu": "321d4b590bbe876ff2516ffbc59b9bf3c4016a9051db4d7525edaf3af0282a58",
+  "integration/nccl_lite/mscclpp_strict.cc": "5096858a9a6ed54b8ea29a0956150508ae7933539fe131b14450cb1c5c86dff0",
+  "integration/nccl_lite/mscclpp_exports.version": "12cd15cce8149d0b47214e8bd9a675350b635cc996b62c64c104b75fb3ad718e",
+  "integration/nccl_lite/mscclpp_profile.py": "d3065e29f634615504336ad9f1161b7f632ead5acc5c4810dfab4ff9df3cd062",
+  "integration/nccl_lite/dropin_profile.py": "c5ff837424e7670f45221491e7e813f5549c0d6d69319d3a2b918181e663719d",
+  "integration/nccl_lite/host_control.h": "f98f7afeabc8741f41a0b9a9d9ca4c80f8c8fe39a433caefcd2015a8e8d42403",
+  "tests/nccl_mscclpp/strict_abi.cu": "7abbdf79b9faafe236791fadf93dac63bc9fe3fe76ec08fb149abf8d5316c1f1",
+  "tests/nccl_mscclpp/run.py": "f327e51356583e7bd54b675268f90809950459d175be8404792fc46f96284732",
+  "tests/nccl_mscclpp/report.py": "5b0af54b04f8b29acc557df58596f60f7ea7b299d8e08b6081215ac4c36f8c9a"
+}

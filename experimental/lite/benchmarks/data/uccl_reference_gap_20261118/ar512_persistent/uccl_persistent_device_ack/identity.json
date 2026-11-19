@@ -1,0 +1,4 @@
+{
+  "binary": "build/uccl_persistent_device_ack/nccl_lite/libuccl_lite_nccl_strict.so",
+  "sha256": "6b3ccebb944453b4bf2476c2d218bab3e919cb3828758b0e928c2800cbfd49db"
+}

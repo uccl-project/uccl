@@ -1,0 +1,229 @@
+{
+  "threshold": 0.05,
+  "passed": false,
+  "rows": 126,
+  "failures": [
+    {
+      "operation": "all_gather",
+      "bytes": 4096,
+      "layout": "out-of-place",
+      "ratio": 1.1495202558635393
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 4096,
+      "layout": "in-place",
+      "ratio": 1.153658536585366
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 8192,
+      "layout": "out-of-place",
+      "ratio": 1.1804726045183067
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 8192,
+      "layout": "in-place",
+      "ratio": 1.2011509285901125
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 16384,
+      "layout": "out-of-place",
+      "ratio": 1.2998519249753209
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 16384,
+      "layout": "in-place",
+      "ratio": 1.2730609248837776
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 32768,
+      "layout": "out-of-place",
+      "ratio": 1.5026142305069332
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 32768,
+      "layout": "in-place",
+      "ratio": 1.4886338059869457
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 65536,
+      "layout": "out-of-place",
+      "ratio": 1.1542736680720584
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 65536,
+      "layout": "in-place",
+      "ratio": 1.2099391480730224
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 131072,
+      "layout": "out-of-place",
+      "ratio": 1.0961900622917573
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 131072,
+      "layout": "in-place",
+      "ratio": 1.0792281830141792
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 4194304,
+      "layout": "out-of-place",
+      "ratio": 1.179436702075821
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 4194304,
+      "layout": "in-place",
+      "ratio": 1.1769958291722962
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 8388608,
+      "layout": "out-of-place",
+      "ratio": 1.1695185209100105
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 8388608,
+      "layout": "in-place",
+      "ratio": 1.1732110329068628
+    },
+    {
+      "operation": "reduce_scatter",
+      "bytes": 1024,
+      "layout": "out-of-place",
+      "ratio": 1.0616898703792608
+    },
+    {
+      "operation": "reduce_scatter",
+      "bytes": 1024,
+      "layout": "in-place",
+      "ratio": 1.0722070844686649
+    },
+    {
+      "operation": "reduce_scatter",
+      "bytes": 1048576,
+      "layout": "out-of-place",
+      "ratio": 1.062992506647329
+    },
+    {
+      "operation": "reduce_scatter",
+      "bytes": 1048576,
+      "layout": "in-place",
+      "ratio": 1.0623759980643601
+    },
+    {
+      "operation": "reduce_scatter",
+      "bytes": 2097152,
+      "layout": "in-place",
+      "ratio": 1.0504795406031087
+    },
+    {
+      "operation": "reduce_scatter",
+      "bytes": 4194304,
+      "layout": "out-of-place",
+      "ratio": 1.1119345205176419
+    },
+    {
+      "operation": "reduce_scatter",
+      "bytes": 4194304,
+      "layout": "in-place",
+      "ratio": 1.112180550945901
+    },
+    {
+      "operation": "reduce_scatter",
+      "bytes": 8388608,
+      "layout": "out-of-place",
+      "ratio": 1.1262496429591544
+    },
+    {
+      "operation": "reduce_scatter",
+      "bytes": 8388608,
+      "layout": "in-place",
+      "ratio": 1.1333292453601505
+    },
+    {
+      "operation": "all_reduce",
+      "bytes": 1024,
+      "layout": "out-of-place",
+      "ratio": 1.2256121259230472
+    },
+    {
+      "operation": "all_reduce",
+      "bytes": 1024,
+      "layout": "in-place",
+      "ratio": 1.1136567834681044
+    },
+    {
+      "operation": "all_reduce",
+      "bytes": 2048,
+      "layout": "out-of-place",
+      "ratio": 1.1718940936863544
+    },
+    {
+      "operation": "all_reduce",
+      "bytes": 2048,
+      "layout": "in-place",
+      "ratio": 1.1700347009593797
+    },
+    {
+      "operation": "all_reduce",
+      "bytes": 4096,
+      "layout": "out-of-place",
+      "ratio": 1.1973516273133376
+    },
+    {
+      "operation": "all_reduce",
+      "bytes": 4096,
+      "layout": "in-place",
+      "ratio": 1.199418698530599
+    },
+    {
+      "operation": "all_reduce",
+      "bytes": 65536,
+      "layout": "out-of-place",
+      "ratio": 1.088987099856665
+    },
+    {
+      "operation": "all_reduce",
+      "bytes": 65536,
+      "layout": "in-place",
+      "ratio": 1.0845668527056542
+    },
+    {
+      "operation": "all_reduce",
+      "bytes": 4194304,
+      "layout": "out-of-place",
+      "ratio": 1.10506405472001
+    },
+    {
+      "operation": "all_reduce",
+      "bytes": 4194304,
+      "layout": "in-place",
+      "ratio": 1.1078755179912199
+    },
+    {
+      "operation": "all_reduce",
+      "bytes": 8388608,
+      "layout": "out-of-place",
+      "ratio": 1.135198868970697
+    },
+    {
+      "operation": "all_reduce",
+      "bytes": 8388608,
+      "layout": "in-place",
+      "ratio": 1.1336431729490144
+    }
+  ]
+}

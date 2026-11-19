@@ -1,0 +1,6 @@
+{
+  "binary_sha256": "c27b86c82128b39365613c4c2615d1398256ca19d056433832d91a1846bd7e6d",
+  "calls_per_rank": 54,
+  "lifetimes": 2,
+  "passed": true
+}

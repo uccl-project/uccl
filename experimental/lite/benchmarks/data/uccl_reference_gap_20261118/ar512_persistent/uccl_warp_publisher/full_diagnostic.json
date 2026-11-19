@@ -1,0 +1,22 @@
+{
+  "matched_admission": false,
+  "scope": "one fixed binary; three full sweeps per operation; original UCCL harness conventions differ",
+  "library_sha256": "ac4c463e187f9b0fae6f0d818ee07453259eadb3bcc683d98af880f9907dc708",
+  "operations": {
+    "ag": {
+      "rows": 42,
+      "slower_rows": 4,
+      "worst_ratio": 1.065258365890542
+    },
+    "ar": {
+      "rows": 42,
+      "slower_rows": 0,
+      "worst_ratio": 0.9794387345059345
+    },
+    "rs": {
+      "rows": 42,
+      "slower_rows": 0,
+      "worst_ratio": 0.997407790355208
+    }
+  }
+}

@@ -1,0 +1,20 @@
+/usr/local/cuda/bin/nvcc -O3 -arch=sm_89 -MMD -MP  -std=c++20 -Iinclude -I/home/zhongjie/third_party/mscclpp/include -I/home/zhongjie/third_party/mscclpp/build-ib-pcieccl/include -I/usr/mpi/gcc/openmpi-4.1.7rc1/include -I/usr/mpi/gcc/openmpi-4.1.7rc1/include/openmpi -I/usr/mpi/gcc/openmpi-4.1.7rc1/include/openmpi/opal/mca/hwloc/hwloc201/hwloc/include -I/usr/mpi/gcc/openmpi-4.1.7rc1/include/openmpi/opal/mca/event/libevent2022/libevent -I/usr/mpi/gcc/openmpi-4.1.7rc1/include/openmpi/opal/mca/event/libevent2022/libevent/include src/collectives/multinode_allreduce.cu -o build/mscclpp_compile/uccl_lite_multinode_allreduce -L/home/zhongjie/third_party/mscclpp/build-ib-pcieccl/lib -lmscclpp -Xlinker -rpath=/home/zhongjie/third_party/mscclpp/build-ib-pcieccl/lib -L/usr/mpi/gcc/openmpi-4.1.7rc1/lib -Xlinker -rpath -Xlinker /usr/mpi/gcc/openmpi-4.1.7rc1/lib -Xlinker --enable-new-dtags -lmpi -lcudart -lpthread
+/usr/local/cuda/bin/nvcc -O3 -arch=sm_89 -MMD -MP  -std=c++20 -Iinclude -I/home/zhongjie/third_party/mscclpp/include -I/home/zhongjie/third_party/mscclpp/build-ib-pcieccl/include -I/usr/mpi/gcc/openmpi-4.1.7rc1/include -I/usr/mpi/gcc/openmpi-4.1.7rc1/include/openmpi -I/usr/mpi/gcc/openmpi-4.1.7rc1/include/openmpi/opal/mca/hwloc/hwloc201/hwloc/include -I/usr/mpi/gcc/openmpi-4.1.7rc1/include/openmpi/opal/mca/event/libevent2022/libevent -I/usr/mpi/gcc/openmpi-4.1.7rc1/include/openmpi/opal/mca/event/libevent2022/libevent/include src/collectives/multinode_cpu_router.cu -o build/mscclpp_compile/uccl_lite_multinode_cpu_router -L/home/zhongjie/third_party/mscclpp/build-ib-pcieccl/lib -lmscclpp -Xlinker -rpath=/home/zhongjie/third_party/mscclpp/build-ib-pcieccl/lib -L/usr/mpi/gcc/openmpi-4.1.7rc1/lib -Xlinker -rpath -Xlinker /usr/mpi/gcc/openmpi-4.1.7rc1/lib -Xlinker --enable-new-dtags -lmpi -lcudart -lpthread
+src/collectives/multinode_cpu_router.cu(124): error: no instance of function template "uccl_lite::multinode_kernels::localAllGatherPiece" matches the argument list
+            argument types are: (uccl_lite::multinode_kernels::PortChan, uccl_lite::multinode_kernels::PortChan, float *, size_t, int, size_t, size_t, size_t, int)
+    localAllGatherPiece(localSend, localRecv, data, nelem, ringPos, pieceOff, len,
+    ^
+src/collectives/../multinode/device_collectives.cuh(304): note #3322-D: number of parameters of function template "uccl_lite::multinode_kernels::localAllGatherPiece" does not match the call
+  __attribute__((device)) void localAllGatherPiece(LocalChan send, LocalChan recv, float* data,
+                               ^
+
+src/collectives/multinode_cpu_router.cu(138): error: no instance of function template "uccl_lite::multinode_kernels::localAllGatherPiece" matches the argument list
+            argument types are: (uccl_lite::multinode_kernels::PortChan, uccl_lite::multinode_kernels::PortChan, float *, size_t, int, size_t, size_t, size_t, int)
+    localAllGatherPiece(localSend, localRecv, data, nelem, ringPos, pieceOff,
+    ^
+src/collectives/../multinode/device_collectives.cuh(304): note #3322-D: number of parameters of function template "uccl_lite::multinode_kernels::localAllGatherPiece" does not match the call
+  __attribute__((device)) void localAllGatherPiece(LocalChan send, LocalChan recv, float* data,
+                               ^
+
+2 errors detected in the compilation of "src/collectives/multinode_cpu_router.cu".
+make: *** [Makefile:77: build/mscclpp_compile/uccl_lite_multinode_cpu_router] Error 2

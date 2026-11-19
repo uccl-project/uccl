@@ -1,0 +1,76 @@
+
+Fatbin elf code:
+================
+arch = sm_89
+code version = [1,7]
+host = linux
+compile_size = 64bit
+
+Resource usage:
+ Common:
+  GLOBAL:16 CONSTANT[4]:8
+ Function _ZN9uccl_lite51_GLOBAL__N__12a0d228_18_mscclpp_backend_cu_1b90b9e716stagedCollectiveILb0EEEvNS_17multinode_kernels16LocalDirectChansEN7mscclpp23PortChannelDeviceHandleEiPcNS2_6LayoutENS_16NetworkOperationEPKjPjmmjb:
+  REG:40 STACK:224 SHARED:0 LOCAL:0 CONSTANT[2]:8 CONSTANT[0]:741 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _ZN9uccl_lite51_GLOBAL__N__12a0d228_18_mscclpp_backend_cu_1b90b9e716stagedCollectiveILb1EEEvNS_17multinode_kernels16LocalDirectChansEN7mscclpp23PortChannelDeviceHandleEiPcNS2_6LayoutENS_16NetworkOperationEPKjPjmmjb:
+  REG:48 STACK:416 SHARED:0 LOCAL:0 CONSTANT[2]:8 CONSTANT[0]:741 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _ZN9uccl_lite51_GLOBAL__N__12a0d228_18_mscclpp_backend_cu_1b90b9e717graphScatterFinalEPKNS0_10GraphInputEmmPKfS5_m:
+  REG:40 STACK:0 SHARED:0 LOCAL:0 CONSTANT[0]:400 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _ZN9uccl_lite51_GLOBAL__N__12a0d228_18_mscclpp_backend_cu_1b90b9e718graphScatterFinishEPKNS0_10GraphInputEmPKfS5_m:
+  REG:28 STACK:0 SHARED:0 LOCAL:0 CONSTANT[0]:392 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _ZN9uccl_lite51_GLOBAL__N__12a0d228_18_mscclpp_backend_cu_1b90b9e714graphAddClientEPfPKNS0_10GraphInputEmPKfm:
+  REG:28 STACK:0 SHARED:0 LOCAL:0 CONSTANT[0]:392 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _ZN9uccl_lite51_GLOBAL__N__12a0d228_18_mscclpp_backend_cu_1b90b9e713setGraphInputEPNS0_10GraphInputEPKvPv:
+  REG:10 STACK:0 SHARED:0 LOCAL:0 CONSTANT[0]:376 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _ZN9uccl_lite51_GLOBAL__N__12a0d228_18_mscclpp_backend_cu_1b90b9e78graphAddEPfPKfS3_m:
+  REG:22 STACK:0 SHARED:0 LOCAL:0 CONSTANT[0]:384 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _ZN9uccl_lite51_GLOBAL__N__12a0d228_18_mscclpp_backend_cu_1b90b9e711graphIbSendEN7mscclpp23PortChannelDeviceHandleEmmm:
+  REG:16 STACK:0 SHARED:0 LOCAL:0 CONSTANT[0]:472 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _ZN9uccl_lite51_GLOBAL__N__12a0d228_18_mscclpp_backend_cu_1b90b9e712graphIbReadyEN7mscclpp23PortChannelDeviceHandleEb:
+  REG:16 STACK:0 SHARED:0 LOCAL:0 CONSTANT[0]:449 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _ZN9uccl_lite51_GLOBAL__N__12a0d228_18_mscclpp_backend_cu_1b90b9e714graphPeerReadyEN7mscclpp25MemoryChannelDeviceHandleES2_:
+  REG:12 STACK:0 SHARED:0 LOCAL:0 CONSTANT[0]:448 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _ZN9uccl_lite51_GLOBAL__N__12a0d228_18_mscclpp_backend_cu_1b90b9e716graphGatherStartEN7mscclpp23PortChannelDeviceHandleEPcNS_17multinode_kernels6LayoutEim:
+  REG:22 STACK:0 SHARED:0 LOCAL:0 CONSTANT[0]:512 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _ZN9uccl_lite51_GLOBAL__N__12a0d228_18_mscclpp_backend_cu_1b90b9e710copyClientEPjPKjm:
+  REG:16 STACK:0 SHARED:0 LOCAL:0 CONSTANT[0]:376 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _ZN9uccl_lite51_GLOBAL__N__12a0d228_18_mscclpp_backend_cu_1b90b9e710reuseLargeENS_17multinode_kernels16LocalDirectChansEN7mscclpp23PortChannelDeviceHandleEi:
+  REG:22 STACK:0 SHARED:0 LOCAL:0 CONSTANT[0]:644 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _ZN9uccl_lite51_GLOBAL__N__12a0d228_18_mscclpp_backend_cu_1b90b9e77drainIbEN7mscclpp23PortChannelDeviceHandleE:
+  REG:16 STACK:0 SHARED:0 LOCAL:0 CONSTANT[0]:448 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _ZN9uccl_lite51_GLOBAL__N__12a0d228_18_mscclpp_backend_cu_1b90b9e721mediumScatterStreamedEN7mscclpp25MemoryChannelDeviceHandleES2_NS1_23PortChannelDeviceHandleEPcNS_17multinode_kernels6LayoutEiimPKjPj:
+  REG:32 STACK:16 SHARED:0 LOCAL:0 CONSTANT[0]:624 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _ZN9uccl_lite9multinode20hostPacketPersistentENS0_16HostPipelineViewEPNS0_16HostPipelineSlotEPKcPc:
+  REG:96 STACK:160 SHARED:0 LOCAL:0 CONSTANT[0]:456 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _ZN9uccl_lite9multinode21hostPacketCooperativeENS0_14HostPacketViewENS0_22CooperativeHostPacketsEiPKcPcm:
+  REG:48 STACK:16 SHARED:0 LOCAL:0 CONSTANT[2]:8 CONSTANT[0]:600 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _ZN9uccl_lite9multinode17hostPacketPublishENS0_14HostPacketViewEiimbim:
+  REG:26 STACK:16 SHARED:0 LOCAL:0 CONSTANT[0]:400 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _ZN9uccl_lite9multinode14hostPacketWaitENS0_14HostPacketViewEiimi:
+  REG:24 STACK:16 SHARED:0 LOCAL:0 CONSTANT[0]:388 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _ZN9uccl_lite17multinode_kernels35hierarchicalReduceScatterDirectRingINS0_14DirectRingChanEEEvT_S3_N7mscclpp23PortChannelDeviceHandleEPfmNS0_6LayoutEiiiS6_:
+  REG:58 STACK:16 SHARED:0 LOCAL:0 CONSTANT[0]:624 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _ZN9uccl_lite17multinode_kernels29hierarchicalReduceScatterRingINS0_14DirectRingChanEEEvT_S3_N7mscclpp23PortChannelDeviceHandleEPfmNS0_6LayoutEiibiS6_:
+  REG:56 STACK:16 SHARED:0 LOCAL:0 CONSTANT[0]:624 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _ZN9uccl_lite17multinode_kernels25hierarchicalAllGatherRingINS0_14DirectRingChanEEEvT_S3_N7mscclpp23PortChannelDeviceHandleEPfmNS0_6LayoutEiii:
+  REG:38 STACK:16 SHARED:0 LOCAL:0 CONSTANT[0]:612 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _ZN9uccl_lite17multinode_kernels21hierarchicalAllReduceINS0_14DirectRingChanELb1ELb1EEEvT_S3_NS0_12LocalAgChansEN7mscclpp23PortChannelDeviceHandleEPfmNS0_6LayoutEiiiibPKjPjb:
+  REG:64 STACK:0 SHARED:0 LOCAL:0 CONSTANT[0]:1025 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _ZN9uccl_lite17multinode_kernels21hierarchicalAllReduceINS0_14DirectRingChanELb1ELb0EEEvT_S3_NS0_12LocalAgChansEN7mscclpp23PortChannelDeviceHandleEPfmNS0_6LayoutEiiiibPKjPjb:
+  REG:59 STACK:0 SHARED:0 LOCAL:0 CONSTANT[0]:1025 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _ZN9uccl_lite17multinode_kernels21hierarchicalAllReduceINS0_14DirectRingChanELb0ELb0EEEvT_S3_NS0_12LocalAgChansEN7mscclpp23PortChannelDeviceHandleEPfmNS0_6LayoutEiiiibPKjPjb:
+  REG:53 STACK:0 SHARED:0 LOCAL:0 CONSTANT[2]:8 CONSTANT[0]:1025 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _ZN9uccl_lite17multinode_kernels21packReduceScatterRingEPKfPfm:
+  REG:16 STACK:0 SHARED:0 LOCAL:0 CONSTANT[0]:376 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _ZN9uccl_lite17multinode_kernels25hierarchicalReduceScatterENS0_12LocalAgChansEN7mscclpp23PortChannelDeviceHandleEPfmNS0_6LayoutEii:
+  REG:37 STACK:0 SHARED:0 LOCAL:0 CONSTANT[0]:896 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _ZN9uccl_lite17multinode_kernels21hierarchicalAllGatherENS0_12LocalAgChansEN7mscclpp23PortChannelDeviceHandleEPfmNS0_6LayoutEii:
+  REG:28 STACK:0 SHARED:0 LOCAL:0 CONSTANT[0]:896 TEXTURE:0 SURFACE:0 SAMPLER:0
+
+Fatbin ptx code:
+================
+arch = sm_89
+code version = [8,8]
+host = linux
+compile_size = 64bit
+compressed
+ptxasOptions = 

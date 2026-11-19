@@ -1,0 +1,4379 @@
+{
+  "scope": "explicit experimental candidate; no deployment admission",
+  "hardware": "two hosts, four NVIDIA L4 per host; FP32 SUM",
+  "timing": "nccl-tests maximum-rank host enqueue/completion batch mean; both layouts",
+  "baseline": "native NCCL, identical environment and test binaries",
+  "selection": "one fixed GPU hierarchy, exact candidate extents; no best-of curve",
+  "repetitions": "2 native/candidate/candidate/native rounds; 4 jobs per backend",
+  "warmup": 10,
+  "iterations": 50,
+  "max_bytes": 1073741824,
+  "shapes": [
+    [
+      1,
+      8192
+    ],
+    [
+      1,
+      16384
+    ],
+    [
+      2,
+      8192
+    ],
+    [
+      2,
+      16384
+    ]
+  ],
+  "max_regression": 0.05,
+  "library_sha256": "058494b54e65614f45d0251843a85ae93c8bb275db254c5008d163060199cf35",
+  "commands": [
+    {
+      "label": "all_gather_0_native",
+      "argv": [
+        "/usr/mpi/gcc/openmpi-4.1.7rc1/bin/mpirun",
+        "--host",
+        "10.10.55.2:4,10.10.55.1:4",
+        "-np",
+        "8",
+        "--map-by",
+        "ppr:4:node",
+        "--bind-to",
+        "none",
+        "--mca",
+        "pml",
+        "ob1",
+        "--mca",
+        "btl",
+        "self,vader,tcp",
+        "--mca",
+        "btl_tcp_if_include",
+        "ibp55s0f0",
+        "--mca",
+        "oob_tcp_if_include",
+        "ibp55s0f0",
+        "-x",
+        "UCCL_LITE_MSCCLPP_CONTROL_ROOT",
+        "-x",
+        "NCCL_SOCKET_IFNAME",
+        "-x",
+        "NCCL_IB_HCA",
+        "-x",
+        "MSCCLPP_SOCKET_IFNAME",
+        "-x",
+        "MSCCLPP_IBV_MODE",
+        "-x",
+        "LD_LIBRARY_PATH",
+        "env",
+        "LD_PRELOAD=/home/zhongjie/third_party/nccl/build/lib/libnccl.so.2.28.7",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/all_gather_perf",
+        "-b",
+        "1K",
+        "-e",
+        "1073741824",
+        "-f",
+        "2",
+        "-g",
+        "1",
+        "-d",
+        "float",
+        "-w",
+        "10",
+        "-n",
+        "50",
+        "-c",
+        "1",
+        "-a",
+        "3"
+      ]
+    },
+    {
+      "label": "all_gather_1_candidate",
+      "argv": [
+        "/usr/mpi/gcc/openmpi-4.1.7rc1/bin/mpirun",
+        "--host",
+        "10.10.55.2:4,10.10.55.1:4",
+        "-np",
+        "8",
+        "--map-by",
+        "ppr:4:node",
+        "--bind-to",
+        "none",
+        "--mca",
+        "pml",
+        "ob1",
+        "--mca",
+        "btl",
+        "self,vader,tcp",
+        "--mca",
+        "btl_tcp_if_include",
+        "ibp55s0f0",
+        "--mca",
+        "oob_tcp_if_include",
+        "ibp55s0f0",
+        "-x",
+        "UCCL_LITE_MSCCLPP_CONTROL_ROOT",
+        "-x",
+        "NCCL_SOCKET_IFNAME",
+        "-x",
+        "NCCL_IB_HCA",
+        "-x",
+        "MSCCLPP_SOCKET_IFNAME",
+        "-x",
+        "MSCCLPP_IBV_MODE",
+        "-x",
+        "LD_LIBRARY_PATH",
+        "python3",
+        "-B",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/mscclpp_profile.py",
+        "launch",
+        "--library",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/libuccl_lite_nccl_mscclpp.so",
+        "--real-nccl",
+        "/home/zhongjie/third_party/nccl/build/lib/libnccl.so.2.28.7",
+        "--profile",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/candidate.tsv",
+        "--",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/all_gather_perf",
+        "-b",
+        "1K",
+        "-e",
+        "1073741824",
+        "-f",
+        "2",
+        "-g",
+        "1",
+        "-d",
+        "float",
+        "-w",
+        "10",
+        "-n",
+        "50",
+        "-c",
+        "1",
+        "-a",
+        "3"
+      ]
+    },
+    {
+      "label": "all_gather_2_candidate",
+      "argv": [
+        "/usr/mpi/gcc/openmpi-4.1.7rc1/bin/mpirun",
+        "--host",
+        "10.10.55.2:4,10.10.55.1:4",
+        "-np",
+        "8",
+        "--map-by",
+        "ppr:4:node",
+        "--bind-to",
+        "none",
+        "--mca",
+        "pml",
+        "ob1",
+        "--mca",
+        "btl",
+        "self,vader,tcp",
+        "--mca",
+        "btl_tcp_if_include",
+        "ibp55s0f0",
+        "--mca",
+        "oob_tcp_if_include",
+        "ibp55s0f0",
+        "-x",
+        "UCCL_LITE_MSCCLPP_CONTROL_ROOT",
+        "-x",
+        "NCCL_SOCKET_IFNAME",
+        "-x",
+        "NCCL_IB_HCA",
+        "-x",
+        "MSCCLPP_SOCKET_IFNAME",
+        "-x",
+        "MSCCLPP_IBV_MODE",
+        "-x",
+        "LD_LIBRARY_PATH",
+        "python3",
+        "-B",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/mscclpp_profile.py",
+        "launch",
+        "--library",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/libuccl_lite_nccl_mscclpp.so",
+        "--real-nccl",
+        "/home/zhongjie/third_party/nccl/build/lib/libnccl.so.2.28.7",
+        "--profile",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/candidate.tsv",
+        "--",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/all_gather_perf",
+        "-b",
+        "1K",
+        "-e",
+        "1073741824",
+        "-f",
+        "2",
+        "-g",
+        "1",
+        "-d",
+        "float",
+        "-w",
+        "10",
+        "-n",
+        "50",
+        "-c",
+        "1",
+        "-a",
+        "3"
+      ]
+    },
+    {
+      "label": "all_gather_3_native",
+      "argv": [
+        "/usr/mpi/gcc/openmpi-4.1.7rc1/bin/mpirun",
+        "--host",
+        "10.10.55.2:4,10.10.55.1:4",
+        "-np",
+        "8",
+        "--map-by",
+        "ppr:4:node",
+        "--bind-to",
+        "none",
+        "--mca",
+        "pml",
+        "ob1",
+        "--mca",
+        "btl",
+        "self,vader,tcp",
+        "--mca",
+        "btl_tcp_if_include",
+        "ibp55s0f0",
+        "--mca",
+        "oob_tcp_if_include",
+        "ibp55s0f0",
+        "-x",
+        "UCCL_LITE_MSCCLPP_CONTROL_ROOT",
+        "-x",
+        "NCCL_SOCKET_IFNAME",
+        "-x",
+        "NCCL_IB_HCA",
+        "-x",
+        "MSCCLPP_SOCKET_IFNAME",
+        "-x",
+        "MSCCLPP_IBV_MODE",
+        "-x",
+        "LD_LIBRARY_PATH",
+        "env",
+        "LD_PRELOAD=/home/zhongjie/third_party/nccl/build/lib/libnccl.so.2.28.7",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/all_gather_perf",
+        "-b",
+        "1K",
+        "-e",
+        "1073741824",
+        "-f",
+        "2",
+        "-g",
+        "1",
+        "-d",
+        "float",
+        "-w",
+        "10",
+        "-n",
+        "50",
+        "-c",
+        "1",
+        "-a",
+        "3"
+      ]
+    },
+    {
+      "label": "all_gather_4_native",
+      "argv": [
+        "/usr/mpi/gcc/openmpi-4.1.7rc1/bin/mpirun",
+        "--host",
+        "10.10.55.2:4,10.10.55.1:4",
+        "-np",
+        "8",
+        "--map-by",
+        "ppr:4:node",
+        "--bind-to",
+        "none",
+        "--mca",
+        "pml",
+        "ob1",
+        "--mca",
+        "btl",
+        "self,vader,tcp",
+        "--mca",
+        "btl_tcp_if_include",
+        "ibp55s0f0",
+        "--mca",
+        "oob_tcp_if_include",
+        "ibp55s0f0",
+        "-x",
+        "UCCL_LITE_MSCCLPP_CONTROL_ROOT",
+        "-x",
+        "NCCL_SOCKET_IFNAME",
+        "-x",
+        "NCCL_IB_HCA",
+        "-x",
+        "MSCCLPP_SOCKET_IFNAME",
+        "-x",
+        "MSCCLPP_IBV_MODE",
+        "-x",
+        "LD_LIBRARY_PATH",
+        "env",
+        "LD_PRELOAD=/home/zhongjie/third_party/nccl/build/lib/libnccl.so.2.28.7",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/all_gather_perf",
+        "-b",
+        "1K",
+        "-e",
+        "1073741824",
+        "-f",
+        "2",
+        "-g",
+        "1",
+        "-d",
+        "float",
+        "-w",
+        "10",
+        "-n",
+        "50",
+        "-c",
+        "1",
+        "-a",
+        "3"
+      ]
+    },
+    {
+      "label": "all_gather_5_candidate",
+      "argv": [
+        "/usr/mpi/gcc/openmpi-4.1.7rc1/bin/mpirun",
+        "--host",
+        "10.10.55.2:4,10.10.55.1:4",
+        "-np",
+        "8",
+        "--map-by",
+        "ppr:4:node",
+        "--bind-to",
+        "none",
+        "--mca",
+        "pml",
+        "ob1",
+        "--mca",
+        "btl",
+        "self,vader,tcp",
+        "--mca",
+        "btl_tcp_if_include",
+        "ibp55s0f0",
+        "--mca",
+        "oob_tcp_if_include",
+        "ibp55s0f0",
+        "-x",
+        "UCCL_LITE_MSCCLPP_CONTROL_ROOT",
+        "-x",
+        "NCCL_SOCKET_IFNAME",
+        "-x",
+        "NCCL_IB_HCA",
+        "-x",
+        "MSCCLPP_SOCKET_IFNAME",
+        "-x",
+        "MSCCLPP_IBV_MODE",
+        "-x",
+        "LD_LIBRARY_PATH",
+        "python3",
+        "-B",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/mscclpp_profile.py",
+        "launch",
+        "--library",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/libuccl_lite_nccl_mscclpp.so",
+        "--real-nccl",
+        "/home/zhongjie/third_party/nccl/build/lib/libnccl.so.2.28.7",
+        "--profile",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/candidate.tsv",
+        "--",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/all_gather_perf",
+        "-b",
+        "1K",
+        "-e",
+        "1073741824",
+        "-f",
+        "2",
+        "-g",
+        "1",
+        "-d",
+        "float",
+        "-w",
+        "10",
+        "-n",
+        "50",
+        "-c",
+        "1",
+        "-a",
+        "3"
+      ]
+    },
+    {
+      "label": "all_gather_6_candidate",
+      "argv": [
+        "/usr/mpi/gcc/openmpi-4.1.7rc1/bin/mpirun",
+        "--host",
+        "10.10.55.2:4,10.10.55.1:4",
+        "-np",
+        "8",
+        "--map-by",
+        "ppr:4:node",
+        "--bind-to",
+        "none",
+        "--mca",
+        "pml",
+        "ob1",
+        "--mca",
+        "btl",
+        "self,vader,tcp",
+        "--mca",
+        "btl_tcp_if_include",
+        "ibp55s0f0",
+        "--mca",
+        "oob_tcp_if_include",
+        "ibp55s0f0",
+        "-x",
+        "UCCL_LITE_MSCCLPP_CONTROL_ROOT",
+        "-x",
+        "NCCL_SOCKET_IFNAME",
+        "-x",
+        "NCCL_IB_HCA",
+        "-x",
+        "MSCCLPP_SOCKET_IFNAME",
+        "-x",
+        "MSCCLPP_IBV_MODE",
+        "-x",
+        "LD_LIBRARY_PATH",
+        "python3",
+        "-B",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/mscclpp_profile.py",
+        "launch",
+        "--library",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/libuccl_lite_nccl_mscclpp.so",
+        "--real-nccl",
+        "/home/zhongjie/third_party/nccl/build/lib/libnccl.so.2.28.7",
+        "--profile",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/candidate.tsv",
+        "--",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/all_gather_perf",
+        "-b",
+        "1K",
+        "-e",
+        "1073741824",
+        "-f",
+        "2",
+        "-g",
+        "1",
+        "-d",
+        "float",
+        "-w",
+        "10",
+        "-n",
+        "50",
+        "-c",
+        "1",
+        "-a",
+        "3"
+      ]
+    },
+    {
+      "label": "all_gather_7_native",
+      "argv": [
+        "/usr/mpi/gcc/openmpi-4.1.7rc1/bin/mpirun",
+        "--host",
+        "10.10.55.2:4,10.10.55.1:4",
+        "-np",
+        "8",
+        "--map-by",
+        "ppr:4:node",
+        "--bind-to",
+        "none",
+        "--mca",
+        "pml",
+        "ob1",
+        "--mca",
+        "btl",
+        "self,vader,tcp",
+        "--mca",
+        "btl_tcp_if_include",
+        "ibp55s0f0",
+        "--mca",
+        "oob_tcp_if_include",
+        "ibp55s0f0",
+        "-x",
+        "UCCL_LITE_MSCCLPP_CONTROL_ROOT",
+        "-x",
+        "NCCL_SOCKET_IFNAME",
+        "-x",
+        "NCCL_IB_HCA",
+        "-x",
+        "MSCCLPP_SOCKET_IFNAME",
+        "-x",
+        "MSCCLPP_IBV_MODE",
+        "-x",
+        "LD_LIBRARY_PATH",
+        "env",
+        "LD_PRELOAD=/home/zhongjie/third_party/nccl/build/lib/libnccl.so.2.28.7",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/all_gather_perf",
+        "-b",
+        "1K",
+        "-e",
+        "1073741824",
+        "-f",
+        "2",
+        "-g",
+        "1",
+        "-d",
+        "float",
+        "-w",
+        "10",
+        "-n",
+        "50",
+        "-c",
+        "1",
+        "-a",
+        "3"
+      ]
+    },
+    {
+      "label": "reduce_scatter_0_native",
+      "argv": [
+        "/usr/mpi/gcc/openmpi-4.1.7rc1/bin/mpirun",
+        "--host",
+        "10.10.55.2:4,10.10.55.1:4",
+        "-np",
+        "8",
+        "--map-by",
+        "ppr:4:node",
+        "--bind-to",
+        "none",
+        "--mca",
+        "pml",
+        "ob1",
+        "--mca",
+        "btl",
+        "self,vader,tcp",
+        "--mca",
+        "btl_tcp_if_include",
+        "ibp55s0f0",
+        "--mca",
+        "oob_tcp_if_include",
+        "ibp55s0f0",
+        "-x",
+        "UCCL_LITE_MSCCLPP_CONTROL_ROOT",
+        "-x",
+        "NCCL_SOCKET_IFNAME",
+        "-x",
+        "NCCL_IB_HCA",
+        "-x",
+        "MSCCLPP_SOCKET_IFNAME",
+        "-x",
+        "MSCCLPP_IBV_MODE",
+        "-x",
+        "LD_LIBRARY_PATH",
+        "env",
+        "LD_PRELOAD=/home/zhongjie/third_party/nccl/build/lib/libnccl.so.2.28.7",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/reduce_scatter_perf",
+        "-b",
+        "1K",
+        "-e",
+        "1073741824",
+        "-f",
+        "2",
+        "-g",
+        "1",
+        "-d",
+        "float",
+        "-w",
+        "10",
+        "-n",
+        "50",
+        "-c",
+        "1",
+        "-a",
+        "3"
+      ]
+    },
+    {
+      "label": "reduce_scatter_1_candidate",
+      "argv": [
+        "/usr/mpi/gcc/openmpi-4.1.7rc1/bin/mpirun",
+        "--host",
+        "10.10.55.2:4,10.10.55.1:4",
+        "-np",
+        "8",
+        "--map-by",
+        "ppr:4:node",
+        "--bind-to",
+        "none",
+        "--mca",
+        "pml",
+        "ob1",
+        "--mca",
+        "btl",
+        "self,vader,tcp",
+        "--mca",
+        "btl_tcp_if_include",
+        "ibp55s0f0",
+        "--mca",
+        "oob_tcp_if_include",
+        "ibp55s0f0",
+        "-x",
+        "UCCL_LITE_MSCCLPP_CONTROL_ROOT",
+        "-x",
+        "NCCL_SOCKET_IFNAME",
+        "-x",
+        "NCCL_IB_HCA",
+        "-x",
+        "MSCCLPP_SOCKET_IFNAME",
+        "-x",
+        "MSCCLPP_IBV_MODE",
+        "-x",
+        "LD_LIBRARY_PATH",
+        "python3",
+        "-B",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/mscclpp_profile.py",
+        "launch",
+        "--library",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/libuccl_lite_nccl_mscclpp.so",
+        "--real-nccl",
+        "/home/zhongjie/third_party/nccl/build/lib/libnccl.so.2.28.7",
+        "--profile",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/candidate.tsv",
+        "--",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/reduce_scatter_perf",
+        "-b",
+        "1K",
+        "-e",
+        "1073741824",
+        "-f",
+        "2",
+        "-g",
+        "1",
+        "-d",
+        "float",
+        "-w",
+        "10",
+        "-n",
+        "50",
+        "-c",
+        "1",
+        "-a",
+        "3"
+      ]
+    },
+    {
+      "label": "reduce_scatter_2_candidate",
+      "argv": [
+        "/usr/mpi/gcc/openmpi-4.1.7rc1/bin/mpirun",
+        "--host",
+        "10.10.55.2:4,10.10.55.1:4",
+        "-np",
+        "8",
+        "--map-by",
+        "ppr:4:node",
+        "--bind-to",
+        "none",
+        "--mca",
+        "pml",
+        "ob1",
+        "--mca",
+        "btl",
+        "self,vader,tcp",
+        "--mca",
+        "btl_tcp_if_include",
+        "ibp55s0f0",
+        "--mca",
+        "oob_tcp_if_include",
+        "ibp55s0f0",
+        "-x",
+        "UCCL_LITE_MSCCLPP_CONTROL_ROOT",
+        "-x",
+        "NCCL_SOCKET_IFNAME",
+        "-x",
+        "NCCL_IB_HCA",
+        "-x",
+        "MSCCLPP_SOCKET_IFNAME",
+        "-x",
+        "MSCCLPP_IBV_MODE",
+        "-x",
+        "LD_LIBRARY_PATH",
+        "python3",
+        "-B",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/mscclpp_profile.py",
+        "launch",
+        "--library",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/libuccl_lite_nccl_mscclpp.so",
+        "--real-nccl",
+        "/home/zhongjie/third_party/nccl/build/lib/libnccl.so.2.28.7",
+        "--profile",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/candidate.tsv",
+        "--",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/reduce_scatter_perf",
+        "-b",
+        "1K",
+        "-e",
+        "1073741824",
+        "-f",
+        "2",
+        "-g",
+        "1",
+        "-d",
+        "float",
+        "-w",
+        "10",
+        "-n",
+        "50",
+        "-c",
+        "1",
+        "-a",
+        "3"
+      ]
+    },
+    {
+      "label": "reduce_scatter_3_native",
+      "argv": [
+        "/usr/mpi/gcc/openmpi-4.1.7rc1/bin/mpirun",
+        "--host",
+        "10.10.55.2:4,10.10.55.1:4",
+        "-np",
+        "8",
+        "--map-by",
+        "ppr:4:node",
+        "--bind-to",
+        "none",
+        "--mca",
+        "pml",
+        "ob1",
+        "--mca",
+        "btl",
+        "self,vader,tcp",
+        "--mca",
+        "btl_tcp_if_include",
+        "ibp55s0f0",
+        "--mca",
+        "oob_tcp_if_include",
+        "ibp55s0f0",
+        "-x",
+        "UCCL_LITE_MSCCLPP_CONTROL_ROOT",
+        "-x",
+        "NCCL_SOCKET_IFNAME",
+        "-x",
+        "NCCL_IB_HCA",
+        "-x",
+        "MSCCLPP_SOCKET_IFNAME",
+        "-x",
+        "MSCCLPP_IBV_MODE",
+        "-x",
+        "LD_LIBRARY_PATH",
+        "env",
+        "LD_PRELOAD=/home/zhongjie/third_party/nccl/build/lib/libnccl.so.2.28.7",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/reduce_scatter_perf",
+        "-b",
+        "1K",
+        "-e",
+        "1073741824",
+        "-f",
+        "2",
+        "-g",
+        "1",
+        "-d",
+        "float",
+        "-w",
+        "10",
+        "-n",
+        "50",
+        "-c",
+        "1",
+        "-a",
+        "3"
+      ]
+    },
+    {
+      "label": "reduce_scatter_4_native",
+      "argv": [
+        "/usr/mpi/gcc/openmpi-4.1.7rc1/bin/mpirun",
+        "--host",
+        "10.10.55.2:4,10.10.55.1:4",
+        "-np",
+        "8",
+        "--map-by",
+        "ppr:4:node",
+        "--bind-to",
+        "none",
+        "--mca",
+        "pml",
+        "ob1",
+        "--mca",
+        "btl",
+        "self,vader,tcp",
+        "--mca",
+        "btl_tcp_if_include",
+        "ibp55s0f0",
+        "--mca",
+        "oob_tcp_if_include",
+        "ibp55s0f0",
+        "-x",
+        "UCCL_LITE_MSCCLPP_CONTROL_ROOT",
+        "-x",
+        "NCCL_SOCKET_IFNAME",
+        "-x",
+        "NCCL_IB_HCA",
+        "-x",
+        "MSCCLPP_SOCKET_IFNAME",
+        "-x",
+        "MSCCLPP_IBV_MODE",
+        "-x",
+        "LD_LIBRARY_PATH",
+        "env",
+        "LD_PRELOAD=/home/zhongjie/third_party/nccl/build/lib/libnccl.so.2.28.7",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/reduce_scatter_perf",
+        "-b",
+        "1K",
+        "-e",
+        "1073741824",
+        "-f",
+        "2",
+        "-g",
+        "1",
+        "-d",
+        "float",
+        "-w",
+        "10",
+        "-n",
+        "50",
+        "-c",
+        "1",
+        "-a",
+        "3"
+      ]
+    },
+    {
+      "label": "reduce_scatter_5_candidate",
+      "argv": [
+        "/usr/mpi/gcc/openmpi-4.1.7rc1/bin/mpirun",
+        "--host",
+        "10.10.55.2:4,10.10.55.1:4",
+        "-np",
+        "8",
+        "--map-by",
+        "ppr:4:node",
+        "--bind-to",
+        "none",
+        "--mca",
+        "pml",
+        "ob1",
+        "--mca",
+        "btl",
+        "self,vader,tcp",
+        "--mca",
+        "btl_tcp_if_include",
+        "ibp55s0f0",
+        "--mca",
+        "oob_tcp_if_include",
+        "ibp55s0f0",
+        "-x",
+        "UCCL_LITE_MSCCLPP_CONTROL_ROOT",
+        "-x",
+        "NCCL_SOCKET_IFNAME",
+        "-x",
+        "NCCL_IB_HCA",
+        "-x",
+        "MSCCLPP_SOCKET_IFNAME",
+        "-x",
+        "MSCCLPP_IBV_MODE",
+        "-x",
+        "LD_LIBRARY_PATH",
+        "python3",
+        "-B",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/mscclpp_profile.py",
+        "launch",
+        "--library",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/libuccl_lite_nccl_mscclpp.so",
+        "--real-nccl",
+        "/home/zhongjie/third_party/nccl/build/lib/libnccl.so.2.28.7",
+        "--profile",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/candidate.tsv",
+        "--",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/reduce_scatter_perf",
+        "-b",
+        "1K",
+        "-e",
+        "1073741824",
+        "-f",
+        "2",
+        "-g",
+        "1",
+        "-d",
+        "float",
+        "-w",
+        "10",
+        "-n",
+        "50",
+        "-c",
+        "1",
+        "-a",
+        "3"
+      ]
+    },
+    {
+      "label": "reduce_scatter_6_candidate",
+      "argv": [
+        "/usr/mpi/gcc/openmpi-4.1.7rc1/bin/mpirun",
+        "--host",
+        "10.10.55.2:4,10.10.55.1:4",
+        "-np",
+        "8",
+        "--map-by",
+        "ppr:4:node",
+        "--bind-to",
+        "none",
+        "--mca",
+        "pml",
+        "ob1",
+        "--mca",
+        "btl",
+        "self,vader,tcp",
+        "--mca",
+        "btl_tcp_if_include",
+        "ibp55s0f0",
+        "--mca",
+        "oob_tcp_if_include",
+        "ibp55s0f0",
+        "-x",
+        "UCCL_LITE_MSCCLPP_CONTROL_ROOT",
+        "-x",
+        "NCCL_SOCKET_IFNAME",
+        "-x",
+        "NCCL_IB_HCA",
+        "-x",
+        "MSCCLPP_SOCKET_IFNAME",
+        "-x",
+        "MSCCLPP_IBV_MODE",
+        "-x",
+        "LD_LIBRARY_PATH",
+        "python3",
+        "-B",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/mscclpp_profile.py",
+        "launch",
+        "--library",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/libuccl_lite_nccl_mscclpp.so",
+        "--real-nccl",
+        "/home/zhongjie/third_party/nccl/build/lib/libnccl.so.2.28.7",
+        "--profile",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/candidate.tsv",
+        "--",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/reduce_scatter_perf",
+        "-b",
+        "1K",
+        "-e",
+        "1073741824",
+        "-f",
+        "2",
+        "-g",
+        "1",
+        "-d",
+        "float",
+        "-w",
+        "10",
+        "-n",
+        "50",
+        "-c",
+        "1",
+        "-a",
+        "3"
+      ]
+    },
+    {
+      "label": "reduce_scatter_7_native",
+      "argv": [
+        "/usr/mpi/gcc/openmpi-4.1.7rc1/bin/mpirun",
+        "--host",
+        "10.10.55.2:4,10.10.55.1:4",
+        "-np",
+        "8",
+        "--map-by",
+        "ppr:4:node",
+        "--bind-to",
+        "none",
+        "--mca",
+        "pml",
+        "ob1",
+        "--mca",
+        "btl",
+        "self,vader,tcp",
+        "--mca",
+        "btl_tcp_if_include",
+        "ibp55s0f0",
+        "--mca",
+        "oob_tcp_if_include",
+        "ibp55s0f0",
+        "-x",
+        "UCCL_LITE_MSCCLPP_CONTROL_ROOT",
+        "-x",
+        "NCCL_SOCKET_IFNAME",
+        "-x",
+        "NCCL_IB_HCA",
+        "-x",
+        "MSCCLPP_SOCKET_IFNAME",
+        "-x",
+        "MSCCLPP_IBV_MODE",
+        "-x",
+        "LD_LIBRARY_PATH",
+        "env",
+        "LD_PRELOAD=/home/zhongjie/third_party/nccl/build/lib/libnccl.so.2.28.7",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/reduce_scatter_perf",
+        "-b",
+        "1K",
+        "-e",
+        "1073741824",
+        "-f",
+        "2",
+        "-g",
+        "1",
+        "-d",
+        "float",
+        "-w",
+        "10",
+        "-n",
+        "50",
+        "-c",
+        "1",
+        "-a",
+        "3"
+      ]
+    },
+    {
+      "label": "all_reduce_0_native",
+      "argv": [
+        "/usr/mpi/gcc/openmpi-4.1.7rc1/bin/mpirun",
+        "--host",
+        "10.10.55.2:4,10.10.55.1:4",
+        "-np",
+        "8",
+        "--map-by",
+        "ppr:4:node",
+        "--bind-to",
+        "none",
+        "--mca",
+        "pml",
+        "ob1",
+        "--mca",
+        "btl",
+        "self,vader,tcp",
+        "--mca",
+        "btl_tcp_if_include",
+        "ibp55s0f0",
+        "--mca",
+        "oob_tcp_if_include",
+        "ibp55s0f0",
+        "-x",
+        "UCCL_LITE_MSCCLPP_CONTROL_ROOT",
+        "-x",
+        "NCCL_SOCKET_IFNAME",
+        "-x",
+        "NCCL_IB_HCA",
+        "-x",
+        "MSCCLPP_SOCKET_IFNAME",
+        "-x",
+        "MSCCLPP_IBV_MODE",
+        "-x",
+        "LD_LIBRARY_PATH",
+        "env",
+        "LD_PRELOAD=/home/zhongjie/third_party/nccl/build/lib/libnccl.so.2.28.7",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/all_reduce_perf",
+        "-b",
+        "1K",
+        "-e",
+        "1073741824",
+        "-f",
+        "2",
+        "-g",
+        "1",
+        "-d",
+        "float",
+        "-w",
+        "10",
+        "-n",
+        "50",
+        "-c",
+        "1",
+        "-a",
+        "3"
+      ]
+    },
+    {
+      "label": "all_reduce_1_candidate",
+      "argv": [
+        "/usr/mpi/gcc/openmpi-4.1.7rc1/bin/mpirun",
+        "--host",
+        "10.10.55.2:4,10.10.55.1:4",
+        "-np",
+        "8",
+        "--map-by",
+        "ppr:4:node",
+        "--bind-to",
+        "none",
+        "--mca",
+        "pml",
+        "ob1",
+        "--mca",
+        "btl",
+        "self,vader,tcp",
+        "--mca",
+        "btl_tcp_if_include",
+        "ibp55s0f0",
+        "--mca",
+        "oob_tcp_if_include",
+        "ibp55s0f0",
+        "-x",
+        "UCCL_LITE_MSCCLPP_CONTROL_ROOT",
+        "-x",
+        "NCCL_SOCKET_IFNAME",
+        "-x",
+        "NCCL_IB_HCA",
+        "-x",
+        "MSCCLPP_SOCKET_IFNAME",
+        "-x",
+        "MSCCLPP_IBV_MODE",
+        "-x",
+        "LD_LIBRARY_PATH",
+        "python3",
+        "-B",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/mscclpp_profile.py",
+        "launch",
+        "--library",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/libuccl_lite_nccl_mscclpp.so",
+        "--real-nccl",
+        "/home/zhongjie/third_party/nccl/build/lib/libnccl.so.2.28.7",
+        "--profile",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/candidate.tsv",
+        "--",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/all_reduce_perf",
+        "-b",
+        "1K",
+        "-e",
+        "1073741824",
+        "-f",
+        "2",
+        "-g",
+        "1",
+        "-d",
+        "float",
+        "-w",
+        "10",
+        "-n",
+        "50",
+        "-c",
+        "1",
+        "-a",
+        "3"
+      ]
+    },
+    {
+      "label": "all_reduce_2_candidate",
+      "argv": [
+        "/usr/mpi/gcc/openmpi-4.1.7rc1/bin/mpirun",
+        "--host",
+        "10.10.55.2:4,10.10.55.1:4",
+        "-np",
+        "8",
+        "--map-by",
+        "ppr:4:node",
+        "--bind-to",
+        "none",
+        "--mca",
+        "pml",
+        "ob1",
+        "--mca",
+        "btl",
+        "self,vader,tcp",
+        "--mca",
+        "btl_tcp_if_include",
+        "ibp55s0f0",
+        "--mca",
+        "oob_tcp_if_include",
+        "ibp55s0f0",
+        "-x",
+        "UCCL_LITE_MSCCLPP_CONTROL_ROOT",
+        "-x",
+        "NCCL_SOCKET_IFNAME",
+        "-x",
+        "NCCL_IB_HCA",
+        "-x",
+        "MSCCLPP_SOCKET_IFNAME",
+        "-x",
+        "MSCCLPP_IBV_MODE",
+        "-x",
+        "LD_LIBRARY_PATH",
+        "python3",
+        "-B",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/mscclpp_profile.py",
+        "launch",
+        "--library",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/libuccl_lite_nccl_mscclpp.so",
+        "--real-nccl",
+        "/home/zhongjie/third_party/nccl/build/lib/libnccl.so.2.28.7",
+        "--profile",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/candidate.tsv",
+        "--",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/all_reduce_perf",
+        "-b",
+        "1K",
+        "-e",
+        "1073741824",
+        "-f",
+        "2",
+        "-g",
+        "1",
+        "-d",
+        "float",
+        "-w",
+        "10",
+        "-n",
+        "50",
+        "-c",
+        "1",
+        "-a",
+        "3"
+      ]
+    },
+    {
+      "label": "all_reduce_3_native",
+      "argv": [
+        "/usr/mpi/gcc/openmpi-4.1.7rc1/bin/mpirun",
+        "--host",
+        "10.10.55.2:4,10.10.55.1:4",
+        "-np",
+        "8",
+        "--map-by",
+        "ppr:4:node",
+        "--bind-to",
+        "none",
+        "--mca",
+        "pml",
+        "ob1",
+        "--mca",
+        "btl",
+        "self,vader,tcp",
+        "--mca",
+        "btl_tcp_if_include",
+        "ibp55s0f0",
+        "--mca",
+        "oob_tcp_if_include",
+        "ibp55s0f0",
+        "-x",
+        "UCCL_LITE_MSCCLPP_CONTROL_ROOT",
+        "-x",
+        "NCCL_SOCKET_IFNAME",
+        "-x",
+        "NCCL_IB_HCA",
+        "-x",
+        "MSCCLPP_SOCKET_IFNAME",
+        "-x",
+        "MSCCLPP_IBV_MODE",
+        "-x",
+        "LD_LIBRARY_PATH",
+        "env",
+        "LD_PRELOAD=/home/zhongjie/third_party/nccl/build/lib/libnccl.so.2.28.7",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/all_reduce_perf",
+        "-b",
+        "1K",
+        "-e",
+        "1073741824",
+        "-f",
+        "2",
+        "-g",
+        "1",
+        "-d",
+        "float",
+        "-w",
+        "10",
+        "-n",
+        "50",
+        "-c",
+        "1",
+        "-a",
+        "3"
+      ]
+    },
+    {
+      "label": "all_reduce_4_native",
+      "argv": [
+        "/usr/mpi/gcc/openmpi-4.1.7rc1/bin/mpirun",
+        "--host",
+        "10.10.55.2:4,10.10.55.1:4",
+        "-np",
+        "8",
+        "--map-by",
+        "ppr:4:node",
+        "--bind-to",
+        "none",
+        "--mca",
+        "pml",
+        "ob1",
+        "--mca",
+        "btl",
+        "self,vader,tcp",
+        "--mca",
+        "btl_tcp_if_include",
+        "ibp55s0f0",
+        "--mca",
+        "oob_tcp_if_include",
+        "ibp55s0f0",
+        "-x",
+        "UCCL_LITE_MSCCLPP_CONTROL_ROOT",
+        "-x",
+        "NCCL_SOCKET_IFNAME",
+        "-x",
+        "NCCL_IB_HCA",
+        "-x",
+        "MSCCLPP_SOCKET_IFNAME",
+        "-x",
+        "MSCCLPP_IBV_MODE",
+        "-x",
+        "LD_LIBRARY_PATH",
+        "env",
+        "LD_PRELOAD=/home/zhongjie/third_party/nccl/build/lib/libnccl.so.2.28.7",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/all_reduce_perf",
+        "-b",
+        "1K",
+        "-e",
+        "1073741824",
+        "-f",
+        "2",
+        "-g",
+        "1",
+        "-d",
+        "float",
+        "-w",
+        "10",
+        "-n",
+        "50",
+        "-c",
+        "1",
+        "-a",
+        "3"
+      ]
+    },
+    {
+      "label": "all_reduce_5_candidate",
+      "argv": [
+        "/usr/mpi/gcc/openmpi-4.1.7rc1/bin/mpirun",
+        "--host",
+        "10.10.55.2:4,10.10.55.1:4",
+        "-np",
+        "8",
+        "--map-by",
+        "ppr:4:node",
+        "--bind-to",
+        "none",
+        "--mca",
+        "pml",
+        "ob1",
+        "--mca",
+        "btl",
+        "self,vader,tcp",
+        "--mca",
+        "btl_tcp_if_include",
+        "ibp55s0f0",
+        "--mca",
+        "oob_tcp_if_include",
+        "ibp55s0f0",
+        "-x",
+        "UCCL_LITE_MSCCLPP_CONTROL_ROOT",
+        "-x",
+        "NCCL_SOCKET_IFNAME",
+        "-x",
+        "NCCL_IB_HCA",
+        "-x",
+        "MSCCLPP_SOCKET_IFNAME",
+        "-x",
+        "MSCCLPP_IBV_MODE",
+        "-x",
+        "LD_LIBRARY_PATH",
+        "python3",
+        "-B",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/mscclpp_profile.py",
+        "launch",
+        "--library",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/libuccl_lite_nccl_mscclpp.so",
+        "--real-nccl",
+        "/home/zhongjie/third_party/nccl/build/lib/libnccl.so.2.28.7",
+        "--profile",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/candidate.tsv",
+        "--",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/all_reduce_perf",
+        "-b",
+        "1K",
+        "-e",
+        "1073741824",
+        "-f",
+        "2",
+        "-g",
+        "1",
+        "-d",
+        "float",
+        "-w",
+        "10",
+        "-n",
+        "50",
+        "-c",
+        "1",
+        "-a",
+        "3"
+      ]
+    },
+    {
+      "label": "all_reduce_6_candidate",
+      "argv": [
+        "/usr/mpi/gcc/openmpi-4.1.7rc1/bin/mpirun",
+        "--host",
+        "10.10.55.2:4,10.10.55.1:4",
+        "-np",
+        "8",
+        "--map-by",
+        "ppr:4:node",
+        "--bind-to",
+        "none",
+        "--mca",
+        "pml",
+        "ob1",
+        "--mca",
+        "btl",
+        "self,vader,tcp",
+        "--mca",
+        "btl_tcp_if_include",
+        "ibp55s0f0",
+        "--mca",
+        "oob_tcp_if_include",
+        "ibp55s0f0",
+        "-x",
+        "UCCL_LITE_MSCCLPP_CONTROL_ROOT",
+        "-x",
+        "NCCL_SOCKET_IFNAME",
+        "-x",
+        "NCCL_IB_HCA",
+        "-x",
+        "MSCCLPP_SOCKET_IFNAME",
+        "-x",
+        "MSCCLPP_IBV_MODE",
+        "-x",
+        "LD_LIBRARY_PATH",
+        "python3",
+        "-B",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/mscclpp_profile.py",
+        "launch",
+        "--library",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/libuccl_lite_nccl_mscclpp.so",
+        "--real-nccl",
+        "/home/zhongjie/third_party/nccl/build/lib/libnccl.so.2.28.7",
+        "--profile",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/candidate.tsv",
+        "--",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/all_reduce_perf",
+        "-b",
+        "1K",
+        "-e",
+        "1073741824",
+        "-f",
+        "2",
+        "-g",
+        "1",
+        "-d",
+        "float",
+        "-w",
+        "10",
+        "-n",
+        "50",
+        "-c",
+        "1",
+        "-a",
+        "3"
+      ]
+    },
+    {
+      "label": "all_reduce_7_native",
+      "argv": [
+        "/usr/mpi/gcc/openmpi-4.1.7rc1/bin/mpirun",
+        "--host",
+        "10.10.55.2:4,10.10.55.1:4",
+        "-np",
+        "8",
+        "--map-by",
+        "ppr:4:node",
+        "--bind-to",
+        "none",
+        "--mca",
+        "pml",
+        "ob1",
+        "--mca",
+        "btl",
+        "self,vader,tcp",
+        "--mca",
+        "btl_tcp_if_include",
+        "ibp55s0f0",
+        "--mca",
+        "oob_tcp_if_include",
+        "ibp55s0f0",
+        "-x",
+        "UCCL_LITE_MSCCLPP_CONTROL_ROOT",
+        "-x",
+        "NCCL_SOCKET_IFNAME",
+        "-x",
+        "NCCL_IB_HCA",
+        "-x",
+        "MSCCLPP_SOCKET_IFNAME",
+        "-x",
+        "MSCCLPP_IBV_MODE",
+        "-x",
+        "LD_LIBRARY_PATH",
+        "env",
+        "LD_PRELOAD=/home/zhongjie/third_party/nccl/build/lib/libnccl.so.2.28.7",
+        "/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_1g_512k_validation/all_reduce_perf",
+        "-b",
+        "1K",
+        "-e",
+        "1073741824",
+        "-f",
+        "2",
+        "-g",
+        "1",
+        "-d",
+        "float",
+        "-w",
+        "10",
+        "-n",
+        "50",
+        "-c",
+        "1",
+        "-a",
+        "3"
+      ]
+    }
+  ],
+  "results": {
+    "all_gather_0_native": {
+      "rows_us": {
+        "1024": [
+          18.98,
+          17.64
+        ],
+        "2048": [
+          18.19,
+          17.9
+        ],
+        "4096": [
+          18.49,
+          17.97
+        ],
+        "8192": [
+          19.05,
+          18.62
+        ],
+        "16384": [
+          19.98,
+          19.95
+        ],
+        "32768": [
+          21.82,
+          21.91
+        ],
+        "65536": [
+          24.36,
+          23.82
+        ],
+        "131072": [
+          34.69,
+          34.12
+        ],
+        "262144": [
+          63.46,
+          53.57
+        ],
+        "524288": [
+          297.97,
+          149.57
+        ],
+        "1048576": [
+          118.92,
+          118.09
+        ],
+        "2097152": [
+          172.77,
+          171.07
+        ],
+        "4194304": [
+          256.15,
+          254.82
+        ],
+        "8388608": [
+          464.62,
+          463.18
+        ],
+        "16777216": [
+          930.31,
+          930.16
+        ],
+        "33554432": [
+          1928.25,
+          1928.49
+        ],
+        "67108864": [
+          3835.69,
+          3824.84
+        ],
+        "134217728": [
+          7636.73,
+          7595.13
+        ],
+        "268435456": [
+          15236.9,
+          15106.4
+        ],
+        "536870912": [
+          30464.5,
+          30107.6
+        ],
+        "1073741824": [
+          60826.1,
+          60073.7
+        ]
+      },
+      "route_counters": []
+    },
+    "all_gather_1_candidate": {
+      "rows_us": {
+        "1024": [
+          17.99,
+          17.5
+        ],
+        "2048": [
+          18.1,
+          18.02
+        ],
+        "4096": [
+          18.24,
+          18.12
+        ],
+        "8192": [
+          18.84,
+          18.66
+        ],
+        "16384": [
+          20.07,
+          19.92
+        ],
+        "32768": [
+          22.11,
+          21.8
+        ],
+        "65536": [
+          24.03,
+          23.77
+        ],
+        "131072": [
+          33.82,
+          33.79
+        ],
+        "262144": [
+          50.82,
+          49.7
+        ],
+        "524288": [
+          79.18,
+          77.13
+        ],
+        "1048576": [
+          118.54,
+          117.95
+        ],
+        "2097152": [
+          171.92,
+          170.96
+        ],
+        "4194304": [
+          256.28,
+          255.27
+        ],
+        "8388608": [
+          467.2,
+          465.84
+        ],
+        "16777216": [
+          934.93,
+          934.76
+        ],
+        "33554432": [
+          1954.61,
+          1952.95
+        ],
+        "67108864": [
+          3879.75,
+          3871.27
+        ],
+        "134217728": [
+          7717.62,
+          7716.69
+        ],
+        "268435456": [
+          15434.3,
+          15320.1
+        ],
+        "536870912": [
+          30843.8,
+          30604.7
+        ],
+        "1073741824": [
+          61584.2,
+          61046.0
+        ]
+      },
+      "route_counters": [
+        [
+          "6",
+          "228",
+          "0",
+          "0",
+          "2086"
+        ],
+        [
+          "5",
+          "228",
+          "0",
+          "0",
+          "2086"
+        ],
+        [
+          "0",
+          "228",
+          "0",
+          "0",
+          "2086"
+        ],
+        [
+          "3",
+          "228",
+          "0",
+          "0",
+          "2086"
+        ],
+        [
+          "7",
+          "228",
+          "0",
+          "0",
+          "2086"
+        ],
+        [
+          "4",
+          "228",
+          "0",
+          "0",
+          "2086"
+        ],
+        [
+          "1",
+          "228",
+          "0",
+          "0",
+          "2086"
+        ],
+        [
+          "2",
+          "228",
+          "0",
+          "0",
+          "2086"
+        ]
+      ]
+    },
+    "all_gather_2_candidate": {
+      "rows_us": {
+        "1024": [
+          18.52,
+          17.61
+        ],
+        "2048": [
+          18.26,
+          17.9
+        ],
+        "4096": [
+          18.39,
+          17.99
+        ],
+        "8192": [
+          18.97,
+          18.6
+        ],
+        "16384": [
+          20.11,
+          19.8
+        ],
+        "32768": [
+          21.79,
+          21.64
+        ],
+        "65536": [
+          23.86,
+          23.66
+        ],
+        "131072": [
+          34.19,
+          34.0
+        ],
+        "262144": [
+          51.1,
+          49.94
+        ],
+        "524288": [
+          79.22,
+          76.87
+        ],
+        "1048576": [
+          118.8,
+          118.52
+        ],
+        "2097152": [
+          171.24,
+          170.96
+        ],
+        "4194304": [
+          257.4,
+          255.06
+        ],
+        "8388608": [
+          464.81,
+          462.8
+        ],
+        "16777216": [
+          920.58,
+          921.11
+        ],
+        "33554432": [
+          1968.99,
+          1957.66
+        ],
+        "67108864": [
+          3877.84,
+          3872.5
+        ],
+        "134217728": [
+          7725.04,
+          7707.35
+        ],
+        "268435456": [
+          15402.2,
+          15326.7
+        ],
+        "536870912": [
+          30786.6,
+          30604.6
+        ],
+        "1073741824": [
+          61513.1,
+          61054.7
+        ]
+      },
+      "route_counters": [
+        [
+          "7",
+          "228",
+          "0",
+          "0",
+          "2086"
+        ],
+        [
+          "4",
+          "228",
+          "0",
+          "0",
+          "2086"
+        ],
+        [
+          "5",
+          "228",
+          "0",
+          "0",
+          "2086"
+        ],
+        [
+          "0",
+          "228",
+          "0",
+          "0",
+          "2086"
+        ],
+        [
+          "6",
+          "228",
+          "0",
+          "0",
+          "2086"
+        ],
+        [
+          "1",
+          "228",
+          "0",
+          "0",
+          "2086"
+        ],
+        [
+          "3",
+          "228",
+          "0",
+          "0",
+          "2086"
+        ],
+        [
+          "2",
+          "228",
+          "0",
+          "0",
+          "2086"
+        ]
+      ]
+    },
+    "all_gather_3_native": {
+      "rows_us": {
+        "1024": [
+          18.71,
+          17.59
+        ],
+        "2048": [
+          18.16,
+          17.86
+        ],
+        "4096": [
+          18.44,
+          18.05
+        ],
+        "8192": [
+          18.95,
+          18.76
+        ],
+        "16384": [
+          20.09,
+          19.98
+        ],
+        "32768": [
+          22.1,
+          21.69
+        ],
+        "65536": [
+          24.31,
+          24.09
+        ],
+        "131072": [
+          34.47,
+          34.2
+        ],
+        "262144": [
+          51.21,
+          51.27
+        ],
+        "524288": [
+          140.69,
+          241.29
+        ],
+        "1048576": [
+          119.27,
+          118.29
+        ],
+        "2097152": [
+          171.81,
+          170.59
+        ],
+        "4194304": [
+          259.73,
+          259.97
+        ],
+        "8388608": [
+          469.07,
+          468.64
+        ],
+        "16777216": [
+          916.42,
+          914.62
+        ],
+        "33554432": [
+          1924.57,
+          1920.56
+        ],
+        "67108864": [
+          3810.33,
+          3807.21
+        ],
+        "134217728": [
+          7576.9,
+          7547.56
+        ],
+        "268435456": [
+          15139.8,
+          15043.2
+        ],
+        "536870912": [
+          30229.4,
+          29976.6
+        ],
+        "1073741824": [
+          60368.0,
+          59836.2
+        ]
+      },
+      "route_counters": []
+    },
+    "all_gather_4_native": {
+      "rows_us": {
+        "1024": [
+          18.82,
+          17.39
+        ],
+        "2048": [
+          18.2,
+          17.85
+        ],
+        "4096": [
+          18.27,
+          17.97
+        ],
+        "8192": [
+          18.91,
+          18.61
+        ],
+        "16384": [
+          20.05,
+          19.87
+        ],
+        "32768": [
+          21.78,
+          21.75
+        ],
+        "65536": [
+          23.95,
+          23.71
+        ],
+        "131072": [
+          34.09,
+          35.02
+        ],
+        "262144": [
+          51.04,
+          51.09
+        ],
+        "524288": [
+          172.74,
+          314.1
+        ],
+        "1048576": [
+          118.09,
+          117.58
+        ],
+        "2097152": [
+          170.51,
+          168.5
+        ],
+        "4194304": [
+          256.41,
+          255.32
+        ],
+        "8388608": [
+          465.96,
+          464.19
+        ],
+        "16777216": [
+          942.01,
+          931.25
+        ],
+        "33554432": [
+          1957.89,
+          1952.48
+        ],
+        "67108864": [
+          3876.98,
+          3872.74
+        ],
+        "134217728": [
+          7727.01,
+          7708.78
+        ],
+        "268435456": [
+          15492.0,
+          15316.7
+        ],
+        "536870912": [
+          30824.9,
+          30547.1
+        ],
+        "1073741824": [
+          61654.5,
+          61067.3
+        ]
+      },
+      "route_counters": []
+    },
+    "all_gather_5_candidate": {
+      "rows_us": {
+        "1024": [
+          18.21,
+          17.62
+        ],
+        "2048": [
+          18.12,
+          17.98
+        ],
+        "4096": [
+          18.63,
+          18.18
+        ],
+        "8192": [
+          18.92,
+          18.61
+        ],
+        "16384": [
+          20.16,
+          19.85
+        ],
+        "32768": [
+          21.83,
+          21.84
+        ],
+        "65536": [
+          23.94,
+          23.84
+        ],
+        "131072": [
+          34.05,
+          33.94
+        ],
+        "262144": [
+          50.79,
+          49.61
+        ],
+        "524288": [
+          78.47,
+          76.64
+        ],
+        "1048576": [
+          118.44,
+          118.11
+        ],
+        "2097152": [
+          171.86,
+          170.76
+        ],
+        "4194304": [
+          255.76,
+          255.56
+        ],
+        "8388608": [
+          469.59,
+          468.2
+        ],
+        "16777216": [
+          942.48,
+          942.66
+        ],
+        "33554432": [
+          1956.7,
+          1957.03
+        ],
+        "67108864": [
+          3881.6,
+          3876.16
+        ],
+        "134217728": [
+          7745.11,
+          7679.18
+        ],
+        "268435456": [
+          15421.5,
+          15283.0
+        ],
+        "536870912": [
+          30814.6,
+          30444.8
+        ],
+        "1073741824": [
+          61559.0,
+          60640.3
+        ]
+      },
+      "route_counters": [
+        [
+          "1",
+          "228",
+          "0",
+          "0",
+          "2086"
+        ],
+        [
+          "0",
+          "228",
+          "0",
+          "0",
+          "2086"
+        ],
+        [
+          "6",
+          "228",
+          "0",
+          "0",
+          "2086"
+        ],
+        [
+          "3",
+          "228",
+          "0",
+          "0",
+          "2086"
+        ],
+        [
+          "5",
+          "228",
+          "0",
+          "0",
+          "2086"
+        ],
+        [
+          "7",
+          "228",
+          "0",
+          "0",
+          "2086"
+        ],
+        [
+          "2",
+          "228",
+          "0",
+          "0",
+          "2086"
+        ],
+        [
+          "4",
+          "228",
+          "0",
+          "0",
+          "2086"
+        ]
+      ]
+    },
+    "all_gather_6_candidate": {
+      "rows_us": {
+        "1024": [
+          17.95,
+          17.61
+        ],
+        "2048": [
+          18.08,
+          17.99
+        ],
+        "4096": [
+          18.34,
+          18.07
+        ],
+        "8192": [
+          19.01,
+          18.77
+        ],
+        "16384": [
+          20.05,
+          19.79
+        ],
+        "32768": [
+          21.88,
+          21.62
+        ],
+        "65536": [
+          24.41,
+          23.82
+        ],
+        "131072": [
+          33.96,
+          34.17
+        ],
+        "262144": [
+          51.15,
+          49.74
+        ],
+        "524288": [
+          79.36,
+          76.1
+        ],
+        "1048576": [
+          117.88,
+          117.84
+        ],
+        "2097152": [
+          170.92,
+          170.17
+        ],
+        "4194304": [
+          257.73,
+          254.96
+        ],
+        "8388608": [
+          466.83,
+          467.8
+        ],
+        "16777216": [
+          940.19,
+          934.27
+        ],
+        "33554432": [
+          1954.3,
+          1948.49
+        ],
+        "67108864": [
+          3865.05,
+          3846.65
+        ],
+        "134217728": [
+          7692.53,
+          7639.66
+        ],
+        "268435456": [
+          15315.8,
+          15184.3
+        ],
+        "536870912": [
+          30623.5,
+          30305.0
+        ],
+        "1073741824": [
+          61225.1,
+          60451.3
+        ]
+      },
+      "route_counters": [
+        [
+          "5",
+          "228",
+          "0",
+          "0",
+          "2086"
+        ],
+        [
+          "3",
+          "228",
+          "0",
+          "0",
+          "2086"
+        ],
+        [
+          "2",
+          "228",
+          "0",
+          "0",
+          "2086"
+        ],
+        [
+          "1",
+          "228",
+          "0",
+          "0",
+          "2086"
+        ],
+        [
+          "0",
+          "228",
+          "0",
+          "0",
+          "2086"
+        ],
+        [
+          "7",
+          "228",
+          "0",
+          "0",
+          "2086"
+        ],
+        [
+          "6",
+          "228",
+          "0",
+          "0",
+          "2086"
+        ],
+        [
+          "4",
+          "228",
+          "0",
+          "0",
+          "2086"
+        ]
+      ]
+    },
+    "all_gather_7_native": {
+      "rows_us": {
+        "1024": [
+          18.2,
+          17.4
+        ],
+        "2048": [
+          17.95,
+          17.85
+        ],
+        "4096": [
+          18.22,
+          18.05
+        ],
+        "8192": [
+          18.96,
+          18.51
+        ],
+        "16384": [
+          19.91,
+          19.95
+        ],
+        "32768": [
+          21.75,
+          21.59
+        ],
+        "65536": [
+          26.32,
+          23.67
+        ],
+        "131072": [
+          34.82,
+          34.01
+        ],
+        "262144": [
+          51.33,
+          50.83
+        ],
+        "524288": [
+          229.93,
+          189.85
+        ],
+        "1048576": [
+          118.44,
+          118.02
+        ],
+        "2097152": [
+          170.27,
+          168.68
+        ],
+        "4194304": [
+          256.82,
+          254.42
+        ],
+        "8388608": [
+          463.69,
+          462.39
+        ],
+        "16777216": [
+          911.63,
+          910.41
+        ],
+        "33554432": [
+          1943.63,
+          1912.45
+        ],
+        "67108864": [
+          3791.42,
+          3790.13
+        ],
+        "134217728": [
+          7545.17,
+          7535.89
+        ],
+        "268435456": [
+          15064.4,
+          15004.2
+        ],
+        "536870912": [
+          30093.3,
+          29921.8
+        ],
+        "1073741824": [
+          60138.6,
+          59736.7
+        ]
+      },
+      "route_counters": []
+    },
+    "reduce_scatter_0_native": {
+      "rows_us": {
+        "1024": [
+          19.07,
+          17.86
+        ],
+        "2048": [
+          18.03,
+          18.15
+        ],
+        "4096": [
+          18.34,
+          18.31
+        ],
+        "8192": [
+          18.85,
+          18.88
+        ],
+        "16384": [
+          20.09,
+          19.89
+        ],
+        "32768": [
+          21.9,
+          21.96
+        ],
+        "65536": [
+          24.55,
+          23.83
+        ],
+        "131072": [
+          32.71,
+          32.78
+        ],
+        "262144": [
+          50.82,
+          51.47
+        ],
+        "524288": [
+          107.95,
+          182.33
+        ],
+        "1048576": [
+          105.26,
+          105.74
+        ],
+        "2097152": [
+          165.66,
+          166.14
+        ],
+        "4194304": [
+          270.87,
+          270.07
+        ],
+        "8388608": [
+          489.0,
+          489.0
+        ],
+        "16777216": [
+          972.91,
+          974.9
+        ],
+        "33554432": [
+          2001.44,
+          2007.04
+        ],
+        "67108864": [
+          3987.1,
+          3994.44
+        ],
+        "134217728": [
+          7944.31,
+          7926.74
+        ],
+        "268435456": [
+          15786.5,
+          15770.7
+        ],
+        "536870912": [
+          31334.3,
+          31370.9
+        ],
+        "1073741824": [
+          62297.1,
+          62203.8
+        ]
+      },
+      "route_counters": []
+    },
+    "reduce_scatter_1_candidate": {
+      "rows_us": {
+        "1024": [
+          19.22,
+          17.93
+        ],
+        "2048": [
+          18.18,
+          18.18
+        ],
+        "4096": [
+          18.34,
+          18.23
+        ],
+        "8192": [
+          18.97,
+          18.83
+        ],
+        "16384": [
+          20.06,
+          20.0
+        ],
+        "32768": [
+          21.96,
+          22.04
+        ],
+        "65536": [
+          24.29,
+          24.08
+        ],
+        "131072": [
+          32.78,
+          32.77
+        ],
+        "262144": [
+          44.61,
+          43.88
+        ],
+        "524288": [
+          69.33,
+          68.59
+        ],
+        "1048576": [
+          104.36,
+          104.56
+        ],
+        "2097152": [
+          164.64,
+          164.62
+        ],
+        "4194304": [
+          271.01,
+          270.91
+        ],
+        "8388608": [
+          494.72,
+          496.65
+        ],
+        "16777216": [
+          987.78,
+          988.1
+        ],
+        "33554432": [
+          2067.98,
+          2064.09
+        ],
+        "67108864": [
+          4096.84,
+          4094.65
+        ],
+        "134217728": [
+          8147.08,
+          8128.86
+        ],
+        "268435456": [
+          16209.7,
+          16189.5
+        ],
+        "536870912": [
+          32228.9,
+          32288.3
+        ],
+        "1073741824": [
+          64507.0,
+          64300.5
+        ]
+      },
+      "route_counters": [
+        [
+          "0",
+          "0",
+          "228",
+          "0",
+          "2086"
+        ],
+        [
+          "1",
+          "0",
+          "228",
+          "0",
+          "2086"
+        ],
+        [
+          "2",
+          "0",
+          "228",
+          "0",
+          "2086"
+        ],
+        [
+          "7",
+          "0",
+          "228",
+          "0",
+          "2086"
+        ],
+        [
+          "4",
+          "0",
+          "228",
+          "0",
+          "2086"
+        ],
+        [
+          "5",
+          "0",
+          "228",
+          "0",
+          "2086"
+        ],
+        [
+          "3",
+          "0",
+          "228",
+          "0",
+          "2086"
+        ],
+        [
+          "6",
+          "0",
+          "228",
+          "0",
+          "2086"
+        ]
+      ]
+    },
+    "reduce_scatter_2_candidate": {
+      "rows_us": {
+        "1024": [
+          18.51,
+          18.04
+        ],
+        "2048": [
+          18.05,
+          18.09
+        ],
+        "4096": [
+          18.36,
+          18.31
+        ],
+        "8192": [
+          19.02,
+          18.97
+        ],
+        "16384": [
+          20.09,
+          20.02
+        ],
+        "32768": [
+          21.98,
+          21.96
+        ],
+        "65536": [
+          24.12,
+          23.75
+        ],
+        "131072": [
+          35.46,
+          32.56
+        ],
+        "262144": [
+          44.85,
+          43.79
+        ],
+        "524288": [
+          69.11,
+          68.46
+        ],
+        "1048576": [
+          104.07,
+          104.25
+        ],
+        "2097152": [
+          164.77,
+          164.97
+        ],
+        "4194304": [
+          270.81,
+          270.11
+        ],
+        "8388608": [
+          486.84,
+          487.17
+        ],
+        "16777216": [
+          964.33,
+          963.08
+        ],
+        "33554432": [
+          2058.13,
+          2033.79
+        ],
+        "67108864": [
+          4043.72,
+          4042.76
+        ],
+        "134217728": [
+          8035.12,
+          8034.78
+        ],
+        "268435456": [
+          16015.0,
+          16005.2
+        ],
+        "536870912": [
+          31893.9,
+          31903.7
+        ],
+        "1073741824": [
+          63375.0,
+          63318.8
+        ]
+      },
+      "route_counters": [
+        [
+          "7",
+          "0",
+          "228",
+          "0",
+          "2086"
+        ],
+        [
+          "4",
+          "0",
+          "228",
+          "0",
+          "2086"
+        ],
+        [
+          "5",
+          "0",
+          "228",
+          "0",
+          "2086"
+        ],
+        [
+          "6",
+          "0",
+          "228",
+          "0",
+          "2086"
+        ],
+        [
+          "2",
+          "0",
+          "228",
+          "0",
+          "2086"
+        ],
+        [
+          "3",
+          "0",
+          "228",
+          "0",
+          "2086"
+        ],
+        [
+          "0",
+          "0",
+          "228",
+          "0",
+          "2086"
+        ],
+        [
+          "1",
+          "0",
+          "228",
+          "0",
+          "2086"
+        ]
+      ]
+    },
+    "reduce_scatter_3_native": {
+      "rows_us": {
+        "1024": [
+          19.43,
+          17.96
+        ],
+        "2048": [
+          18.28,
+          17.91
+        ],
+        "4096": [
+          18.49,
+          18.33
+        ],
+        "8192": [
+          18.84,
+          18.76
+        ],
+        "16384": [
+          19.99,
+          19.9
+        ],
+        "32768": [
+          22.14,
+          21.86
+        ],
+        "65536": [
+          24.53,
+          24.08
+        ],
+        "131072": [
+          32.67,
+          32.34
+        ],
+        "262144": [
+          50.9,
+          50.26
+        ],
+        "524288": [
+          96.97,
+          181.96
+        ],
+        "1048576": [
+          103.6,
+          103.83
+        ],
+        "2097152": [
+          165.93,
+          165.75
+        ],
+        "4194304": [
+          270.99,
+          271.63
+        ],
+        "8388608": [
+          513.92,
+          490.52
+        ],
+        "16777216": [
+          972.69,
+          970.58
+        ],
+        "33554432": [
+          2035.54,
+          2040.36
+        ],
+        "67108864": [
+          4044.9,
+          4045.64
+        ],
+        "134217728": [
+          8021.8,
+          8024.12
+        ],
+        "268435456": [
+          15975.1,
+          15941.0
+        ],
+        "536870912": [
+          31941.7,
+          31862.5
+        ],
+        "1073741824": [
+          63165.0,
+          63262.8
+        ]
+      },
+      "route_counters": []
+    },
+    "reduce_scatter_4_native": {
+      "rows_us": {
+        "1024": [
+          19.1,
+          17.85
+        ],
+        "2048": [
+          18.08,
+          17.92
+        ],
+        "4096": [
+          18.22,
+          18.12
+        ],
+        "8192": [
+          18.82,
+          18.85
+        ],
+        "16384": [
+          19.95,
+          19.88
+        ],
+        "32768": [
+          21.96,
+          21.89
+        ],
+        "65536": [
+          24.21,
+          23.86
+        ],
+        "131072": [
+          32.56,
+          32.45
+        ],
+        "262144": [
+          57.05,
+          51.04
+        ],
+        "524288": [
+          193.49,
+          149.27
+        ],
+        "1048576": [
+          103.73,
+          104.25
+        ],
+        "2097152": [
+          165.19,
+          164.51
+        ],
+        "4194304": [
+          269.0,
+          268.51
+        ],
+        "8388608": [
+          497.96,
+          491.36
+        ],
+        "16777216": [
+          957.13,
+          956.58
+        ],
+        "33554432": [
+          1984.61,
+          1982.93
+        ],
+        "67108864": [
+          3946.36,
+          3942.14
+        ],
+        "134217728": [
+          7825.05,
+          7842.95
+        ],
+        "268435456": [
+          15582.7,
+          15590.0
+        ],
+        "536870912": [
+          31028.7,
+          30993.1
+        ],
+        "1073741824": [
+          61802.3,
+          61638.0
+        ]
+      },
+      "route_counters": []
+    },
+    "reduce_scatter_5_candidate": {
+      "rows_us": {
+        "1024": [
+          19.08,
+          17.99
+        ],
+        "2048": [
+          18.18,
+          18.07
+        ],
+        "4096": [
+          18.4,
+          18.29
+        ],
+        "8192": [
+          18.92,
+          18.71
+        ],
+        "16384": [
+          20.04,
+          20.01
+        ],
+        "32768": [
+          22.09,
+          21.91
+        ],
+        "65536": [
+          24.12,
+          24.03
+        ],
+        "131072": [
+          32.72,
+          32.55
+        ],
+        "262144": [
+          44.67,
+          43.78
+        ],
+        "524288": [
+          69.41,
+          68.34
+        ],
+        "1048576": [
+          104.49,
+          104.95
+        ],
+        "2097152": [
+          165.56,
+          165.21
+        ],
+        "4194304": [
+          270.36,
+          270.71
+        ],
+        "8388608": [
+          490.92,
+          490.53
+        ],
+        "16777216": [
+          971.71,
+          972.72
+        ],
+        "33554432": [
+          2044.48,
+          2042.69
+        ],
+        "67108864": [
+          4058.05,
+          4053.44
+        ],
+        "134217728": [
+          8066.98,
+          8057.54
+        ],
+        "268435456": [
+          16063.9,
+          16100.4
+        ],
+        "536870912": [
+          31926.4,
+          31992.6
+        ],
+        "1073741824": [
+          63569.5,
+          63637.8
+        ]
+      },
+      "route_counters": [
+        [
+          "2",
+          "0",
+          "228",
+          "0",
+          "2086"
+        ],
+        [
+          "3",
+          "0",
+          "228",
+          "0",
+          "2086"
+        ],
+        [
+          "1",
+          "0",
+          "228",
+          "0",
+          "2086"
+        ],
+        [
+          "6",
+          "0",
+          "228",
+          "0",
+          "2086"
+        ],
+        [
+          "7",
+          "0",
+          "228",
+          "0",
+          "2086"
+        ],
+        [
+          "4",
+          "0",
+          "228",
+          "0",
+          "2086"
+        ],
+        [
+          "5",
+          "0",
+          "228",
+          "0",
+          "2086"
+        ],
+        [
+          "0",
+          "0",
+          "228",
+          "0",
+          "2086"
+        ]
+      ]
+    },
+    "reduce_scatter_6_candidate": {
+      "rows_us": {
+        "1024": [
+          19.06,
+          17.98
+        ],
+        "2048": [
+          18.19,
+          18.18
+        ],
+        "4096": [
+          18.34,
+          18.28
+        ],
+        "8192": [
+          19.07,
+          18.97
+        ],
+        "16384": [
+          20.01,
+          20.05
+        ],
+        "32768": [
+          22.28,
+          21.94
+        ],
+        "65536": [
+          24.15,
+          23.86
+        ],
+        "131072": [
+          33.84,
+          32.94
+        ],
+        "262144": [
+          44.84,
+          43.87
+        ],
+        "524288": [
+          69.38,
+          68.41
+        ],
+        "1048576": [
+          104.51,
+          104.42
+        ],
+        "2097152": [
+          165.45,
+          165.87
+        ],
+        "4194304": [
+          269.14,
+          269.82
+        ],
+        "8388608": [
+          481.4,
+          485.02
+        ],
+        "16777216": [
+          965.49,
+          966.24
+        ],
+        "33554432": [
+          2011.06,
+          2009.24
+        ],
+        "67108864": [
+          4004.65,
+          3999.0
+        ],
+        "134217728": [
+          7984.88,
+          7960.37
+        ],
+        "268435456": [
+          15868.6,
+          15837.1
+        ],
+        "536870912": [
+          31635.5,
+          31722.5
+        ],
+        "1073741824": [
+          62917.2,
+          62680.6
+        ]
+      },
+      "route_counters": [
+        [
+          "2",
+          "0",
+          "228",
+          "0",
+          "2086"
+        ],
+        [
+          "4",
+          "0",
+          "228",
+          "0",
+          "2086"
+        ],
+        [
+          "6",
+          "0",
+          "228",
+          "0",
+          "2086"
+        ],
+        [
+          "5",
+          "0",
+          "228",
+          "0",
+          "2086"
+        ],
+        [
+          "7",
+          "0",
+          "228",
+          "0",
+          "2086"
+        ],
+        [
+          "3",
+          "0",
+          "228",
+          "0",
+          "2086"
+        ],
+        [
+          "1",
+          "0",
+          "228",
+          "0",
+          "2086"
+        ],
+        [
+          "0",
+          "0",
+          "228",
+          "0",
+          "2086"
+        ]
+      ]
+    },
+    "reduce_scatter_7_native": {
+      "rows_us": {
+        "1024": [
+          19.19,
+          17.83
+        ],
+        "2048": [
+          18.04,
+          18.04
+        ],
+        "4096": [
+          18.4,
+          18.19
+        ],
+        "8192": [
+          19.04,
+          18.72
+        ],
+        "16384": [
+          20.12,
+          19.92
+        ],
+        "32768": [
+          22.15,
+          21.88
+        ],
+        "65536": [
+          24.37,
+          24.03
+        ],
+        "131072": [
+          32.48,
+          32.55
+        ],
+        "262144": [
+          50.87,
+          58.85
+        ],
+        "524288": [
+          99.3,
+          179.23
+        ],
+        "1048576": [
+          103.53,
+          104.15
+        ],
+        "2097152": [
+          165.81,
+          165.66
+        ],
+        "4194304": [
+          270.0,
+          271.19
+        ],
+        "8388608": [
+          489.55,
+          486.33
+        ],
+        "16777216": [
+          962.07,
+          961.59
+        ],
+        "33554432": [
+          1996.67,
+          2003.27
+        ],
+        "67108864": [
+          3968.47,
+          3958.96
+        ],
+        "134217728": [
+          7901.08,
+          7895.83
+        ],
+        "268435456": [
+          15729.7,
+          15707.5
+        ],
+        "536870912": [
+          31363.6,
+          31300.3
+        ],
+        "1073741824": [
+          62442.9,
+          62302.4
+        ]
+      },
+      "route_counters": []
+    },
+    "all_reduce_0_native": {
+      "rows_us": {
+        "1024": [
+          23.54,
+          21.83
+        ],
+        "2048": [
+          24.41,
+          24.2
+        ],
+        "4096": [
+          31.8,
+          30.51
+        ],
+        "8192": [
+          32.17,
+          31.47
+        ],
+        "16384": [
+          33.87,
+          33.76
+        ],
+        "32768": [
+          37.55,
+          37.23
+        ],
+        "65536": [
+          41.51,
+          40.96
+        ],
+        "131072": [
+          60.15,
+          59.84
+        ],
+        "262144": [
+          100.03,
+          119.65
+        ],
+        "524288": [
+          413.08,
+          566.43
+        ],
+        "1048576": [
+          878.53,
+          691.64
+        ],
+        "2097152": [
+          306.9,
+          306.72
+        ],
+        "4194304": [
+          482.82,
+          483.35
+        ],
+        "8388608": [
+          884.83,
+          887.59
+        ],
+        "16777216": [
+          1793.74,
+          1799.69
+        ],
+        "33554432": [
+          3712.06,
+          3728.13
+        ],
+        "67108864": [
+          7376.18,
+          7378.2
+        ],
+        "134217728": [
+          14675.8,
+          14667.0
+        ],
+        "268435456": [
+          29217.0,
+          29250.0
+        ],
+        "536870912": [
+          58283.0,
+          58303.9
+        ],
+        "1073741824": [
+          116283.0,
+          116212.0
+        ]
+      },
+      "route_counters": []
+    },
+    "all_reduce_1_candidate": {
+      "rows_us": {
+        "1024": [
+          23.23,
+          22.16
+        ],
+        "2048": [
+          24.58,
+          24.63
+        ],
+        "4096": [
+          31.17,
+          30.72
+        ],
+        "8192": [
+          32.14,
+          31.87
+        ],
+        "16384": [
+          34.04,
+          33.78
+        ],
+        "32768": [
+          37.53,
+          37.42
+        ],
+        "65536": [
+          41.55,
+          40.92
+        ],
+        "131072": [
+          61.28,
+          60.0
+        ],
+        "262144": [
+          100.26,
+          97.88
+        ],
+        "524288": [
+          378.68,
+          195.32
+        ],
+        "1048576": [
+          618.07,
+          522.43
+        ],
+        "2097152": [
+          308.47,
+          308.18
+        ],
+        "4194304": [
+          490.66,
+          489.97
+        ],
+        "8388608": [
+          910.54,
+          909.28
+        ],
+        "16777216": [
+          1853.16,
+          1849.83
+        ],
+        "33554432": [
+          3836.24,
+          3824.1
+        ],
+        "67108864": [
+          7587.93,
+          7591.34
+        ],
+        "134217728": [
+          15102.6,
+          15128.9
+        ],
+        "268435456": [
+          30115.9,
+          30167.6
+        ],
+        "536870912": [
+          60047.7,
+          60043.3
+        ],
+        "1073741824": [
+          119749.0,
+          119987.0
+        ]
+      },
+      "route_counters": [
+        [
+          "0",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "3",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "1",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "2",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "7",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "5",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "4",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "6",
+          "0",
+          "0",
+          "0",
+          "0"
+        ]
+      ]
+    },
+    "all_reduce_2_candidate": {
+      "rows_us": {
+        "1024": [
+          23.57,
+          22.1
+        ],
+        "2048": [
+          24.68,
+          24.48
+        ],
+        "4096": [
+          31.27,
+          30.78
+        ],
+        "8192": [
+          32.01,
+          31.58
+        ],
+        "16384": [
+          34.02,
+          34.08
+        ],
+        "32768": [
+          37.36,
+          37.25
+        ],
+        "65536": [
+          41.55,
+          41.06
+        ],
+        "131072": [
+          60.16,
+          59.93
+        ],
+        "262144": [
+          99.13,
+          97.38
+        ],
+        "524288": [
+          192.42,
+          332.56
+        ],
+        "1048576": [
+          463.96,
+          477.93
+        ],
+        "2097152": [
+          308.4,
+          306.4
+        ],
+        "4194304": [
+          489.13,
+          492.51
+        ],
+        "8388608": [
+          913.55,
+          916.62
+        ],
+        "16777216": [
+          1860.63,
+          1861.77
+        ],
+        "33554432": [
+          3823.06,
+          3879.38
+        ],
+        "67108864": [
+          7590.28,
+          7585.52
+        ],
+        "134217728": [
+          15100.2,
+          15103.6
+        ],
+        "268435456": [
+          30104.8,
+          30098.7
+        ],
+        "536870912": [
+          60144.8,
+          60100.6
+        ],
+        "1073741824": [
+          120085.0,
+          120065.0
+        ]
+      },
+      "route_counters": [
+        [
+          "1",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "3",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "0",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "2",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "7",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "4",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "5",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "6",
+          "0",
+          "0",
+          "0",
+          "0"
+        ]
+      ]
+    },
+    "all_reduce_3_native": {
+      "rows_us": {
+        "1024": [
+          23.52,
+          21.99
+        ],
+        "2048": [
+          24.2,
+          23.95
+        ],
+        "4096": [
+          30.98,
+          30.75
+        ],
+        "8192": [
+          31.91,
+          31.6
+        ],
+        "16384": [
+          33.84,
+          33.67
+        ],
+        "32768": [
+          37.43,
+          37.16
+        ],
+        "65536": [
+          41.25,
+          40.74
+        ],
+        "131072": [
+          60.22,
+          59.38
+        ],
+        "262144": [
+          100.46,
+          97.57
+        ],
+        "524288": [
+          189.1,
+          479.23
+        ],
+        "1048576": [
+          522.19,
+          522.52
+        ],
+        "2097152": [
+          306.54,
+          306.93
+        ],
+        "4194304": [
+          487.64,
+          485.69
+        ],
+        "8388608": [
+          905.61,
+          906.9
+        ],
+        "16777216": [
+          1820.8,
+          1823.37
+        ],
+        "33554432": [
+          3807.71,
+          3834.77
+        ],
+        "67108864": [
+          7563.8,
+          7555.73
+        ],
+        "134217728": [
+          15041.0,
+          15056.7
+        ],
+        "268435456": [
+          29965.6,
+          29971.0
+        ],
+        "536870912": [
+          59709.3,
+          59763.6
+        ],
+        "1073741824": [
+          118876.0,
+          119153.0
+        ]
+      },
+      "route_counters": []
+    },
+    "all_reduce_4_native": {
+      "rows_us": {
+        "1024": [
+          23.1,
+          21.92
+        ],
+        "2048": [
+          24.06,
+          24.21
+        ],
+        "4096": [
+          30.84,
+          30.54
+        ],
+        "8192": [
+          32.33,
+          31.75
+        ],
+        "16384": [
+          33.97,
+          33.71
+        ],
+        "32768": [
+          37.39,
+          37.25
+        ],
+        "65536": [
+          41.69,
+          40.45
+        ],
+        "131072": [
+          60.04,
+          59.21
+        ],
+        "262144": [
+          97.99,
+          125.74
+        ],
+        "524288": [
+          509.3,
+          489.22
+        ],
+        "1048576": [
+          675.94,
+          551.6
+        ],
+        "2097152": [
+          308.41,
+          309.07
+        ],
+        "4194304": [
+          488.54,
+          490.58
+        ],
+        "8388608": [
+          902.36,
+          904.86
+        ],
+        "16777216": [
+          1832.24,
+          1834.23
+        ],
+        "33554432": [
+          3773.49,
+          3775.99
+        ],
+        "67108864": [
+          7501.63,
+          7500.23
+        ],
+        "134217728": [
+          14932.7,
+          14949.7
+        ],
+        "268435456": [
+          29767.0,
+          29765.8
+        ],
+        "536870912": [
+          59347.5,
+          59376.9
+        ],
+        "1073741824": [
+          118403.0,
+          118446.0
+        ]
+      },
+      "route_counters": []
+    },
+    "all_reduce_5_candidate": {
+      "rows_us": {
+        "1024": [
+          23.11,
+          22.15
+        ],
+        "2048": [
+          24.63,
+          24.41
+        ],
+        "4096": [
+          31.24,
+          30.48
+        ],
+        "8192": [
+          31.99,
+          31.78
+        ],
+        "16384": [
+          34.1,
+          33.78
+        ],
+        "32768": [
+          37.84,
+          37.37
+        ],
+        "65536": [
+          41.28,
+          40.91
+        ],
+        "131072": [
+          60.39,
+          59.37
+        ],
+        "262144": [
+          100.35,
+          96.86
+        ],
+        "524288": [
+          401.91,
+          395.23
+        ],
+        "1048576": [
+          625.03,
+          647.94
+        ],
+        "2097152": [
+          308.64,
+          307.36
+        ],
+        "4194304": [
+          490.28,
+          490.54
+        ],
+        "8388608": [
+          913.37,
+          912.78
+        ],
+        "16777216": [
+          1852.52,
+          1855.44
+        ],
+        "33554432": [
+          3867.42,
+          3868.85
+        ],
+        "67108864": [
+          7671.67,
+          7680.16
+        ],
+        "134217728": [
+          15279.0,
+          15236.3
+        ],
+        "268435456": [
+          30393.1,
+          30369.5
+        ],
+        "536870912": [
+          60357.6,
+          60375.3
+        ],
+        "1073741824": [
+          120282.0,
+          120666.0
+        ]
+      },
+      "route_counters": [
+        [
+          "1",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "0",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "2",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "3",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "6",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "5",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "7",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "4",
+          "0",
+          "0",
+          "0",
+          "0"
+        ]
+      ]
+    },
+    "all_reduce_6_candidate": {
+      "rows_us": {
+        "1024": [
+          23.64,
+          22.05
+        ],
+        "2048": [
+          24.58,
+          24.36
+        ],
+        "4096": [
+          31.36,
+          30.85
+        ],
+        "8192": [
+          32.32,
+          31.77
+        ],
+        "16384": [
+          34.11,
+          33.72
+        ],
+        "32768": [
+          37.56,
+          37.42
+        ],
+        "65536": [
+          41.8,
+          40.58
+        ],
+        "131072": [
+          60.23,
+          59.79
+        ],
+        "262144": [
+          98.55,
+          98.41
+        ],
+        "524288": [
+          396.6,
+          430.38
+        ],
+        "1048576": [
+          672.33,
+          576.86
+        ],
+        "2097152": [
+          308.42,
+          308.04
+        ],
+        "4194304": [
+          495.61,
+          495.19
+        ],
+        "8388608": [
+          911.93,
+          914.42
+        ],
+        "16777216": [
+          1857.37,
+          1850.71
+        ],
+        "33554432": [
+          3790.21,
+          3782.44
+        ],
+        "67108864": [
+          7529.03,
+          7528.59
+        ],
+        "134217728": [
+          14982.1,
+          14982.6
+        ],
+        "268435456": [
+          29847.3,
+          29837.1
+        ],
+        "536870912": [
+          59540.2,
+          59529.3
+        ],
+        "1073741824": [
+          118740.0,
+          118848.0
+        ]
+      },
+      "route_counters": [
+        [
+          "0",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "3",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "2",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "1",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "6",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "4",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "5",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "7",
+          "0",
+          "0",
+          "0",
+          "0"
+        ]
+      ]
+    },
+    "all_reduce_7_native": {
+      "rows_us": {
+        "1024": [
+          23.8,
+          22.09
+        ],
+        "2048": [
+          24.57,
+          24.52
+        ],
+        "4096": [
+          31.01,
+          30.43
+        ],
+        "8192": [
+          32.31,
+          31.82
+        ],
+        "16384": [
+          33.69,
+          33.7
+        ],
+        "32768": [
+          37.36,
+          37.14
+        ],
+        "65536": [
+          41.52,
+          40.86
+        ],
+        "131072": [
+          60.46,
+          59.64
+        ],
+        "262144": [
+          100.0,
+          97.4
+        ],
+        "524288": [
+          358.92,
+          315.01
+        ],
+        "1048576": [
+          417.17,
+          501.93
+        ],
+        "2097152": [
+          307.47,
+          307.77
+        ],
+        "4194304": [
+          489.63,
+          488.56
+        ],
+        "8388608": [
+          904.06,
+          900.24
+        ],
+        "16777216": [
+          1825.89,
+          1825.47
+        ],
+        "33554432": [
+          3788.05,
+          3778.02
+        ],
+        "67108864": [
+          7496.85,
+          7493.27
+        ],
+        "134217728": [
+          14923.8,
+          14912.4
+        ],
+        "268435456": [
+          29700.0,
+          29734.3
+        ],
+        "536870912": [
+          59220.9,
+          59318.2
+        ],
+        "1073741824": [
+          118154.0,
+          118189.0
+        ]
+      },
+      "route_counters": []
+    }
+  }
+}

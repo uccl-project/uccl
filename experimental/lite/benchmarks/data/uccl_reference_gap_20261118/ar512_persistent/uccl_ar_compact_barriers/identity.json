@@ -1,0 +1,5 @@
+{
+  "binary": "build/uccl_ar_compact_barriers/nccl_lite/libuccl_lite_nccl_strict.so",
+  "sha256": "afe688e7ad650531bb690fd03ad94913378d8cc96951bd7b2bc82cac4eb6a43e",
+  "scope": "fixed experimental build; comparisons to original UCCL are diagnostic, not matched admission"
+}

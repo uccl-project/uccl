@@ -1,0 +1,14 @@
+{
+  "Makefile": "ed3059e8f0d11df89f5bb3cf6b9a9dfae4c54ef6d68f778650d9cf9dfc4b4850",
+  "include/uccl_lite/collectives.h": "2bf35bdde91f84bf9aefe0dfb358d05ae4d2505401582dcb49bad3e5c90d710b",
+  "src/multinode/device_collectives.cuh": "5c1fd19f898a16dd77136b999cf4e3cf694706012aef0f1da6a91748a410c1cf",
+  "src/multinode/algorithm_transport.h": "9811d8135bece79924759ae8616495a02c01f47eb36993ceb2697182089615b4",
+  "src/multinode/mscclpp_backend.cu": "4ab398ba977b349f7e17cb67a33f755fd3f9901af7c9eec12cfe97e3ed87b827",
+  "src/collectives/multinode_allreduce.cu": "b19f1223b7ded8ece5f47ed2e5b9b9c054c5a054c04e6cd4d172a2dcd3c7362e",
+  "integration/nccl_lite/mscclpp_dropin.cc": "3d1a9cf00afecfcdf726991d920155293283ee937da46621b233ba4d29abf06d",
+  "integration/nccl_lite/mscclpp_exports.version": "12cd15cce8149d0b47214e8bd9a675350b635cc996b62c64c104b75fb3ad718e",
+  "integration/nccl_lite/mscclpp_profile.py": "ce2da0757e7892ac6e61f1a206e3f145026e4d1a82593d2fa22a594d13c12d4b",
+  "integration/nccl_lite/dropin_profile.py": "c5ff837424e7670f45221491e7e813f5549c0d6d69319d3a2b918181e663719d",
+  "tests/nccl_mscclpp/abi.cu": "002a11c23a344bf81ea11816adc14dde2494f50bed3f51144526643a895d81d1",
+  "tests/nccl_mscclpp/run.py": "b280135e9644f99a555fff0e68c88d70423d312e3fbc777154bbad9374872e36"
+}

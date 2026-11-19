@@ -1,0 +1,4 @@
+{
+  "src/multinode/shared_host_packets.h": "5042fd864e9c9ea3b25615f8cecb606187086b70226b1f47dd7117a97c44b906",
+  "tests/multinode/shared_host_packets.cu": "8453bb643d4db36603206b0993fe1a2add649ef6571e349fb35bc17ce1fbe17c"
+}

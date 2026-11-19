@@ -1,0 +1,50 @@
+UCCL Lite: unavailable candidate, using NCCL: [Errno 2] No such file or directory: '/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_expanded_correctness/missing.tsv'
+UCCL Lite: unavailable candidate, using NCCL: [Errno 2] No such file or directory: '/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_expanded_correctness/missing.tsv'
+UCCL Lite: unavailable candidate, using NCCL: [Errno 2] No such file or directory: '/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_expanded_correctness/missing.tsv'
+UCCL Lite: unavailable candidate, using NCCL: [Errno 2] No such file or directory: '/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_expanded_correctness/missing.tsv'
+UCCL Lite: unavailable candidate, using NCCL: [Errno 2] No such file or directory: '/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_expanded_correctness/missing.tsv'
+UCCL Lite: unavailable candidate, using NCCL: [Errno 2] No such file or directory: '/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_expanded_correctness/missing.tsv'
+UCCL Lite: unavailable candidate, using NCCL: [Errno 2] No such file or directory: '/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_expanded_correctness/missing.tsv'
+UCCL Lite: unavailable candidate, using NCCL: [Errno 2] No such file or directory: '/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/mscclpp_expanded_correctness/missing.tsv'
+# nccl-tests version 2.19.7 nccl-headers=22807 nccl-library=22807
+# Collective test starting: all_reduce_perf
+# nThread 1 nGpus 1 minBytes 1024 maxBytes 1048576 step: 2(factor) warmup iters: 2 iters: 5 agg iters: 1 validation: 1 graph: 0 unalign: 0
+#
+# Using devices
+#  Rank  0 Group  0 Pid 3008321 on mibura-sky-test-02 device  0 [0000:4a:00] NVIDIA L4
+#  Rank  1 Group  0 Pid 3008322 on mibura-sky-test-02 device  1 [0000:61:00] NVIDIA L4
+#  Rank  2 Group  0 Pid 3008323 on mibura-sky-test-02 device  2 [0000:ca:00] NVIDIA L4
+#  Rank  3 Group  0 Pid 3008324 on mibura-sky-test-02 device  3 [0000:e1:00] NVIDIA L4
+#  Rank  4 Group  0 Pid 2581202 on mibura-sky-test-01 device  0 [0000:4a:00] NVIDIA L4
+#  Rank  5 Group  0 Pid 2581203 on mibura-sky-test-01 device  1 [0000:61:00] NVIDIA L4
+#  Rank  6 Group  0 Pid 2581204 on mibura-sky-test-01 device  2 [0000:ca:00] NVIDIA L4
+#  Rank  7 Group  0 Pid 2581212 on mibura-sky-test-01 device  3 [0000:e1:00] NVIDIA L4
+UCCL Lite MSCCL++: rank=1 identity vote rejected (local valid=0 node=-1 device=1)
+UCCL Lite MSCCL++: rank=2 identity vote rejected (local valid=0 node=-1 device=2)
+UCCL Lite MSCCL++: rank=3 identity vote rejected (local valid=0 node=-1 device=3)
+UCCL Lite MSCCL++: rank=0 identity vote rejected (local valid=0 node=-1 device=0)
+UCCL Lite MSCCL++: rank=7 identity vote rejected (local valid=0 node=-1 device=3)
+UCCL Lite MSCCL++: rank=6 identity vote rejected (local valid=0 node=-1 device=2)
+UCCL Lite MSCCL++: rank=5 identity vote rejected (local valid=0 node=-1 device=1)
+UCCL Lite MSCCL++: rank=4 identity vote rejected (local valid=0 node=-1 device=0)
+#
+#                                                              out-of-place                       in-place          
+#       size         count      type   redop    root     time   algbw   busbw  #wrong     time   algbw   busbw  #wrong 
+#        (B)    (elements)                               (us)  (GB/s)  (GB/s)             (us)  (GB/s)  (GB/s)         
+        1024           256     float     sum      -1    32.81    0.03    0.05       0    25.20    0.04    0.07       0
+        2048           512     float     sum      -1    27.21    0.08    0.13       0    27.37    0.07    0.13       0
+        4096          1024     float     sum      -1    33.79    0.12    0.21       0    34.05    0.12    0.21       0
+        8192          2048     float     sum      -1    38.21    0.21    0.38       0    35.55    0.23    0.40       0
+       16384          4096     float     sum      -1    37.79    0.43    0.76       0    37.81    0.43    0.76       0
+       32768          8192     float     sum      -1    43.87    0.75    1.31       0    44.21    0.74    1.30       0
+       65536         16384     float     sum      -1    47.22    1.39    2.43       0    50.24    1.30    2.28       0
+      131072         32768     float     sum      -1   197.68    0.66    1.16       0    77.88    1.68    2.95       0
+      262144         65536     float     sum      -1  1036.85    0.25    0.44       0   728.39    0.36    0.63       0
+      524288        131072     float     sum      -1  4436.42    0.12    0.21       0  4282.84    0.12    0.21       0
+     1048576        262144     float     sum      -1  4524.06    0.23    0.41       0  1266.41    0.83    1.45       0
+# Out of bounds values : 0 OK
+# Avg bus bandwidth    : 0.81256 
+#
+# Collective test concluded: all_reduce_perf
+#
+

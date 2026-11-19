@@ -1,0 +1,265 @@
+# UCCL Lite two-node hierarchical AllReduce, float32
+# timing=host enqueue+completion; slowest of eight ranks
+# rank 0 node mibura-sky-test-02 gpu 0 NVIDIA L4 rail 0 (mlx5_0)
+# rank 1 node mibura-sky-test-02 gpu 1 NVIDIA L4 rail 0 (mlx5_0)
+# rank 2 node mibura-sky-test-02 gpu 2 NVIDIA L4 rail 1 (mlx5_1)
+# rank 3 node mibura-sky-test-02 gpu 3 NVIDIA L4 rail 1 (mlx5_1)
+# rank 4 node mibura-sky-test-01 gpu 0 NVIDIA L4 rail 0 (mlx5_0)
+# rank 5 node mibura-sky-test-01 gpu 1 NVIDIA L4 rail 0 (mlx5_0)
+# rank 6 node mibura-sky-test-01 gpu 2 NVIDIA L4 rail 1 (mlx5_1)
+# rank 7 node mibura-sky-test-01 gpu 3 NVIDIA L4 rail 1 (mlx5_1)
+# explicit host packet gather; chunk=262144; slots=3; GPU reduction=tuned RS 96x512, 8MiB target; timing includes phase handoff
+# RS target piece 8388608 B per destination shard
+#      size(B)        count   pieces   time(us)      algbw      busbw  maxrelerr
+# selected,allreduce,1024,serial-local
+# sample,allreduce,1024,1,36.307,0.000e+00
+# sample,allreduce,1024,2,36.733,0.000e+00
+# sample,allreduce,1024,3,36.380,0.000e+00
+# sample,allreduce,1024,4,37.378,0.000e+00
+# sample,allreduce,1024,5,36.824,0.000e+00
+# sample,allreduce,1024,6,36.971,0.000e+00
+# sample,allreduce,1024,7,53.048,0.000e+00
+# sample,allreduce,1024,8,38.074,0.000e+00
+# sample,allreduce,1024,9,37.014,0.000e+00
+# sample,allreduce,1024,10,36.799,0.000e+00
+          1024          256        1      38.55       0.03       0.05    0.0e+00
+# selected,allreduce,2048,serial-local
+# sample,allreduce,2048,1,39.599,0.000e+00
+# sample,allreduce,2048,2,39.664,0.000e+00
+# sample,allreduce,2048,3,37.239,0.000e+00
+# sample,allreduce,2048,4,38.505,0.000e+00
+# sample,allreduce,2048,5,37.579,0.000e+00
+# sample,allreduce,2048,6,36.889,0.000e+00
+# sample,allreduce,2048,7,36.924,0.000e+00
+# sample,allreduce,2048,8,37.240,0.000e+00
+# sample,allreduce,2048,9,37.450,0.000e+00
+# sample,allreduce,2048,10,37.704,0.000e+00
+          2048          512        1      37.88       0.05       0.09    0.0e+00
+# selected,allreduce,4096,serial-local
+# sample,allreduce,4096,1,36.102,0.000e+00
+# sample,allreduce,4096,2,36.549,0.000e+00
+# sample,allreduce,4096,3,38.324,0.000e+00
+# sample,allreduce,4096,4,36.435,0.000e+00
+# sample,allreduce,4096,5,40.704,0.000e+00
+# sample,allreduce,4096,6,41.141,0.000e+00
+# sample,allreduce,4096,7,37.149,0.000e+00
+# sample,allreduce,4096,8,36.740,0.000e+00
+# sample,allreduce,4096,9,37.720,0.000e+00
+# sample,allreduce,4096,10,36.734,0.000e+00
+          4096         1024        1      37.76       0.11       0.19    0.0e+00
+# selected,allreduce,8192,serial-local
+# sample,allreduce,8192,1,36.517,0.000e+00
+# sample,allreduce,8192,2,37.880,0.000e+00
+# sample,allreduce,8192,3,37.051,0.000e+00
+# sample,allreduce,8192,4,36.314,0.000e+00
+# sample,allreduce,8192,5,37.073,0.000e+00
+# sample,allreduce,8192,6,39.615,0.000e+00
+# sample,allreduce,8192,7,37.082,0.000e+00
+# sample,allreduce,8192,8,37.325,0.000e+00
+# sample,allreduce,8192,9,36.758,0.000e+00
+# sample,allreduce,8192,10,38.000,0.000e+00
+          8192         2048        1      37.36       0.22       0.38    0.0e+00
+# selected,allreduce,16384,serial-local
+# sample,allreduce,16384,1,37.998,0.000e+00
+# sample,allreduce,16384,2,36.978,0.000e+00
+# sample,allreduce,16384,3,38.270,0.000e+00
+# sample,allreduce,16384,4,38.435,0.000e+00
+# sample,allreduce,16384,5,44.951,0.000e+00
+# sample,allreduce,16384,6,39.237,0.000e+00
+# sample,allreduce,16384,7,39.157,0.000e+00
+# sample,allreduce,16384,8,37.289,0.000e+00
+# sample,allreduce,16384,9,38.376,0.000e+00
+# sample,allreduce,16384,10,37.954,0.000e+00
+         16384         4096        1      38.86       0.42       0.74    0.0e+00
+# selected,allreduce,32768,serial-local
+# sample,allreduce,32768,1,39.856,0.000e+00
+# sample,allreduce,32768,2,39.674,0.000e+00
+# sample,allreduce,32768,3,40.625,0.000e+00
+# sample,allreduce,32768,4,40.504,0.000e+00
+# sample,allreduce,32768,5,40.760,0.000e+00
+# sample,allreduce,32768,6,40.347,0.000e+00
+# sample,allreduce,32768,7,39.448,0.000e+00
+# sample,allreduce,32768,8,40.236,0.000e+00
+# sample,allreduce,32768,9,46.919,0.000e+00
+# sample,allreduce,32768,10,41.152,0.000e+00
+         32768         8192        1      40.95       0.80       1.40    0.0e+00
+# selected,allreduce,65536,serial-local
+# sample,allreduce,65536,1,44.066,0.000e+00
+# sample,allreduce,65536,2,44.922,0.000e+00
+# sample,allreduce,65536,3,45.131,0.000e+00
+# sample,allreduce,65536,4,44.402,0.000e+00
+# sample,allreduce,65536,5,44.909,0.000e+00
+# sample,allreduce,65536,6,43.646,0.000e+00
+# sample,allreduce,65536,7,46.561,0.000e+00
+# sample,allreduce,65536,8,45.504,0.000e+00
+# sample,allreduce,65536,9,45.112,0.000e+00
+# sample,allreduce,65536,10,45.484,0.000e+00
+         65536        16384        1      44.97       1.46       2.55    0.0e+00
+# selected,allreduce,131072,serial-local
+# sample,allreduce,131072,1,57.149,0.000e+00
+# sample,allreduce,131072,2,55.362,0.000e+00
+# sample,allreduce,131072,3,54.846,0.000e+00
+# sample,allreduce,131072,4,57.561,0.000e+00
+# sample,allreduce,131072,5,58.134,0.000e+00
+# sample,allreduce,131072,6,54.297,0.000e+00
+# sample,allreduce,131072,7,54.105,0.000e+00
+# sample,allreduce,131072,8,54.015,0.000e+00
+# sample,allreduce,131072,9,56.069,0.000e+00
+# sample,allreduce,131072,10,55.968,0.000e+00
+        131072        32768        1      55.75       2.35       4.11    0.0e+00
+# selected,allreduce,262144,serial-local
+# sample,allreduce,262144,1,72.783,0.000e+00
+# sample,allreduce,262144,2,85.575,0.000e+00
+# sample,allreduce,262144,3,71.539,0.000e+00
+# sample,allreduce,262144,4,73.034,0.000e+00
+# sample,allreduce,262144,5,71.606,0.000e+00
+# sample,allreduce,262144,6,72.038,0.000e+00
+# sample,allreduce,262144,7,72.718,0.000e+00
+# sample,allreduce,262144,8,71.830,0.000e+00
+# sample,allreduce,262144,9,71.078,0.000e+00
+# sample,allreduce,262144,10,72.334,0.000e+00
+        262144        65536        1      73.45       3.57       6.25    0.0e+00
+# selected,allreduce,524288,gpu-rs-host-ag
+# sample,allreduce,524288,1,114.577,0.000e+00
+# sample,allreduce,524288,2,112.580,0.000e+00
+# sample,allreduce,524288,3,118.152,0.000e+00
+# sample,allreduce,524288,4,112.119,0.000e+00
+# sample,allreduce,524288,5,114.747,0.000e+00
+# sample,allreduce,524288,6,111.474,0.000e+00
+# sample,allreduce,524288,7,113.155,0.000e+00
+# sample,allreduce,524288,8,112.976,0.000e+00
+# sample,allreduce,524288,9,115.019,0.000e+00
+# sample,allreduce,524288,10,113.866,0.000e+00
+        524288       131072        1     113.87       4.60       8.06    0.0e+00
+# selected,allreduce,1048576,gpu-rs-host-ag
+# sample,allreduce,1048576,1,176.428,0.000e+00
+# sample,allreduce,1048576,2,178.981,0.000e+00
+# sample,allreduce,1048576,3,178.173,0.000e+00
+# sample,allreduce,1048576,4,176.302,0.000e+00
+# sample,allreduce,1048576,5,174.494,0.000e+00
+# sample,allreduce,1048576,6,180.904,0.000e+00
+# sample,allreduce,1048576,7,175.196,0.000e+00
+# sample,allreduce,1048576,8,182.956,0.000e+00
+# sample,allreduce,1048576,9,177.452,0.000e+00
+# sample,allreduce,1048576,10,183.831,0.000e+00
+       1048576       262144        1     178.47       5.88      10.28    0.0e+00
+# selected,allreduce,2097152,gpu-rs-host-ag
+# sample,allreduce,2097152,1,308.872,0.000e+00
+# sample,allreduce,2097152,2,300.055,0.000e+00
+# sample,allreduce,2097152,3,299.108,0.000e+00
+# sample,allreduce,2097152,4,301.061,0.000e+00
+# sample,allreduce,2097152,5,301.013,0.000e+00
+# sample,allreduce,2097152,6,301.974,0.000e+00
+# sample,allreduce,2097152,7,304.704,0.000e+00
+# sample,allreduce,2097152,8,304.704,0.000e+00
+# sample,allreduce,2097152,9,301.658,0.000e+00
+# sample,allreduce,2097152,10,303.161,0.000e+00
+       2097152       524288        1     302.63       6.93      12.13    0.0e+00
+# selected,allreduce,4194304,gpu-rs-host-ag
+# sample,allreduce,4194304,1,497.535,0.000e+00
+# sample,allreduce,4194304,2,494.609,0.000e+00
+# sample,allreduce,4194304,3,496.195,0.000e+00
+# sample,allreduce,4194304,4,498.796,0.000e+00
+# sample,allreduce,4194304,5,490.855,0.000e+00
+# sample,allreduce,4194304,6,490.283,0.000e+00
+# sample,allreduce,4194304,7,493.246,0.000e+00
+# sample,allreduce,4194304,8,492.662,0.000e+00
+# sample,allreduce,4194304,9,496.722,0.000e+00
+# sample,allreduce,4194304,10,490.992,0.000e+00
+       4194304      1048576        1     494.19       8.49      14.85    0.0e+00
+# selected,allreduce,8388608,gpu-rs-host-ag
+# sample,allreduce,8388608,1,895.457,0.000e+00
+# sample,allreduce,8388608,2,897.262,0.000e+00
+# sample,allreduce,8388608,3,891.644,0.000e+00
+# sample,allreduce,8388608,4,900.147,0.000e+00
+# sample,allreduce,8388608,5,893.421,0.000e+00
+# sample,allreduce,8388608,6,891.992,0.000e+00
+# sample,allreduce,8388608,7,895.147,0.000e+00
+# sample,allreduce,8388608,8,882.447,0.000e+00
+# sample,allreduce,8388608,9,896.773,0.000e+00
+# sample,allreduce,8388608,10,888.684,0.000e+00
+       8388608      2097152        1     893.30       9.39      16.43    0.0e+00
+# selected,allreduce,16777216,gpu-rs-host-ag
+# sample,allreduce,16777216,1,1688.505,0.000e+00
+# sample,allreduce,16777216,2,1682.313,0.000e+00
+# sample,allreduce,16777216,3,1682.256,0.000e+00
+# sample,allreduce,16777216,4,1691.707,0.000e+00
+# sample,allreduce,16777216,5,1681.509,0.000e+00
+# sample,allreduce,16777216,6,1673.625,0.000e+00
+# sample,allreduce,16777216,7,1693.202,0.000e+00
+# sample,allreduce,16777216,8,1673.930,0.000e+00
+# sample,allreduce,16777216,9,1675.853,0.000e+00
+# sample,allreduce,16777216,10,1691.263,0.000e+00
+      16777216      4194304        1    1683.42       9.97      17.44    0.0e+00
+# selected,allreduce,33554432,gpu-rs-host-ag
+# sample,allreduce,33554432,1,3169.654,0.000e+00
+# sample,allreduce,33554432,2,3206.339,0.000e+00
+# sample,allreduce,33554432,3,3190.072,0.000e+00
+# sample,allreduce,33554432,4,3196.249,0.000e+00
+# sample,allreduce,33554432,5,3200.699,0.000e+00
+# sample,allreduce,33554432,6,3237.336,0.000e+00
+# sample,allreduce,33554432,7,3196.657,0.000e+00
+# sample,allreduce,33554432,8,3178.750,0.000e+00
+# sample,allreduce,33554432,9,3196.693,0.000e+00
+# sample,allreduce,33554432,10,3198.248,0.000e+00
+      33554432      8388608        2    3197.07      10.50      18.37    0.0e+00
+# selected,allreduce,67108864,gpu-rs-host-ag
+# sample,allreduce,67108864,1,6132.711,0.000e+00
+# sample,allreduce,67108864,2,6142.140,0.000e+00
+# sample,allreduce,67108864,3,6146.102,0.000e+00
+# sample,allreduce,67108864,4,6142.185,0.000e+00
+# sample,allreduce,67108864,5,6147.083,0.000e+00
+# sample,allreduce,67108864,6,6109.256,0.000e+00
+# sample,allreduce,67108864,7,6135.664,0.000e+00
+# sample,allreduce,67108864,8,6178.686,0.000e+00
+# sample,allreduce,67108864,9,6163.081,0.000e+00
+# sample,allreduce,67108864,10,6154.616,0.000e+00
+      67108864     16777216        2    6145.15      10.92      19.11    0.0e+00
+# selected,allreduce,134217728,gpu-rs-host-ag
+# sample,allreduce,134217728,1,12075.214,0.000e+00
+# sample,allreduce,134217728,2,12055.852,0.000e+00
+# sample,allreduce,134217728,3,12309.632,0.000e+00
+# sample,allreduce,134217728,4,12094.964,0.000e+00
+# sample,allreduce,134217728,5,12090.498,0.000e+00
+# sample,allreduce,134217728,6,12172.199,0.000e+00
+# sample,allreduce,134217728,7,12106.809,0.000e+00
+# sample,allreduce,134217728,8,12086.848,0.000e+00
+# sample,allreduce,134217728,9,12120.649,0.000e+00
+# sample,allreduce,134217728,10,12146.239,0.000e+00
+     134217728     33554432        2   12125.89      11.07      19.37    0.0e+00
+# selected,allreduce,268435456,gpu-rs-host-ag
+# sample,allreduce,268435456,1,24215.889,0.000e+00
+# sample,allreduce,268435456,2,24106.706,0.000e+00
+# sample,allreduce,268435456,3,24315.940,0.000e+00
+# sample,allreduce,268435456,4,24230.493,0.000e+00
+# sample,allreduce,268435456,5,24355.934,0.000e+00
+# sample,allreduce,268435456,6,24180.024,0.000e+00
+# sample,allreduce,268435456,7,24014.699,0.000e+00
+# sample,allreduce,268435456,8,24021.699,0.000e+00
+# sample,allreduce,268435456,9,24211.036,0.000e+00
+# sample,allreduce,268435456,10,24349.078,0.000e+00
+     268435456     67108864        4   24200.15      11.09      19.41    0.0e+00
+# selected,allreduce,536870912,gpu-rs-host-ag
+# sample,allreduce,536870912,1,48445.247,0.000e+00
+# sample,allreduce,536870912,2,48309.927,0.000e+00
+# sample,allreduce,536870912,3,48246.167,0.000e+00
+# sample,allreduce,536870912,4,48454.311,0.000e+00
+# sample,allreduce,536870912,5,48239.527,0.000e+00
+# sample,allreduce,536870912,6,48384.429,0.000e+00
+# sample,allreduce,536870912,7,48378.409,0.000e+00
+# sample,allreduce,536870912,8,48322.117,0.000e+00
+# sample,allreduce,536870912,9,48321.418,0.000e+00
+# sample,allreduce,536870912,10,48330.783,0.000e+00
+     536870912    134217728        8   48343.23      11.11      19.43    0.0e+00
+# selected,allreduce,1073741824,gpu-rs-host-ag
+# sample,allreduce,1073741824,1,96923.129,0.000e+00
+# sample,allreduce,1073741824,2,96423.770,0.000e+00
+# sample,allreduce,1073741824,3,96518.265,0.000e+00
+# sample,allreduce,1073741824,4,96677.717,0.000e+00
+# sample,allreduce,1073741824,5,96155.816,0.000e+00
+# sample,allreduce,1073741824,6,96342.310,0.000e+00
+# sample,allreduce,1073741824,7,96516.032,0.000e+00
+# sample,allreduce,1073741824,8,96378.979,0.000e+00
+# sample,allreduce,1073741824,9,96596.894,0.000e+00
+# sample,allreduce,1073741824,10,96489.032,0.000e+00
+    1073741824    268435456       16   96502.19      11.13      19.47    0.0e+00

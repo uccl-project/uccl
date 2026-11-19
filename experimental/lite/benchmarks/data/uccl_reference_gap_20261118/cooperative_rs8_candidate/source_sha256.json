@@ -1,0 +1,22 @@
+{
+  "Makefile": "ebe2634eefcd6af54cf565d988cf4972c5b44a4529a1bcd3fa6f52782b24021d",
+  "tests/nccl_mscclpp/run.py": "171a4fd6407042cc8b75647b31c3e32890a8c0e60c36b82ef4296059a165b445",
+  "tests/nccl_mscclpp/strict_abi.cu": "cb347edfd0003d09e5afea9e31de356b112d9713d2bf7dcb72f2a6557e6d3ad9",
+  "tests/multinode/async_host_gather.cu": "2ca33631f2ac70ddf69b2f4103dad143ecafd84eb12524be0c115bb14a2f1df7",
+  "include/uccl_lite/collectives.h": "87d70d97cf3d4aa19393a7f9c93d4803fd880b94c5912420a846a456043fe593",
+  "src/multinode/multinode_host_reduce.cu": "2c370397c173bcc49d16f2a344295e60a0251c7166668a61e1b80df67079115b",
+  "src/multinode/communicator.cu": "e8073a2f8ef4dfff3b02d94738a8069d322850d36b7847cc46cda9ee8375b5f3",
+  "src/multinode/algorithm_transport.h": "9811d8135bece79924759ae8616495a02c01f47eb36993ceb2697182089615b4",
+  "src/multinode/kernels.cuh": "1ce9ac7cf84569f2217748995e0c76ef22f3bd9fc1542ce4a368ad6c99911ee4",
+  "src/multinode/oneshot_allreduce.cuh": "9a96af28cd55bfa977920f5b0d556c80e6d313013f175d2d8f9e1371c24476d3",
+  "src/multinode/async_host_gather.cuh": "c34dff7bc5447284a60a7613746d8104b3b19a944c92324f7b8255a663be6825",
+  "src/multinode/mscclpp_backend.cu": "73ff4c1c6e4d5071118ee1407de109732934609fb02eac22aae9c7a5ff897b92",
+  "src/multinode/shared_host_packets.h": "82c904b8e6bcff2bff12f9a41ada447adea8ba24bc2b842bc0ef0971c3e18444",
+  "src/multinode/gpu_transport.h": "5fc186ff27d52638f87582f60020c08f70be6b305bb6a3a9b396c69bcd56d173",
+  "src/multinode/host_packet_transport.h": "0413cdb8e4a447b5adfe8053826197df84448ad0860f8c4d5e8bfaabc5fb9a9f",
+  "src/multinode/device_collectives.cuh": "4a2850197a42902f7c72ee273ce800cd802d32eda1ebb99e9fb8b6f8e75dc206",
+  "integration/nccl_lite/mscclpp_strict.cc": "db5fad91de2099f1a2b8365b78303f44e5308ac1fc9f428c8a2fab8955d1005d",
+  "integration/nccl_lite/host_control.h": "f98f7afeabc8741f41a0b9a9d9ca4c80f8c8fe39a433caefcd2015a8e8d42403",
+  "integration/nccl_lite/mscclpp_exports.version": "12cd15cce8149d0b47214e8bd9a675350b635cc996b62c64c104b75fb3ad718e",
+  "integration/nccl_lite/mscclpp_profile.py": "d3065e29f634615504336ad9f1161b7f632ead5acc5c4810dfab4ff9df3cd062"
+}

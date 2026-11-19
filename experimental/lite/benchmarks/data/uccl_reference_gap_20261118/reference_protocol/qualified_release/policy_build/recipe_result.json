@@ -1,0 +1,16 @@
+{
+  "scope": "recipe equivalence only; no compilation/admission",
+  "command": [
+    "make",
+    "-n",
+    "BUILD=build/policy_graph512_recipe_check",
+    "UCCL_LITE_NCCL_POLICY=graph512",
+    "MSCCLPP_IB_BUILD=/home/zhongjie/third_party/mscclpp/build-ib-pcieccl",
+    "MPICXX=/usr/mpi/gcc/openmpi-4.1.7rc1/bin/mpicxx",
+    "build/policy_graph512_recipe_check/nccl_lite/libuccl_lite_nccl_strict.so"
+  ],
+  "checks": {
+    "backend": true,
+    "library": true
+  }
+}

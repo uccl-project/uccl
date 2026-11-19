@@ -1,0 +1,10 @@
+mkdir -p build/uccl_reference_protocol/nccl_lite
+/usr/local/cuda/bin/nvcc -O3 -arch=sm_89 -MMD -MP  -std=c++20 -Xcompiler=-fPIC -Xcompiler=-fvisibility=hidden -Iinclude -I/home/zhongjie/third_party/mscclpp/include -I/home/zhongjie/third_party/mscclpp/build-ib/include -c src/multinode/mscclpp_backend.cu -o build/uccl_reference_protocol/nccl_lite/mscclpp_backend.o
+In file included from src/multinode/device_collectives.cuh:5,
+                 from src/multinode/algorithm_transport.h:3,
+                 from src/multinode/mscclpp_backend.cu:1:
+/home/zhongjie/third_party/mscclpp/include/mscclpp/core.hpp:13:10: fatal error: mscclpp/version.hpp: No such file or directory
+   13 | #include <mscclpp/version.hpp>
+      |          ^~~~~~~~~~~~~~~~~~~~~
+compilation terminated.
+make: *** [Makefile:153: build/uccl_reference_protocol/nccl_lite/mscclpp_backend.o] Error 1

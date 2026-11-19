@@ -1,0 +1,289 @@
+{
+  "threshold": 0.05,
+  "passed": false,
+  "rows": 126,
+  "failures": [
+    {
+      "operation": "all_gather",
+      "bytes": 1024,
+      "layout": "out-of-place",
+      "ratio": 1.2425100259495163
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 1024,
+      "layout": "in-place",
+      "ratio": 1.283144201494603
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 2048,
+      "layout": "out-of-place",
+      "ratio": 1.21301775147929
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 2048,
+      "layout": "in-place",
+      "ratio": 1.264626218851571
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 4096,
+      "layout": "out-of-place",
+      "ratio": 1.2617323679270582
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 4096,
+      "layout": "in-place",
+      "ratio": 1.2730727470141152
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 8192,
+      "layout": "out-of-place",
+      "ratio": 1.2578974624546866
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 8192,
+      "layout": "in-place",
+      "ratio": 1.2437127301011148
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 16384,
+      "layout": "out-of-place",
+      "ratio": 1.2347868933234787
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 16384,
+      "layout": "in-place",
+      "ratio": 1.2164948453608249
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 32768,
+      "layout": "out-of-place",
+      "ratio": 1.22920892494929
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 32768,
+      "layout": "in-place",
+      "ratio": 1.2013951395139515
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 65536,
+      "layout": "out-of-place",
+      "ratio": 1.2239170225747409
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 65536,
+      "layout": "in-place",
+      "ratio": 1.225839475839476
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 131072,
+      "layout": "out-of-place",
+      "ratio": 1.6295981890209392
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 131072,
+      "layout": "in-place",
+      "ratio": 1.0752437781982243
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 4194304,
+      "layout": "out-of-place",
+      "ratio": 1.181199123356293
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 4194304,
+      "layout": "in-place",
+      "ratio": 1.1830487828837501
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 8388608,
+      "layout": "out-of-place",
+      "ratio": 1.17595447513334
+    },
+    {
+      "operation": "all_gather",
+      "bytes": 8388608,
+      "layout": "in-place",
+      "ratio": 1.1838805710684717
+    },
+    {
+      "operation": "reduce_scatter",
+      "bytes": 1024,
+      "layout": "out-of-place",
+      "ratio": 1.233135177048333
+    },
+    {
+      "operation": "reduce_scatter",
+      "bytes": 1024,
+      "layout": "in-place",
+      "ratio": 1.187140902872777
+    },
+    {
+      "operation": "reduce_scatter",
+      "bytes": 2048,
+      "layout": "out-of-place",
+      "ratio": 1.1501355013550134
+    },
+    {
+      "operation": "reduce_scatter",
+      "bytes": 2048,
+      "layout": "in-place",
+      "ratio": 1.1390243902439026
+    },
+    {
+      "operation": "reduce_scatter",
+      "bytes": 4096,
+      "layout": "out-of-place",
+      "ratio": 1.123703112529928
+    },
+    {
+      "operation": "reduce_scatter",
+      "bytes": 4096,
+      "layout": "in-place",
+      "ratio": 1.1493877551020408
+    },
+    {
+      "operation": "reduce_scatter",
+      "bytes": 8192,
+      "layout": "out-of-place",
+      "ratio": 1.1180010465724752
+    },
+    {
+      "operation": "reduce_scatter",
+      "bytes": 8192,
+      "layout": "in-place",
+      "ratio": 1.1049766718506997
+    },
+    {
+      "operation": "reduce_scatter",
+      "bytes": 65536,
+      "layout": "out-of-place",
+      "ratio": 1.0520536803578688
+    },
+    {
+      "operation": "reduce_scatter",
+      "bytes": 1048576,
+      "layout": "out-of-place",
+      "ratio": 1.0603939364680892
+    },
+    {
+      "operation": "reduce_scatter",
+      "bytes": 1048576,
+      "layout": "in-place",
+      "ratio": 1.0637452130495904
+    },
+    {
+      "operation": "reduce_scatter",
+      "bytes": 2097152,
+      "layout": "in-place",
+      "ratio": 1.052449446316803
+    },
+    {
+      "operation": "reduce_scatter",
+      "bytes": 4194304,
+      "layout": "out-of-place",
+      "ratio": 1.1156402139908554
+    },
+    {
+      "operation": "reduce_scatter",
+      "bytes": 4194304,
+      "layout": "in-place",
+      "ratio": 1.1101367036368326
+    },
+    {
+      "operation": "reduce_scatter",
+      "bytes": 8388608,
+      "layout": "out-of-place",
+      "ratio": 1.1313406629304097
+    },
+    {
+      "operation": "reduce_scatter",
+      "bytes": 8388608,
+      "layout": "in-place",
+      "ratio": 1.13193528936853
+    },
+    {
+      "operation": "all_reduce",
+      "bytes": 1024,
+      "layout": "out-of-place",
+      "ratio": 1.2139670223084384
+    },
+    {
+      "operation": "all_reduce",
+      "bytes": 1024,
+      "layout": "in-place",
+      "ratio": 1.2794316644113668
+    },
+    {
+      "operation": "all_reduce",
+      "bytes": 2048,
+      "layout": "out-of-place",
+      "ratio": 1.148654077942949
+    },
+    {
+      "operation": "all_reduce",
+      "bytes": 2048,
+      "layout": "in-place",
+      "ratio": 1.1576456060917883
+    },
+    {
+      "operation": "all_reduce",
+      "bytes": 65536,
+      "layout": "out-of-place",
+      "ratio": 1.0987417615338528
+    },
+    {
+      "operation": "all_reduce",
+      "bytes": 65536,
+      "layout": "in-place",
+      "ratio": 1.0744169271459485
+    },
+    {
+      "operation": "all_reduce",
+      "bytes": 131072,
+      "layout": "out-of-place",
+      "ratio": 1.2159119132378509
+    },
+    {
+      "operation": "all_reduce",
+      "bytes": 4194304,
+      "layout": "out-of-place",
+      "ratio": 1.1058020826939998
+    },
+    {
+      "operation": "all_reduce",
+      "bytes": 4194304,
+      "layout": "in-place",
+      "ratio": 1.1051577570704594
+    },
+    {
+      "operation": "all_reduce",
+      "bytes": 8388608,
+      "layout": "out-of-place",
+      "ratio": 1.1408163038772767
+    },
+    {
+      "operation": "all_reduce",
+      "bytes": 8388608,
+      "layout": "in-place",
+      "ratio": 1.1421238584094395
+    }
+  ]
+}

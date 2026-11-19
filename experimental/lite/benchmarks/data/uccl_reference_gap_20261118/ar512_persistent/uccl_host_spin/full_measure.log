@@ -1,0 +1,16 @@
+Starting fixed-library ag
+AG diagnostic 0
+AG diagnostic 1
+AG diagnostic 2
+[{'bytes': 8388608, 'layout': 'out-of-place', 'median_us': 332.54, 'min_us': 332.3, 'max_us': 333.46, 'reference_us': 355.3684666666667, 'diagnostic_ratio': 0.9357611358126504}, {'bytes': 8388608, 'layout': 'in-place', 'median_us': 332.14, 'min_us': 331.51, 'max_us': 332.56, 'reference_us': 355.3684666666667, 'diagnostic_ratio': 0.9346355435400664}, {'bytes': 1073741824, 'layout': 'out-of-place', 'median_us': 39171.5, 'min_us': 39147.2, 'max_us': 39323.8, 'reference_us': 41921.7642, 'diagnostic_ratio': 0.9343953134491416}, {'bytes': 1073741824, 'layout': 'in-place', 'median_us': 39251.6, 'min_us': 39163.8, 'max_us': 39461.3, 'reference_us': 41921.7642, 'diagnostic_ratio': 0.9363060154801405}]
+Starting fixed-library ar
+AR diagnostic 0
+AR diagnostic 1
+AR diagnostic 2
+[{'bytes': 8388608, 'layout': 'out-of-place', 'median_us': 843.4, 'min_us': 842.21, 'max_us': 846.75, 'reference_us': 890.3953, 'diagnostic_ratio': 0.9472197348750605}, {'bytes': 8388608, 'layout': 'in-place', 'median_us': 842.63, 'min_us': 842.42, 'max_us': 843.49, 'reference_us': 890.3953, 'diagnostic_ratio': 0.9463549504360591}, {'bytes': 1073741824, 'layout': 'out-of-place', 'median_us': 92646.9, 'min_us': 92558.6, 'max_us': 92727.1, 'reference_us': 96444.88769999999, 'diagnostic_ratio': 0.9606201241914039}, {'bytes': 1073741824, 'layout': 'in-place', 'median_us': 92666.4, 'min_us': 92658.2, 'max_us': 92699.8, 'reference_us': 96444.88769999999, 'diagnostic_ratio': 0.9608223122022465}]
+Starting fixed-library rs
+RS diagnostic 0
+RS diagnostic 1
+RS diagnostic 2
+[{'bytes': 8388608, 'layout': 'out-of-place', 'median_us': 479.14, 'min_us': 477.43, 'max_us': 479.32, 'reference_us': 494.3986, 'diagnostic_ratio': 0.9691370485272409}, {'bytes': 8388608, 'layout': 'in-place', 'median_us': 477.21, 'min_us': 476.92, 'max_us': 479.05, 'reference_us': 494.3986, 'diagnostic_ratio': 0.9652333157901337}, {'bytes': 1073741824, 'layout': 'out-of-place', 'median_us': 53436.9, 'min_us': 53436.4, 'max_us': 53453.2, 'reference_us': 53692.5432, 'diagnostic_ratio': 0.9952387578467321}, {'bytes': 1073741824, 'layout': 'in-place', 'median_us': 53378.1, 'min_us': 53329.2, 'max_us': 53382.5, 'reference_us': 53692.5432, 'diagnostic_ratio': 0.9941436337103883}]
+{"ag": {"rows": 42, "slower_rows": 0, "worst_ratio": 0.9566493435356095}, "ar": {"rows": 42, "slower_rows": 0, "worst_ratio": 0.9608223122022465}, "rs": {"rows": 42, "slower_rows": 0, "worst_ratio": 0.9952387578467321}}

@@ -1,0 +1,22 @@
+[
+  {
+    "case": "nonfinite",
+    "rejected": true,
+    "reason": "ag_0: invalid timing"
+  },
+  {
+    "case": "missing_route",
+    "rejected": true,
+    "reason": "ag_0: routes"
+  },
+  {
+    "case": "duplicate_row",
+    "rejected": true,
+    "reason": "ag_0: duplicate timing row"
+  },
+  {
+    "case": "changed_mean",
+    "rejected": true,
+    "reason": "ag_0: stored rows differ from raw log"
+  }
+]

@@ -1,0 +1,25 @@
+{
+  "threshold": 0.05,
+  "passed": false,
+  "rows": 126,
+  "failures": [
+    {
+      "operation": "reduce_scatter",
+      "bytes": 4096,
+      "layout": "in-place",
+      "ratio": 1.368916375369723
+    },
+    {
+      "operation": "all_reduce",
+      "bytes": 8388608,
+      "layout": "out-of-place",
+      "ratio": 1.0569096196942651
+    },
+    {
+      "operation": "all_reduce",
+      "bytes": 8388608,
+      "layout": "in-place",
+      "ratio": 1.053080552989273
+    }
+  ]
+}

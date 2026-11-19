@@ -1,0 +1,20 @@
+{
+  "pid": 3664143,
+  "started": 1795010404.0414019,
+  "candidate_sha256": "0adc90877552af4d3585b08591b950aaedc38bb8849835649e7be57be9213f53",
+  "scope": "AG/AR/RS, 1 KiB\u20131 GiB, both layouts, unchanged nccl-tests plus full-retirement paired reference; zero native fallback",
+  "jobs": [
+    {
+      "script": "measure_all.py",
+      "status": "complete",
+      "exit_code": 0
+    },
+    {
+      "script": "paired.py",
+      "status": "complete",
+      "exit_code": 0
+    }
+  ],
+  "exit_code": 0,
+  "finished": 1795011726.8966806
+}

@@ -1,0 +1,72 @@
+# UCCL Lite two-node hierarchical AllReduce, float32
+# timing=host enqueue+completion; slowest of eight ranks
+# rank 0 node mibura-sky-test-02 gpu 0 NVIDIA L4 rail 0 (mlx5_0)
+# rank 1 node mibura-sky-test-02 gpu 1 NVIDIA L4 rail 0 (mlx5_0)
+# rank 2 node mibura-sky-test-02 gpu 2 NVIDIA L4 rail 1 (mlx5_1)
+# rank 3 node mibura-sky-test-02 gpu 3 NVIDIA L4 rail 1 (mlx5_1)
+# rank 4 node mibura-sky-test-01 gpu 0 NVIDIA L4 rail 0 (mlx5_0)
+# rank 5 node mibura-sky-test-01 gpu 1 NVIDIA L4 rail 0 (mlx5_0)
+# rank 6 node mibura-sky-test-01 gpu 2 NVIDIA L4 rail 1 (mlx5_1)
+# rank 7 node mibura-sky-test-01 gpu 3 NVIDIA L4 rail 1 (mlx5_1)
+# local ring 0->1->3->2->0; AG adaptive flat/ring; rail map 0,0,1,1; piece 2097152 B; pipeline >= 4194304 B
+#      size(B)        count   pieces   time(us)      algbw      busbw  maxrelerr
+# selected,allreduce,1024,serial-local
+# sample,allreduce,1024,1,36.239,0.000e+00
+# sample,allreduce,1024,2,35.386,0.000e+00
+          1024          256        1      35.81       0.03       0.05    0.0e+00
+# selected,allreduce,2048,serial-local
+# sample,allreduce,2048,1,46.109,0.000e+00
+# sample,allreduce,2048,2,36.062,0.000e+00
+          2048          512        1      41.09       0.05       0.09    0.0e+00
+# selected,allreduce,4096,serial-local
+# sample,allreduce,4096,1,34.942,0.000e+00
+# sample,allreduce,4096,2,35.093,0.000e+00
+          4096         1024        1      35.02       0.12       0.20    0.0e+00
+# selected,allreduce,8192,serial-local
+# sample,allreduce,8192,1,41.852,0.000e+00
+# sample,allreduce,8192,2,36.689,0.000e+00
+          8192         2048        1      39.27       0.21       0.37    0.0e+00
+# selected,allreduce,16384,serial-local
+# sample,allreduce,16384,1,42.817,0.000e+00
+# sample,allreduce,16384,2,37.868,0.000e+00
+         16384         4096        1      40.34       0.41       0.71    0.0e+00
+# selected,allreduce,32768,serial-local
+# sample,allreduce,32768,1,39.949,0.000e+00
+# sample,allreduce,32768,2,40.069,0.000e+00
+         32768         8192        1      40.01       0.82       1.43    0.0e+00
+# selected,allreduce,65536,serial-local
+# sample,allreduce,65536,1,44.559,0.000e+00
+# sample,allreduce,65536,2,43.921,0.000e+00
+         65536        16384        1      44.24       1.48       2.59    0.0e+00
+# selected,allreduce,131072,serial-local
+# sample,allreduce,131072,1,59.089,0.000e+00
+# sample,allreduce,131072,2,58.575,0.000e+00
+        131072        32768        1      58.83       2.23       3.90    0.0e+00
+# selected,allreduce,262144,serial-local
+# sample,allreduce,262144,1,73.799,0.000e+00
+# sample,allreduce,262144,2,78.718,0.000e+00
+        262144        65536        1      76.26       3.44       6.02    0.0e+00
+# selected,allreduce,524288,serial-local
+# sample,allreduce,524288,1,111.820,0.000e+00
+# sample,allreduce,524288,2,113.857,0.000e+00
+        524288       131072        1     112.84       4.65       8.13    0.0e+00
+# selected,allreduce,1048576,serial-local
+# sample,allreduce,1048576,1,208.724,0.000e+00
+# sample,allreduce,1048576,2,215.125,0.000e+00
+       1048576       262144        1     211.92       4.95       8.66    0.0e+00
+# selected,allreduce,2097152,ring-local-gather
+# sample,allreduce,2097152,1,340.136,0.000e+00
+# sample,allreduce,2097152,2,319.057,0.000e+00
+       2097152       524288        1     329.60       6.36      11.13    0.0e+00
+# selected,allreduce,4194304,ring-local-gather
+# sample,allreduce,4194304,1,570.733,0.000e+00
+# sample,allreduce,4194304,2,566.754,0.000e+00
+       4194304      1048576        2     568.74       7.37      12.91    0.0e+00
+# selected,allreduce,8388608,ring-local-gather
+# sample,allreduce,8388608,1,948.170,0.000e+00
+# sample,allreduce,8388608,2,961.541,0.000e+00
+       8388608      2097152        2     954.86       8.79      15.37    0.0e+00
+# selected,allreduce,16777216,ring-local-gather
+# sample,allreduce,16777216,1,1742.505,0.000e+00
+# sample,allreduce,16777216,2,1747.893,0.000e+00
+      16777216      4194304        2    1745.20       9.61      16.82    0.0e+00

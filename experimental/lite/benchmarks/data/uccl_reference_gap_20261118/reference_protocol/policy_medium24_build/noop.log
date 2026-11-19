@@ -1,0 +1,5 @@
+mkdir -p build/uccl_policy_medium24/nccl_lite
+make: 'build/uccl_policy_medium24/nccl_lite/mscclpp_strict_abi_medium128_check' is up to date.
+make: 'build/uccl_policy_medium24/nccl_lite/async_host_gather_check' is up to date.
+make: 'build/uccl_policy_medium24/nccl_lite/network_sizes_check' is up to date.
+make: 'build/uccl_policy_medium24/nccl_lite/network_queue_check' is up to date.

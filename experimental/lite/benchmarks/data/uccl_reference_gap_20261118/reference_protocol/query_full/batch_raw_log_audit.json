@@ -1,0 +1,14 @@
+{
+  "scope": "batch diagnostic only; not matched or release admission",
+  "raw_log_checks_passed": true,
+  "runs": 9,
+  "rows": 126,
+  "candidate_sha256": "973eb079bee28d7c16e5f7b889f32ff396341b41757b5913cf4b40f5e3fb5c16",
+  "nccl_tests_sha256": {
+    "ag": "1711a778e8ece10a6d0e21ccb2d308b29c773177fe9ba99de6e63bd0a27eced2",
+    "ar": "47a7f46967eb89cf224752f4fab653e91de6d2c9b83b2b72ccf72cdcde69d53f",
+    "rs": "c03bf21e5525179eabe7989ca49d9e1f542da33b3a9ab6de8f9efebd90ebee47"
+  },
+  "slower_rows": 0,
+  "failures": []
+}

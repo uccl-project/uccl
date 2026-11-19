@@ -1,0 +1,10 @@
+import subprocess,json
+from pathlib import Path
+flags=['-DUCCL_LITE_HOST_GATHER_EXPERIMENT', '-DUCCL_LITE_HOST_HYBRID_EXPERIMENT', '-DUCCL_LITE_HOST_FUSE_FLAGS', '-DUCCL_LITE_HOST_WARP_FLAGS', '-DUCCL_LITE_HOST_COOPERATIVE_SM', '-DUCCL_LITE_HOST_COOPERATIVE_ONE_PACKET', '-DUCCL_LITE_RS_GRAPH_MIN_BYTES=16777216', '-DUCCL_LITE_AR_DIRECT_512K', '-DUCCL_LITE_HOST_PERSISTENT_SM', '-DUCCL_LITE_HOST_DEVICE_ACK_FENCE', '-DUCCL_LITE_HOST_PUBLICATION_BLOCK', '-DUCCL_LITE_HOST_CONSUMER_BLOCKS=16', '-DUCCL_LITE_HOST_COOPERATIVE_8M', '-DUCCL_LITE_RS_MEDIUM_BYTES=33554432', '-DUCCL_LITE_RS_FUSED_FINAL', '-DUCCL_LITE_HOST_HYBRID_MIN_BYTES=1048576', '-DUCCL_LITE_AR256_THREADS=384', '-DUCCL_LITE_HOST_WARP_PUBLISHER', '-DUCCL_LITE_HOST_GPU_GATES', '-DUCCL_LITE_HOST_COOPERATIVE_MAX_SHARD=524288', '-DUCCL_LITE_INLINE_PACKET_DRAIN', '-DUCCL_LITE_EARLY_PACKET_FLUSH']
+variants={'uccl_coalesced_packet':['-DUCCL_LITE_AG_OVERLAP_OUTPUT','-DUCCL_LITE_ORDERED_SYNC_DRAIN','-DUCCL_LITE_AG_COALESCED_FLUSH'],'uccl_fifo_packet':['-DUCCL_LITE_AG_OVERLAP_OUTPUT','-DUCCL_LITE_ORDERED_SYNC_DRAIN','-DUCCL_LITE_PACKET_FIFO_PUBLISH'],'uccl_fifo_packet_wrap':['-DUCCL_LITE_AG_OVERLAP_OUTPUT','-DUCCL_LITE_ORDERED_SYNC_DRAIN','-DUCCL_LITE_PACKET_FIFO_PUBLISH','-DUCCL_LITE_PACKET_INITIAL=4294967285']}
+for name,extra in variants.items():
+ b=Path('build')/name;b.mkdir(exist_ok=False)
+ cmd=['make','-j2','BUILD='+str(b),'MSCCLPP_IB_BUILD=/home/zhongjie/third_party/mscclpp/build-ib-pcieccl','MPICXX=/usr/mpi/gcc/openmpi-4.1.7rc1/bin/mpicxx','EXTRA_NVCC_FLAGS='+' '.join(flags+extra),str(b/'nccl_lite/reference_timing_check'),str(b/'nccl_lite/mscclpp_strict_abi_serial_check')]
+ (b/'build_command.json').write_text(json.dumps(cmd,indent=2))
+ print('Building',name,flush=True)
+ with (b/'build.log').open('w') as f:subprocess.run(cmd,stdout=f,stderr=subprocess.STDOUT,check=True)

@@ -1,0 +1,12 @@
+{
+  "pid": 3648270,
+  "started": 1795007327.0700436,
+  "candidate_sha256": "973eb079bee28d7c16e5f7b889f32ff396341b41757b5913cf4b40f5e3fb5c16",
+  "scope": "AG/AR/RS, 1 KiB\u20131 GiB, both layouts, unchanged nccl-tests plus full-retirement paired reference; zero native fallback",
+  "jobs": [
+    {
+      "script": "measure_all.py",
+      "status": "running"
+    }
+  ]
+}

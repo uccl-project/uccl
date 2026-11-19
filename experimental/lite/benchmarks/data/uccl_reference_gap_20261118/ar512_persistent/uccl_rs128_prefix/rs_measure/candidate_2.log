@@ -1,0 +1,253 @@
+# nccl-tests version 2.19.7 nccl-headers=22807 nccl-library=22807
+# Collective test starting: reduce_scatter_perf
+# nThread 1 nGpus 1 minBytes 1024 maxBytes 1073741824 step: 2(factor) warmup iters: 20 iters: 30 agg iters: 1 validation: 1 graph: 0 unalign: 0
+#
+# Using devices
+#  Rank  0 Group  0 Pid 3639229 on mibura-sky-test-02 device  0 [0000:4a:00] NVIDIA L4
+#  Rank  1 Group  0 Pid 3639230 on mibura-sky-test-02 device  1 [0000:61:00] NVIDIA L4
+#  Rank  2 Group  0 Pid 3639231 on mibura-sky-test-02 device  2 [0000:ca:00] NVIDIA L4
+#  Rank  3 Group  0 Pid 3639232 on mibura-sky-test-02 device  3 [0000:e1:00] NVIDIA L4
+#  Rank  4 Group  0 Pid 3223606 on mibura-sky-test-01 device  0 [0000:4a:00] NVIDIA L4
+#  Rank  5 Group  0 Pid 3223607 on mibura-sky-test-01 device  1 [0000:61:00] NVIDIA L4
+#  Rank  6 Group  0 Pid 3223608 on mibura-sky-test-01 device  2 [0000:ca:00] NVIDIA L4
+#  Rank  7 Group  0 Pid 3223609 on mibura-sky-test-01 device  3 [0000:e1:00] NVIDIA L4
+UCCL Lite strict: rank=3 native_nccl_loaded=0
+UCCL Lite strict: rank=2 native_nccl_loaded=0
+UCCL Lite strict: rank=1 native_nccl_loaded=0
+UCCL Lite strict: rank=0 native_nccl_loaded=0
+UCCL Lite strict: rank=5 native_nccl_loaded=0
+UCCL Lite strict: rank=4 native_nccl_loaded=0
+UCCL Lite strict: rank=6 native_nccl_loaded=0
+UCCL Lite strict: rank=7 native_nccl_loaded=0
+#
+#                                                              out-of-place                       in-place          
+#       size         count      type   redop    root     time   algbw   busbw  #wrong     time   algbw   busbw  #wrong 
+#        (B)    (elements)                               (us)  (GB/s)  (GB/s)             (us)  (GB/s)  (GB/s)         
+        1024            32     float     sum      -1    16.90    0.06    0.05       0    15.41    0.07    0.06       0
+        2048            64     float     sum      -1    15.14    0.14    0.12       0    15.06    0.14    0.12       0
+        4096           128     float     sum      -1    15.30    0.27    0.23       0    15.26    0.27    0.23       0
+        8192           256     float     sum      -1    15.82    0.52    0.45       0    15.55    0.53    0.46       0
+       16384           512     float     sum      -1    16.51    0.99    0.87       0    16.19    1.01    0.89       0
+       32768          1024     float     sum      -1    18.66    1.76    1.54       0    18.57    1.76    1.54       0
+       65536          2048     float     sum      -1    24.57    2.67    2.33       0    24.36    2.69    2.35       0
+      131072          4096     float     sum      -1    29.54    4.44    3.88       0    29.42    4.45    3.90       0
+      262144          8192     float     sum      -1    41.04    6.39    5.59       0    40.54    6.47    5.66       0
+      524288         16384     float     sum      -1    51.04   10.27    8.99       0    50.84   10.31    9.02       0
+     1048576         32768     float     sum      -1    79.31   13.22   11.57       0    79.29   13.22   11.57       0
+     2097152         65536     float     sum      -1   139.42   15.04   13.16       0   138.59   15.13   13.24       0
+     4194304        131072     float     sum      -1   254.17   16.50   14.44       0   254.34   16.49   14.43       0
+     8388608        262144     float     sum      -1   481.17   17.43   15.25       0   479.50   17.49   15.31       0
+    16777216        524288     float     sum      -1   907.83   18.48   16.17       0   905.39   18.53   16.21       0
+    33554432       1048576     float     sum      -1  1711.84   19.60   17.15       0  1710.03   19.62   17.17       0
+    67108864       2097152     float     sum      -1  3346.20   20.06   17.55       0  3341.78   20.08   17.57       0
+   134217728       4194304     float     sum      -1  6690.69   20.06   17.55       0  6666.52   20.13   17.62       0
+[mibura-sky-test-01][[65343,1],4][btl_tcp.c:559:mca_btl_tcp_recv_blocking] recv(157) failed: Connection reset by peer (104)
+   268435456       8388608     float     sum      -1  13397.1   20.04   17.53       0  13370.1   20.08   17.57       0
+   536870912      16777216     float     sum      -1  26736.6   20.08   17.57       0  26706.7   20.10   17.59       0
+  1073741824      33554432     float     sum      -1  53452.6   20.09   17.58       0  53385.1   20.11   17.60       0
+UCCL Lite strict route: rank=0 op=2 bytes=1024 calls=84
+UCCL Lite strict route: rank=0 op=2 bytes=2048 calls=84
+UCCL Lite strict route: rank=0 op=2 bytes=4096 calls=84
+UCCL Lite strict route: rank=0 op=2 bytes=8192 calls=84
+UCCL Lite strict route: rank=0 op=2 bytes=16384 calls=84
+UCCL Lite strict route: rank=0 op=2 bytes=32768 calls=84
+UCCL Lite strict route: rank=0 op=2 bytes=65536 calls=84
+UCCL Lite strict route: rank=0 op=2 bytes=131072 calls=84
+UCCL Lite strict route: rank=0 op=2 bytes=262144 calls=84
+UCCL Lite strict route: rank=0 op=2 bytes=524288 calls=84
+UCCL Lite strict route: rank=0 op=2 bytes=1048576 calls=84
+UCCL Lite strict route: rank=0 op=2 bytes=2097152 calls=84
+UCCL Lite strict route: rank=0 op=2 bytes=4194304 calls=84
+UCCL Lite strict route: rank=0 op=2 bytes=8388608 calls=84
+UCCL Lite strict route: rank=0 op=2 bytes=16777216 calls=84
+UCCL Lite strict route: rank=0 op=2 bytes=33554432 calls=84
+UCCL Lite strict route: rank=0 op=2 bytes=67108864 calls=84
+UCCL Lite strict route: rank=0 op=2 bytes=134217728 calls=84
+UCCL Lite strict route: rank=0 op=2 bytes=268435456 calls=84
+UCCL Lite strict route: rank=1 op=2 bytes=1024 calls=84
+UCCL Lite strict route: rank=1 op=2 bytes=2048 calls=84
+UCCL Lite strict route: rank=1 op=2 bytes=4096 calls=84
+UCCL Lite strict route: rank=1 op=2 bytes=8192 calls=84
+UCCL Lite strict route: rank=1 op=2 bytes=16384 calls=84
+UCCL Lite strict route: rank=1 op=2 bytes=32768 calls=84
+UCCL Lite strict route: rank=1 op=2 bytes=65536 calls=84
+UCCL Lite strict route: rank=1 op=2 bytes=131072 calls=84
+UCCL Lite strict route: rank=1 op=2 bytes=262144 calls=84
+UCCL Lite strict route: rank=1 op=2 bytes=524288 calls=84
+UCCL Lite strict route: rank=1 op=2 bytes=1048576 calls=84
+UCCL Lite strict route: rank=1 op=2 bytes=2097152 calls=84
+UCCL Lite strict route: rank=1 op=2 bytes=4194304 calls=84
+UCCL Lite strict route: rank=1 op=2 bytes=8388608 calls=84
+UCCL Lite strict route: rank=1 op=2 bytes=16777216 calls=84
+UCCL Lite strict route: rank=1 op=2 bytes=33554432 calls=84
+UCCL Lite strict route: rank=1 op=2 bytes=67108864 calls=84
+UCCL Lite strict route: rank=1 op=2 bytes=134217728 calls=84
+UCCL Lite strict route: rank=1 op=2 bytes=268435456 calls=84
+UCCL Lite strict route: rank=1 op=2 bytes=536870912 calls=84
+UCCL Lite strict route: rank=1 op=2 bytes=1073741824 calls=84
+UCCL Lite strict: rank=1 fallback=0
+UCCL Lite strict route: rank=3 op=2 bytes=1024 calls=84
+UCCL Lite strict route: rank=3 op=2 bytes=2048 calls=84
+UCCL Lite strict route: rank=3 op=2 bytes=4096 calls=84
+UCCL Lite strict route: rank=3 op=2 bytes=8192 calls=84
+UCCL Lite strict route: rank=3 op=2 bytes=16384 calls=84
+UCCL Lite strict route: rank=3 op=2 bytes=32768 calls=84
+UCCL Lite strict route: rank=3 op=2 bytes=65536 calls=84
+UCCL Lite strict route: rank=3 op=2 bytes=131072 calls=84
+UCCL Lite strict route: rank=3 op=2 bytes=262144 calls=84
+UCCL Lite strict route: rank=3 op=2 bytes=524288 calls=84
+UCCL Lite strict route: rank=3 op=2 bytes=1048576 calls=84
+UCCL Lite strict route: rank=3 op=2 bytes=2097152 calls=84
+UCCL Lite strict route: rank=3 op=2 bytes=4194304 calls=84
+UCCL Lite strict route: rank=3 op=2 bytes=8388608 calls=84
+UCCL Lite strict route: rank=3 op=2 bytes=16777216 calls=84
+UCCL Lite strict route: rank=3 op=2 bytes=33554432 calls=84
+UCCL Lite strict route: rank=3 op=2 bytes=67108864 calls=84
+UCCL Lite strict route: rank=3 op=2 bytes=134217728 calls=84
+UCCL Lite strict route: rank=3 op=2 bytes=268435456 calls=84
+UCCL Lite strict route: rank=3 op=2 bytes=536870912 calls=84
+UCCL Lite strict route: rank=3 op=2 bytes=1073741824 calls=84
+UCCL Lite strict: rank=3 fallback=0
+UCCL Lite prefix128: rank=3 entries=2 reuses=82 leaves=2
+UCCL Lite graph bindings: rank=3 hits=86 updates=502 recycled=0
+UCCL Lite strict route: rank=2 op=2 bytes=1024 calls=84
+UCCL Lite strict route: rank=2 op=2 bytes=2048 calls=84
+UCCL Lite strict route: rank=2 op=2 bytes=4096 calls=84
+UCCL Lite strict route: rank=2 op=2 bytes=8192 calls=84
+UCCL Lite strict route: rank=2 op=2 bytes=16384 calls=84
+UCCL Lite strict route: rank=2 op=2 bytes=32768 calls=84
+UCCL Lite strict route: rank=2 op=2 bytes=65536 calls=84
+UCCL Lite strict route: rank=2 op=2 bytes=131072 calls=84
+UCCL Lite strict route: rank=2 op=2 bytes=262144 calls=84
+UCCL Lite strict route: rank=2 op=2 bytes=524288 calls=84
+UCCL Lite strict route: rank=2 op=2 bytes=1048576 calls=84
+UCCL Lite strict route: rank=2 op=2 bytes=2097152 calls=84
+UCCL Lite strict route: rank=2 op=2 bytes=4194304 calls=84
+UCCL Lite strict route: rank=2 op=2 bytes=8388608 calls=84
+UCCL Lite strict route: rank=2 op=2 bytes=16777216 calls=84
+UCCL Lite strict route: rank=2 op=2 bytes=33554432 calls=84
+UCCL Lite strict route: rank=2 op=2 bytes=67108864 calls=84
+UCCL Lite strict route: rank=2 op=2 bytes=134217728 calls=84
+UCCL Lite strict route: rank=2 op=2 bytes=268435456 calls=84
+UCCL Lite strict route: rank=2 op=2 bytes=536870912 calls=84
+UCCL Lite strict route: rank=2 op=2 bytes=1073741824 calls=84
+UCCL Lite strict: rank=2 fallback=0
+UCCL Lite prefix128: rank=2 entries=2 reuses=82 leaves=2
+UCCL Lite graph bindings: rank=2 hits=86 updates=502 recycled=0
+UCCL Lite graph descriptor: rank=2 reused=75 pending=19
+UCCL Lite strict route: rank=0 op=2 bytes=536870912 calls=84
+UCCL Lite strict route: rank=0 op=2 bytes=1073741824 calls=84
+UCCL Lite strict: rank=0 fallback=0
+UCCL Lite prefix128: rank=0 entries=2 reuses=82 leaves=2
+UCCL Lite graph bindings: rank=0 hits=86 updates=502 recycled=0
+UCCL Lite graph descriptor: rank=0 reused=75 pending=19
+UCCL Lite prefix128: rank=1 entries=2 reuses=82 leaves=2
+UCCL Lite graph bindings: rank=1 hits=86 updates=502 recycled=0
+UCCL Lite graph descriptor: rank=1 reused=75 pending=19
+UCCL Lite graph descriptor: rank=3 reused=75 pending=19
+UCCL Lite strict route: rank=4 op=2 bytes=1024 calls=84
+UCCL Lite strict route: rank=4 op=2 bytes=2048 calls=84
+UCCL Lite strict route: rank=4 op=2 bytes=4096 calls=84
+UCCL Lite strict route: rank=4 op=2 bytes=8192 calls=84
+UCCL Lite strict route: rank=4 op=2 bytes=16384 calls=84
+UCCL Lite strict route: rank=4 op=2 bytes=32768 calls=84
+UCCL Lite strict route: rank=4 op=2 bytes=65536 calls=84
+UCCL Lite strict route: rank=4 op=2 bytes=131072 calls=84
+UCCL Lite strict route: rank=4 op=2 bytes=262144 calls=84
+UCCL Lite strict route: rank=4 op=2 bytes=524288 calls=84
+UCCL Lite strict route: rank=4 op=2 bytes=1048576 calls=84
+UCCL Lite strict route: rank=4 op=2 bytes=2097152 calls=84
+UCCL Lite strict route: rank=4 op=2 bytes=4194304 calls=84
+UCCL Lite strict route: rank=4 op=2 bytes=8388608 calls=84
+UCCL Lite strict route: rank=4 op=2 bytes=16777216 calls=84
+UCCL Lite strict route: rank=4 op=2 bytes=33554432 calls=84
+UCCL Lite strict route: rank=4 op=2 bytes=67108864 calls=84
+UCCL Lite strict route: rank=4 op=2 bytes=134217728 calls=84
+UCCL Lite strict route: rank=4 op=2 bytes=268435456 calls=84
+UCCL Lite strict route: rank=4 op=2 bytes=536870912 calls=84
+UCCL Lite strict route: rank=4 op=2 bytes=1073741824 calls=84
+UCCL Lite strict: rank=4 fallback=0
+UCCL Lite strict route: rank=5 op=2 bytes=1024 calls=84
+UCCL Lite strict route: rank=5 op=2 bytes=2048 calls=84
+UCCL Lite strict route: rank=5 op=2 bytes=4096 calls=84
+UCCL Lite strict route: rank=5 op=2 bytes=8192 calls=84
+UCCL Lite strict route: rank=5 op=2 bytes=16384 calls=84
+UCCL Lite strict route: rank=5 op=2 bytes=32768 calls=84
+UCCL Lite strict route: rank=5 op=2 bytes=65536 calls=84
+UCCL Lite strict route: rank=5 op=2 bytes=131072 calls=84
+UCCL Lite strict route: rank=5 op=2 bytes=262144 calls=84
+UCCL Lite strict route: rank=5 op=2 bytes=524288 calls=84
+UCCL Lite strict route: rank=5 op=2 bytes=1048576 calls=84
+UCCL Lite strict route: rank=5 op=2 bytes=2097152 calls=84
+UCCL Lite strict route: rank=5 op=2 bytes=4194304 calls=84
+UCCL Lite strict route: rank=5 op=2 bytes=8388608 calls=84
+UCCL Lite strict route: rank=5 op=2 bytes=16777216 calls=84
+UCCL Lite strict route: rank=5 op=2 bytes=33554432 calls=84
+UCCL Lite strict route: rank=5 op=2 bytes=67108864 calls=84
+UCCL Lite strict route: rank=5 op=2 bytes=134217728 calls=84
+UCCL Lite strict route: rank=5 op=2 bytes=268435456 calls=84
+UCCL Lite strict route: rank=5 op=2 bytes=536870912 calls=84
+UCCL Lite strict route: rank=5 op=2 bytes=1073741824 calls=84
+UCCL Lite strict: rank=5 fallback=0
+UCCL Lite strict route: rank=6 op=2 bytes=1024 calls=84
+UCCL Lite strict route: rank=6 op=2 bytes=2048 calls=84
+UCCL Lite strict route: rank=6 op=2 bytes=4096 calls=84
+UCCL Lite strict route: rank=6 op=2 bytes=8192 calls=84
+UCCL Lite strict route: rank=6 op=2 bytes=16384 calls=84
+UCCL Lite strict route: rank=6 op=2 bytes=32768 calls=84
+UCCL Lite strict route: rank=6 op=2 bytes=65536 calls=84
+UCCL Lite strict route: rank=6 op=2 bytes=131072 calls=84
+UCCL Lite strict route: rank=6 op=2 bytes=262144 calls=84
+UCCL Lite strict route: rank=6 op=2 bytes=524288 calls=84
+UCCL Lite strict route: rank=6 op=2 bytes=1048576 calls=84
+UCCL Lite strict route: rank=6 op=2 bytes=2097152 calls=84
+UCCL Lite strict route: rank=6 op=2 bytes=4194304 calls=84
+UCCL Lite strict route: rank=6 op=2 bytes=8388608 calls=84
+UCCL Lite strict route: rank=6 op=2 bytes=16777216 calls=84
+UCCL Lite strict route: rank=6 op=2 bytes=33554432 calls=84
+UCCL Lite strict route: rank=6 op=2 bytes=67108864 calls=84
+UCCL Lite strict route: rank=6 op=2 bytes=134217728 calls=84
+UCCL Lite strict route: rank=6 op=2 bytes=268435456 calls=84
+UCCL Lite strict route: rank=6 op=2 bytes=536870912 calls=84
+UCCL Lite strict route: rank=6 op=2 bytes=1073741824 calls=84
+UCCL Lite strict: rank=6 fallback=0
+UCCL Lite prefix128: rank=6 entries=2 reuses=82 leaves=2
+UCCL Lite graph bindings: rank=6 hits=86 updates=502 recycled=0
+UCCL Lite graph descriptor: rank=6 reused=75 pending=19
+UCCL Lite strict route: rank=7 op=2 bytes=1024 calls=84
+UCCL Lite strict route: rank=7 op=2 bytes=2048 calls=84
+UCCL Lite strict route: rank=7 op=2 bytes=4096 calls=84
+UCCL Lite strict route: rank=7 op=2 bytes=8192 calls=84
+UCCL Lite strict route: rank=7 op=2 bytes=16384 calls=84
+UCCL Lite strict route: rank=7 op=2 bytes=32768 calls=84
+UCCL Lite strict route: rank=7 op=2 bytes=65536 calls=84
+UCCL Lite strict route: rank=7 op=2 bytes=131072 calls=84
+UCCL Lite strict route: rank=7 op=2 bytes=262144 calls=84
+UCCL Lite strict route: rank=7 op=2 bytes=524288 calls=84
+UCCL Lite strict route: rank=7 op=2 bytes=1048576 calls=84
+UCCL Lite strict route: rank=7 op=2 bytes=2097152 calls=84
+UCCL Lite strict route: rank=7 op=2 bytes=4194304 calls=84
+UCCL Lite strict route: rank=7 op=2 bytes=8388608 calls=84
+UCCL Lite strict route: rank=7 op=2 bytes=16777216 calls=84
+UCCL Lite strict route: rank=7 op=2 bytes=33554432 calls=84
+UCCL Lite strict route: rank=7 op=2 bytes=67108864 calls=84
+UCCL Lite strict route: rank=7 op=2 bytes=134217728 calls=84
+UCCL Lite strict route: rank=7 op=2 bytes=268435456 calls=84
+UCCL Lite strict route: rank=7 op=2 bytes=536870912 calls=84
+UCCL Lite strict route: rank=7 op=2 bytes=1073741824 calls=84
+UCCL Lite strict: rank=7 fallback=0
+UCCL Lite prefix128: rank=7 entries=2 reuses=82 leaves=2
+UCCL Lite graph bindings: rank=7 hits=86 updates=502 recycled=0
+UCCL Lite graph descriptor: rank=7 reused=75 pending=19
+UCCL Lite prefix128: rank=4 entries=2 reuses=82 leaves=2
+UCCL Lite graph bindings: rank=4 hits=86 updates=502 recycled=0
+UCCL Lite graph descriptor: rank=4 reused=75 pending=19
+UCCL Lite prefix128: rank=5 entries=2 reuses=82 leaves=2
+UCCL Lite graph bindings: rank=5 hits=86 updates=502 recycled=0
+UCCL Lite graph descriptor: rank=5 reused=75 pending=19
+# Out of bounds values : 0 OK
+# Avg bus bandwidth    : 9.51654 
+#
+# Collective test concluded: reduce_scatter_perf
+#
+

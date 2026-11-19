@@ -1,0 +1,18 @@
+{
+  ".text": {
+    "expected_same": false,
+    "observed_same": false
+  },
+  ".dynstr": {
+    "expected_same": false,
+    "observed_same": false
+  },
+  ".symtab": {
+    "expected_same": true,
+    "observed_same": true
+  },
+  ".note.gnu.build-id": {
+    "expected_same": true,
+    "observed_same": true
+  }
+}
