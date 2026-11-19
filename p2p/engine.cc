@@ -611,6 +611,16 @@ std::tuple<std::string, uint16_t, std::string> Endpoint::parse_metadata(
 
 bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
                       uint64_t& conn_id) {
+  // The passive accept thread already consumes every incoming connection.
+  // Competing with it here could wait forever for a peer it has taken.
+  if (passive_accept_.load(std::memory_order_acquire)) {
+    return take_passive_accept(false, ip_addr, remote_gpu_idx, conn_id);
+  }
+  return do_accept(ip_addr, remote_gpu_idx, conn_id);
+}
+
+bool Endpoint::do_accept(std::string& ip_addr, int& remote_gpu_idx,
+                         uint64_t& conn_id) {
   std::cout << "Waiting to accept incoming connection..." << std::endl;
 
   // For demo purposes, simulate accepted connection
@@ -1539,6 +1549,14 @@ bool Endpoint::connect_local(std::string const& remote_gpu_bdf,
 }
 
 bool Endpoint::accept_local(std::string& remote_gpu_bdf, uint64_t& conn_id) {
+  if (passive_accept_.load(std::memory_order_acquire)) {
+    int remote_gpu_idx;
+    return take_passive_accept(true, remote_gpu_bdf, remote_gpu_idx, conn_id);
+  }
+  return do_accept_local(remote_gpu_bdf, conn_id);
+}
+
+bool Endpoint::do_accept_local(std::string& remote_gpu_bdf, uint64_t& conn_id) {
   std::cout << "Waiting for local CONNECT..." << std::endl;
 
   // recv CONNECT
@@ -2381,22 +2399,57 @@ bool Endpoint::remove_remote_endpoint(uint64_t conn_id) {
 }
 
 bool Endpoint::start_passive_accept() {
-  start_passive_accept_local();
-  if (!passive_accept_thread_.joinable()) {
+  if (!passive_accept_.exchange(true, std::memory_order_acq_rel)) {
+    passive_accept_stop_.store(false, std::memory_order_release);
     passive_accept_thread_ =
         std::thread(&Endpoint::passive_accept_thread_func, this);
-  }
-  return true;
-}
-
-bool Endpoint::start_passive_accept_local() {
-  if (!passive_accept_local_thread_.joinable()) {
-    passive_accept_stop_.store(false, std::memory_order_release);
-    passive_accept_ = true;
     passive_accept_local_thread_ =
         std::thread(&Endpoint::passive_accept_local_thread_func, this);
   }
   return true;
+}
+
+void Endpoint::publish_passive_accept(uint64_t conn_id, int remote_gpu_idx) {
+  {
+    std::unique_lock<std::shared_mutex> lock(conn_mu_);
+    auto it = conn_id_to_conn_.find(conn_id);
+    if (it == conn_id_to_conn_.end()) return;
+    it->second->accept_pending_ = true;
+    it->second->accepted_gpu_idx_ = remote_gpu_idx;
+  }
+  passive_accept_cv_.notify_all();
+}
+
+bool Endpoint::take_passive_accept(bool local, std::string& peer,
+                                   int& remote_gpu_idx, uint64_t& conn_id) {
+  std::unique_lock<std::shared_mutex> lock(conn_mu_);
+  while (!passive_accept_stop_.load(std::memory_order_acquire) &&
+         !uccl_accept_stopped(ep_)) {
+    // The pending state lives on the Conn itself, so a receiver that never
+    // calls accept() keeps no backlog beyond its connections.
+    Conn* oldest = nullptr;
+    for (auto const& [id, conn] : conn_id_to_conn_) {
+      if (conn->accept_pending_ && conn->is_local_ == local &&
+          (oldest == nullptr || id < oldest->conn_id_)) {
+        oldest = conn;
+      }
+    }
+    if (oldest != nullptr) {
+      oldest->accept_pending_ = false;
+      peer = local ? oldest->remote_gpu_bdf_ : oldest->ip_addr_;
+      remote_gpu_idx = oldest->accepted_gpu_idx_;
+      conn_id = oldest->conn_id_;
+      return true;
+    }
+    passive_accept_cv_.wait_for(lock, std::chrono::milliseconds(100));
+    if (inside_python) {
+      // The signal check takes the GIL; do not hold conn_mu_ across it.
+      lock.unlock();
+      check_python_signals();
+      lock.lock();
+    }
+  }
+  return false;
 }
 
 bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
@@ -2416,6 +2469,7 @@ bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
 }
 
 int Endpoint::get_sock_fd(uint64_t conn_id) const {
+  std::shared_lock<std::shared_mutex> lock(conn_mu_);
   auto it = conn_id_to_conn_.find(conn_id);
   if (it == conn_id_to_conn_.end()) {
     return -1;
@@ -2437,6 +2491,7 @@ std::shared_ptr<EpollClient> Endpoint::get_oob_client() const {
 }
 
 std::string Endpoint::get_oob_conn_key(uint64_t conn_id) const {
+  std::shared_lock<std::shared_mutex> lock(conn_mu_);
   auto it = conn_id_to_conn_.find(conn_id);
   if (it == conn_id_to_conn_.end()) {
     return "";
@@ -2634,7 +2689,9 @@ void Endpoint::passive_accept_thread_func() {
   int remote_gpu_idx;
   uint64_t conn_id;
   while (!stop_.load(std::memory_order_acquire)) {
-    (void)accept(ip_addr, remote_gpu_idx, conn_id);
+    if (do_accept(ip_addr, remote_gpu_idx, conn_id)) {
+      publish_passive_accept(conn_id, remote_gpu_idx);
+    }
   }
 }
 
@@ -2648,7 +2705,9 @@ void Endpoint::passive_accept_local_thread_func() {
 
       std::string remote_gpu_bdf;
       uint64_t conn_id;
-      (void)accept_local(remote_gpu_bdf, conn_id);
+      if (do_accept_local(remote_gpu_bdf, conn_id)) {
+        publish_passive_accept(conn_id, -1);
+      }
       found = true;
       break;
     }
