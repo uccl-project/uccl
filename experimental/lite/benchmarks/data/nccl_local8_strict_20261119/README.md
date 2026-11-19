@@ -52,6 +52,31 @@ is made. [Full original-UCCL comparison](comparison.csv),
 identify the measured configuration. The replacement library SHA-256 is
 `a613c4f85541aaf39c5e08b4db2d12ee817b29942cbd0cb8dde423df0cb854c7`.
 
+## README figures
+
+The [single-node README figures](../../../README.md#single-node-collectives)
+use the multi-node drop-in layout: one column per collective, small-message
+latency above large-message bus throughput. The main row compares the
+drop-in with native NCCL using only `native_comparison.json` (matched nccl-tests
+batch timing). An expandable second row compares the drop-in with original
+UCCL using only `comparison.csv` (matched per-call timing). Both drop-in layouts
+are plotted; the original reference retains AR in place and AG/RS out of place.
+The historical standalone figures remain available separately.
+
+Bus throughput uses the eight-rank nccl-tests normalization, matching the
+multi-node figures: `7N/(4t)` for AR and `7N/(8t)` for AG/RS, in decimal GB/s.
+Bytes mean complete AG output or AR/RS input per rank. The source measurements and timing
+protocols above are unchanged; no best variant per size is selected.
+
+With Python 3 and Matplotlib available, run `make nccl-local8-figures` to
+regenerate the six SVGs under `docs/assets/` and PNG/PDF previews under
+`build/figures/`. The generator verifies the input
+checksums and exports [every plotted point](readme_figure_inputs.csv) and
+[figure provenance](readme_figure_provenance.json), including source/script/SVG
+hashes. The qualified build's `source_hashes.json` retains the measured
+Makefile, also archived in `measurements.tar.gz`; the later Makefile change
+only adds this figure-generation target.
+
 ## Correctness and reuse
 
 The implementation reuses the multi-node strict ABI source, HostControl

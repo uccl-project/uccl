@@ -1,0 +1,57 @@
+{
+  "python_version": "3.14.7",
+  "matplotlib_version": "3.11.2",
+  "sources": {
+    "benchmarks/data/nccl_local8_strict_20261119/native_comparison.json": "831f33cc994206a1622f1352682edae3c46339789b593fc04a962bd036ac04a2",
+    "benchmarks/data/nccl_local8_strict_20261119/comparison.csv": "82b704ce80f18d1f7e47ccc57ba30cf55ef7686b289fc3695dd9ffad6bfc84df"
+  },
+  "plot_script_sha256": "0feccc795ac901a1c8510d333a316d6f4d9d44eceac70987f063b58d5e90c57d",
+  "style_script_sha256": "be8a2965df7de8398d20ba83ada8047f96f5a48b488b97dd899a727543839195",
+  "figure_sha256": {
+    "docs/assets/collectives-8l4-dropin-native-allreduce.svg": "2af39ca1722f8df54145c92f3bf738f9180ef3b6567d7f31bd01a172e2f59870",
+    "docs/assets/collectives-8l4-dropin-native-allgather.svg": "2f9f489dd90029ded77291112608bd1028a23c70fcb3e9c0b86c224451b1035f",
+    "docs/assets/collectives-8l4-dropin-native-reducescatter.svg": "b6a826df6af68fc1358c1cd004599cd0f165685a993c910e9d37ad2fadf89265",
+    "docs/assets/collectives-8l4-dropin-original-allreduce.svg": "6fec78fed24be4d0b40699eb00218a8caa70f7be7175f1f8e9ddd4d6f7dd4060",
+    "docs/assets/collectives-8l4-dropin-original-allgather.svg": "ae1ea89587cb42f8a9d5a6c4c27d0045caaddcd8d97172adde43db249076fec7",
+    "docs/assets/collectives-8l4-dropin-original-reducescatter.svg": "757929a564bb0f640a3b21d4af53b016ce00ec5e0faf9a4ccf056b77fff3e97a"
+  },
+  "figure_inputs_sha256": "c4a02ac0c53fad967812f18935ecb21cc74a070dbbc54042f26cc41320fa1bc2",
+  "hardware": "wxz-l4, one host with eight NVIDIA L4s, four per NUMA node",
+  "dtype": "BF16; SUM for AllReduce and ReduceScatter",
+  "native_comparison": {
+    "baseline": "NCCL 2.28.9, default algorithms/protocols/channels",
+    "timing": "unchanged nccl-tests maximum-rank batch mean",
+    "warmups": 5,
+    "timed_iterations": 20,
+    "runs_per_backend": 2,
+    "order": [
+      "native",
+      "drop-in",
+      "drop-in",
+      "native"
+    ],
+    "aggregation": "median of the two runs per backend/layout/size",
+    "placement": "eight MPI ranks, one GPU per rank, both backends",
+    "layouts": [
+      "out-of-place",
+      "in-place"
+    ]
+  },
+  "original_comparison": {
+    "baseline": "freshly rerun original README UCCL Lite binaries",
+    "timing": "input-ready maximum-rank per-call CUDA events; includes host submission and ABI staging/copies",
+    "excluded": "preparation, input generation and verification",
+    "warmups_per_repetition": 5,
+    "timed_calls_per_repetition": 10,
+    "repetitions_per_job": 3,
+    "jobs_per_backend_layout": 2,
+    "aggregation": "median of repetition medians, then median of two job medians",
+    "original_placement": "one process, eight GPUs; AR in-place, AG/RS out-of-place",
+    "dropin_placement": "eight processes, one GPU each; both layouts"
+  },
+  "throughput": "bus bandwidth: AR 1.75*N/t, AG/RS 0.875*N/t; decimal GB/s",
+  "size_definition": "AG complete output; AR/RS complete input per rank",
+  "best_per_size_envelope": false,
+  "native_nccl_fallback": false,
+  "plotted_points": 462
+}

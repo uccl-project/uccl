@@ -144,6 +144,10 @@ include integration/nccl_lite/policy.mk
 nccl-dropin-figures:
 	MPLCONFIGDIR=$(abspath $(BUILD)/mplconfig) python3 -B scripts/plot_nccl_dropin.py --preview
 
+.PHONY: nccl-local8-figures
+nccl-local8-figures:
+	MPLCONFIGDIR=$(abspath $(BUILD)/mplconfig) python3 -B scripts/plot_nccl_local8.py --preview
+
 # Track named policy changes even when an existing BUILD directory is reused.
 # Experimental EXTRA_NVCC_FLAGS changes still require a fresh BUILD directory.
 .PHONY: uccl_lite_nccl_policy_force
