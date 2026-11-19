@@ -58,39 +58,44 @@ def main():
     data = overview.load()
     configure(black_axes=True)
     exported, figures = [], []
-    for op, operation, filename, layout, factor in OPERATIONS:
-        for power in range(10, 31):
-            size = 1 << power
-            data["gpu", operation, size]["uccl_median_us"] = candidates[op, size, layout]["candidate_us"]
-        figure = overview.make_figure(data, "gpu", operation, factor)
-        name = f"collectives-8l4-dropin-{filename}"
-        save(figure, name, args.preview)
-        figures.append(ROOT / "docs/assets" / (name + ".svg"))
+    # The qualified UCCL path uses host packets in both logical testbeds.
+    # Reuse its measurement explicitly; select NCCL controls by testbed.
+    for mode in ("gpu", "shm"):
+        for op, operation, filename, layout, factor in OPERATIONS:
+            for power in range(10, 31):
+                size = 1 << power
+                data[mode, operation, size]["uccl_median_us"] = candidates[op, size, layout]["candidate_us"]
+            figure = overview.make_figure(data, mode, operation, factor)
+            prefix = "collectives-8l4-" + ("shm-" if mode == "shm" else "")
+            name = f"{prefix}dropin-{filename}"
+            save(figure, name, args.preview)
+            figures.append(ROOT / "docs/assets" / (name + ".svg"))
 
-        for panel, powers in [("latency", range(10, 21)), ("throughput", range(20, 31))]:
-            for series, field, source in [
-                ("uccl", "uccl_median_us", sources[0]),
-                ("prior", "nccl_median_us", sources[1]),
-                ("sm", "nccl_sm_median_us", sources[2]),
-                ("ce", "nccl_ce_median_us", sources[2]),
-            ]:
-                for power in powers:
-                    size = 1 << power
-                    row = data["gpu", operation, size]
-                    latency = float(row[field])
-                    low, high = latency, latency
-                    if series in ("sm", "ce"):
-                        low = float(row[field.replace("median_us", "min_run_us")])
-                        high = float(row[field.replace("median_us", "max_run_us")])
-                    value = latency
-                    if panel == "throughput":
-                        value = factor * size / latency / 1000
-                        low, high = factor * size / high / 1000, factor * size / low / 1000
-                    exported.append(dict(operation=op, panel=panel, series=series,
-                                         layout=layout, bytes=size, latency_us=latency,
-                                         plotted_value=value, lower_bound=low, upper_bound=high,
-                                         source=str(source.relative_to(ROOT))))
-    if len(exported) != 264:
+            for panel, powers in [("latency", range(10, 21)), ("throughput", range(20, 31))]:
+                for series, field, source in [
+                    ("uccl", "uccl_median_us", sources[0]),
+                    ("prior", "nccl_median_us", sources[1]),
+                    ("sm", "nccl_sm_median_us", sources[2]),
+                    ("ce", "nccl_ce_median_us", sources[2]),
+                ]:
+                    for power in powers:
+                        size = 1 << power
+                        row = data[mode, operation, size]
+                        latency = float(row[field])
+                        low, high = latency, latency
+                        if series in ("sm", "ce"):
+                            low = float(row[field.replace("median_us", "min_run_us")])
+                            high = float(row[field.replace("median_us", "max_run_us")])
+                        value = latency
+                        if panel == "throughput":
+                            value = factor * size / latency / 1000
+                            low, high = factor * size / high / 1000, factor * size / low / 1000
+                        exported.append(dict(testbed=mode, operation=op, panel=panel, series=series,
+                                             layout=layout, bytes=size, latency_us=latency,
+                                             plotted_value=value, lower_bound=low, upper_bound=high,
+                                             source=str(source.relative_to(ROOT)),
+                                             source_testbed="gpu" if series == "uccl" else mode))
+    if len(exported) != 528:
         raise ValueError("incomplete figure export")
     inputs = DATA / "readme_figure_inputs.csv"
     with inputs.open("w", newline="") as stream:
@@ -110,6 +115,8 @@ def main():
         "dtype": "BF16; SUM for AllReduce and ReduceScatter",
         "layouts": "AR in-place; AG/RS out-of-place, all series",
         "uccl_implementation": "qualified strict NCCL .so, labeled UCCL Lite",
+        "uccl_curve_reuse": "Testbed 2 reuses the measured Testbed 1 curve on the same host/configuration: the qualified transport uses mapped host packets, no GPU P2P; this is not an independent SHM run",
+        "nccl_testbeds": "gpu: default peer policy; shm: separately measured with P2P disabled",
         "uccl_timing": "input-ready maximum-rank per-call CUDA events; includes host submission and ABI staging/copies",
         "uccl_excluded": "preparation, input generation and verification",
         "uccl_warmups_per_repetition": 5,

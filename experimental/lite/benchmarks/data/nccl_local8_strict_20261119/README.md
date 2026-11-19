@@ -54,13 +54,23 @@ identify the measured configuration. The replacement library SHA-256 is
 
 ## README figures
 
-The [Testbed 1 figures](../../../README.md#single-node-collectives) retain the
+The [Testbed 1/2 figures](../../../README.md#single-node-collectives) retain the
 existing four-series layout, colors and legend. **UCCL Lite** now uses the
 qualified `.so` per-call timings from `comparison.csv`: AR in place and AG/RS
 out of place, with one fixed configuration for all sizes. The measurement
 protocol is recorded above. The three historical NCCL curves and the tuned
 run bounds are unchanged: [default controls](../overview_8l4_20261114/README.md)
 and [CE/SM controls](../nccl_tuned_testbeds12_20261115/README.md).
+
+Testbed 2 is the same host with GPU P2P disabled. Its UCCL curve explicitly
+reuses the qualified Testbed 1 measurements: the strict `.so` uses mapped
+host-memory packets throughout and never enables GPU peer access or issues
+GPU peer copies. AllGather and small reductions run GPU kernels over those
+packets; larger reductions use CPU workers. The logical P2P distinction does
+not select a different UCCL transport. This is shared measurement evidence,
+not an independent Testbed 2 timing run. Testbed 2 retains its own separately
+measured SHM-only default/CE/SM NCCL controls and run bounds. The plotted CSV
+records both the display testbed and each series' source testbed.
 
 These are BF16 measurements on the same eight-L4 host with maximum-rank
 per-call CUDA-event timing. UCCL uses eight processes/one GPU each; the NCCL
@@ -76,7 +86,7 @@ per-call figures.
 The panels show 1-KiB–1-MiB latency and 1-MiB–1-GiB bus throughput. Size is
 complete AG output or AR/RS input per rank; bandwidth is `7N/(4t)` for AR and
 `7N/(8t)` for AG/RS in decimal GB/s. With Python 3 and Matplotlib available,
-`make nccl-local8-figures` reproduces the three SVGs using the original overview
+`make nccl-local8-figures` reproduces the six SVGs using the original overview
 renderer, with PNG/PDF previews under `build/figures/`. [Plotted values](readme_figure_inputs.csv)
 and [provenance](readme_figure_provenance.json) record every source and figure
 hash. Original measurements and negative results remain in their datasets.

@@ -130,9 +130,9 @@ workload from Testbed 1's SGLang serving and DDP/FSDP training.
 <table>
   <tr><th>AllReduce</th><th>AllGather</th><th>ReduceScatter</th></tr>
   <tr>
-    <td width="33%"><img src="docs/assets/collectives-8l4-shm-allreduce-overview.svg" alt="8xL4 SHM AllReduce: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (default)" width="100%"></td>
-    <td width="33%"><img src="docs/assets/collectives-8l4-shm-allgather-overview.svg" alt="8xL4 SHM AllGather: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (default)" width="100%"></td>
-    <td width="33%"><img src="docs/assets/collectives-8l4-shm-reducescatter-overview.svg" alt="8xL4 SHM ReduceScatter: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (default)" width="100%"></td>
+    <td width="33%"><a href="benchmarks/data/nccl_local8_strict_20261119/README.md"><img src="docs/assets/collectives-8l4-shm-dropin-allreduce.svg" alt="8xL4 SHM AllReduce: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (default)" width="100%"></a></td>
+    <td width="33%"><a href="benchmarks/data/nccl_local8_strict_20261119/README.md"><img src="docs/assets/collectives-8l4-shm-dropin-allgather.svg" alt="8xL4 SHM AllGather: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (default)" width="100%"></a></td>
+    <td width="33%"><a href="benchmarks/data/nccl_local8_strict_20261119/README.md"><img src="docs/assets/collectives-8l4-shm-dropin-reducescatter.svg" alt="8xL4 SHM ReduceScatter: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (default)" width="100%"></a></td>
   </tr>
 </table>
 
