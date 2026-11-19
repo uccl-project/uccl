@@ -79,6 +79,26 @@ void make_legacy_ring(std::string const& name) {
   close(fd);
 }
 
+// Simulate a creator dying immediately after O_CREAT|O_EXCL succeeds, before
+// ftruncate makes the shared object large enough to map as a ring.
+void make_abandoned_short_ring(std::string const& name, off_t size) {
+  shm_unlink(name.c_str());
+  fflush(stdout);
+  pid_t victim = fork();
+  require(victim >= 0, "short-ring setup: fork");
+  if (victim == 0) {
+    int fd = shm_open(name.c_str(), O_CREAT | O_EXCL | O_RDWR, 0666);
+    if (fd < 0 || (size > 0 && ftruncate(fd, size) < 0)) _exit(1);
+    if (flock(fd, LOCK_EX | LOCK_NB) < 0) _exit(2);
+    raise(SIGKILL);
+    _exit(0);
+  }
+  int st;
+  require(waitpid(victim, &st, 0) == victim, "short-ring setup: waitpid");
+  require(WIFSIGNALED(st) && WTERMSIG(st) == SIGKILL,
+          "short-ring creator did not die to SIGKILL");
+}
+
 void test_fresh_create_and_destroy() {
   std::string const name = test_name("fresh");
   int fd = -1;
@@ -169,6 +189,92 @@ void test_stale_reclaim_replaces_inode() {
   uccl::destroy_shared_ring(name.c_str(), ring, fd, sz);
   munmap(raw, raw_sz);
   close(raw_fd);
+}
+
+void test_reclaim_creator_died_before_ftruncate() {
+  std::string const name = test_name("before_truncate");
+  make_abandoned_short_ring(name, 0);
+
+  int fd = -1;
+  size_t sz = 0;
+  bool is_creator = false;
+  jring_t* ring =
+      uccl::create_shared_ring(name.c_str(), 64, 16, fd, sz, &is_creator);
+  require(ring != nullptr, "zero-length stale ring was not reclaimed");
+  require(is_creator, "zero-length stale ring was not reclaimed by a creator");
+  require(__atomic_load_n(&ring->reserved[0], __ATOMIC_ACQUIRE) ==
+              uccl::kShmRingReady,
+          "zero-length stale ring replacement is not READY");
+  uccl::destroy_shared_ring(name.c_str(), ring, fd, sz);
+}
+
+void test_reclaim_abandoned_undersized_ring() {
+  std::string const name = test_name("undersized");
+  make_abandoned_short_ring(name, 16);
+
+  int fd = -1;
+  size_t sz = 0;
+  bool is_creator = false;
+  jring_t* ring =
+      uccl::create_shared_ring(name.c_str(), 64, 16, fd, sz, &is_creator);
+  require(ring != nullptr, "undersized stale ring was not reclaimed");
+  require(is_creator, "undersized stale ring was not reclaimed by a creator");
+  require(__atomic_load_n(&ring->reserved[0], __ATOMIC_ACQUIRE) ==
+              uccl::kShmRingReady,
+          "undersized stale ring replacement is not READY");
+  uccl::destroy_shared_ring(name.c_str(), ring, fd, sz);
+}
+
+void test_reclaim_full_size_uninitialised_ring() {
+  std::string const name = test_name("full_size_zero");
+  shm_unlink(name.c_str());
+  int stale_fd = shm_open(name.c_str(), O_CREAT | O_EXCL | O_RDWR, 0666);
+  require(stale_fd >= 0, "full-size zero-ring setup: shm_open");
+  size_t const stale_size = jring_get_buf_ring_size(64, 16);
+  require(ftruncate(stale_fd, static_cast<off_t>(stale_size)) == 0,
+          "full-size zero-ring setup: ftruncate");
+  close(stale_fd);
+
+  int fd = -1;
+  size_t sz = 0;
+  bool is_creator = false;
+  jring_t* ring =
+      uccl::create_shared_ring(name.c_str(), 64, 16, fd, sz, &is_creator);
+  require(ring != nullptr && is_creator,
+          "full-size uninitialised ring was not reclaimed");
+  require(__atomic_load_n(&ring->reserved[0], __ATOMIC_ACQUIRE) ==
+              uccl::kShmRingReady,
+          "full-size uninitialised replacement is not READY");
+  uccl::destroy_shared_ring(name.c_str(), ring, fd, sz);
+}
+
+void test_live_undersized_ring_is_not_reclaimed() {
+  std::string const name = test_name("live_undersized");
+  shm_unlink(name.c_str());
+  int owner_fd = shm_open(name.c_str(), O_CREAT | O_EXCL | O_RDWR, 0666);
+  require(owner_fd >= 0, "live short-ring setup: shm_open");
+  require(ftruncate(owner_fd, 16) == 0, "live short-ring setup: ftruncate");
+  require(flock(owner_fd, LOCK_EX | LOCK_NB) == 0,
+          "live short-ring setup: flock");
+  uint64_t const owner_ino = ino_of(owner_fd);
+
+  int fd = -1;
+  size_t sz = 0;
+  bool is_creator = false;
+  jring_t* ring =
+      uccl::create_shared_ring(name.c_str(), 64, 16, fd, sz, &is_creator);
+  require(ring == nullptr, "live undersized ring was reclaimed or adopted");
+
+  struct stat st;
+  require(fstat(owner_fd, &st) == 0 && st.st_size == 16,
+          "live undersized ring was resized");
+  require(ino_of(owner_fd) == owner_ino, "live undersized ring inode changed");
+  close(owner_fd);
+
+  ring = uccl::create_shared_ring(name.c_str(), 64, 16, fd, sz, &is_creator);
+  require(ring != nullptr && is_creator,
+          "undersized ring was not recoverable after its owner exited");
+  uccl::destroy_shared_ring(name.c_str(), ring, fd, sz);
 }
 
 void test_ready_marker_gating() {
@@ -310,6 +416,9 @@ void race_round(std::string const& name, int n, bool with_stale) {
     waitpid(pid, &st, 0);
     require(WIFEXITED(st) && WEXITSTATUS(st) == 0, "racer child died");
   }
+  close(start[1]);
+  close(done[1]);
+  close(out[0]);
   shm_unlink(name.c_str());
   shm_unlink((name + ".lck").c_str());
 }
@@ -333,6 +442,14 @@ int main() {
     test_stale_reclaim_replaces_inode();
     std::cout
         << "stale reclaim replaces the inode, peer mapping intact: PASS\n";
+    test_reclaim_creator_died_before_ftruncate();
+    std::cout << "reclaim creator killed before ftruncate: PASS\n";
+    test_reclaim_abandoned_undersized_ring();
+    std::cout << "reclaim abandoned undersized object: PASS\n";
+    test_reclaim_full_size_uninitialised_ring();
+    std::cout << "reclaim full-size uninitialised object: PASS\n";
+    test_live_undersized_ring_is_not_reclaimed();
+    std::cout << "preserve live undersized object until owner exits: PASS\n";
     test_ready_marker_gating();
     std::cout << "ready marker gating (INITING/all-zero/READY): PASS\n";
     test_legacy_ring();

@@ -126,29 +126,38 @@ static inline int shm_ring_sidecar_open(char const* shm_name) {
 // Initialise a freshly created, zero-filled object and take ownership of
 // it. Takes ownership of shm_fd (released on failure together with the
 // name). Returns the mapping.
-static inline jring_t* shm_ring_init_fresh(char const* shm_name, int shm_fd,
+static inline jring_t* shm_ring_init_fresh(char const* shm_name, int& shm_fd,
                                            size_t shm_size, size_t element_size,
                                            size_t element_count) {
   // The ownership lock must be on the fd before the ring becomes visible
   // as "ours"; a fresh object has no other holder.
   if (flock(shm_fd, LOCK_EX | LOCK_NB) != 0) {
+    int const err = errno;
     perror("flock failed");
     close(shm_fd);
+    shm_fd = -1;
     shm_unlink(shm_name);
+    errno = err;
     return nullptr;
   }
   if (ftruncate(shm_fd, static_cast<off_t>(shm_size)) < 0) {
+    int const err = errno;
     perror("ftruncate failed");
     close(shm_fd);
+    shm_fd = -1;
     shm_unlink(shm_name);
+    errno = err;
     return nullptr;
   }
   void* ptr =
       mmap(nullptr, shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
   if (ptr == MAP_FAILED) {
+    int const err = errno;
     perror("mmap failed");
     close(shm_fd);
+    shm_fd = -1;
     shm_unlink(shm_name);
+    errno = err;
     return nullptr;
   }
   auto* ring = reinterpret_cast<jring_t*>(ptr);
@@ -158,10 +167,61 @@ static inline jring_t* shm_ring_init_fresh(char const* shm_name, int shm_fd,
   if (jring_init(ring, element_count, element_size, 1, 1) < 0) {
     munmap(ptr, shm_size);
     close(shm_fd);
+    shm_fd = -1;
     shm_unlink(shm_name);
+    errno = EINVAL;
     return nullptr;
   }
   __atomic_store_n(&ring->reserved[0], kShmRingReady, __ATOMIC_RELEASE);
+  return ring;
+}
+
+// Replace an existing inode after proving that no creator owns it. Caller
+// holds the sidecar lock. The inode is never resized in place: another peer
+// may still have a mapping of it, even when the object is undersized.
+static inline jring_t* shm_ring_reclaim_locked(char const* shm_name,
+                                               size_t element_size,
+                                               size_t element_count,
+                                               size_t shm_size, int& shm_fd,
+                                               bool* is_creator) {
+  if (flock(shm_fd, LOCK_EX | LOCK_NB) != 0) {
+    int const err = errno;
+    if (err != EWOULDBLOCK && err != EAGAIN) perror("flock failed");
+    close(shm_fd);
+    shm_fd = -1;
+    errno = err;
+    return nullptr;
+  }
+
+  // Keep the ownership lock held until the old name has been unlinked. The
+  // sidecar lock prevents another participant from replacing it meanwhile.
+  // Preserve unlink errors rather than a stale errno from the O_EXCL attempt.
+  if (shm_unlink(shm_name) != 0 && errno != ENOENT) {
+    int const err = errno;
+    close(shm_fd);
+    shm_fd = -1;
+    errno = err;
+    return nullptr;
+  }
+  // The old inode is now unreachable by name; release its ownership lock
+  // before creating the replacement inode.
+  if (flock(shm_fd, LOCK_UN) != 0) {
+    int const err = errno;
+    perror("flock unlock failed");
+    close(shm_fd);
+    shm_fd = -1;
+    errno = err;
+    return nullptr;
+  }
+  close(shm_fd);
+  shm_fd = -1;
+  shm_fd = shm_open(shm_name, O_CREAT | O_EXCL | O_RDWR, 0666);
+  if (shm_fd < 0) return nullptr;  // transient; caller retries
+
+  *is_creator = true;
+  jring_t* ring = shm_ring_init_fresh(shm_name, shm_fd, shm_size, element_size,
+                                      element_count);
+  if (ring == nullptr) shm_fd = -1;
   return ring;
 }
 
@@ -169,12 +229,20 @@ static inline jring_t* shm_ring_init_fresh(char const* shm_name, int shm_fd,
 // ownership of shm_fd (closed on failure). Caller holds the sidecar lock.
 // Sets errno to ENOENT when the object must not be adopted (stale, no live
 // owner) so the caller can retry after the owner materialises.
-static inline jring_t* shm_ring_attach_locked(char const* shm_name, int shm_fd,
+static inline jring_t* shm_ring_attach_locked(char const* shm_name, int& shm_fd,
                                               size_t& shm_size) {
   struct stat st;
-  if (fstat(shm_fd, &st) < 0 || st.st_size == 0) {
-    if (errno == 0) errno = ENOENT;
+  if (fstat(shm_fd, &st) < 0) {
+    int const err = errno;
     close(shm_fd);
+    shm_fd = -1;
+    errno = err;
+    return nullptr;
+  }
+  if (st.st_size == 0) {
+    close(shm_fd);
+    shm_fd = -1;
+    errno = ENOENT;
     return nullptr;
   }
   // Auto-detect size from the shared memory object if not provided. Never
@@ -184,13 +252,17 @@ static inline jring_t* shm_ring_attach_locked(char const* shm_name, int shm_fd,
   } else if (static_cast<size_t>(st.st_size) < shm_size) {
     errno = ENOENT;  // owner may still be sizing it; retry
     close(shm_fd);
+    shm_fd = -1;
     return nullptr;
   }
   void* ptr =
       mmap(nullptr, shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
   if (ptr == MAP_FAILED) {
+    int const err = errno;
     perror("mmap attach failed");
     close(shm_fd);
+    shm_fd = -1;
+    errno = err;
     return nullptr;
   }
   auto* ring = reinterpret_cast<jring_t*>(ptr);
@@ -205,12 +277,14 @@ static inline jring_t* shm_ring_attach_locked(char const* shm_name, int shm_fd,
       errno = ENOENT;
       munmap(ptr, shm_size);
       close(shm_fd);
+      shm_fd = -1;
       return nullptr;
     }
     if (errno != EWOULDBLOCK && errno != EAGAIN) {
       perror("flock failed");
       munmap(ptr, shm_size);
       close(shm_fd);
+      shm_fd = -1;
       return nullptr;
     }
   }
@@ -219,6 +293,7 @@ static inline jring_t* shm_ring_attach_locked(char const* shm_name, int shm_fd,
     errno = ETIMEDOUT;
     munmap(ptr, shm_size);
     close(shm_fd);
+    shm_fd = -1;
     return nullptr;
   }
   return ring;
@@ -251,16 +326,34 @@ static inline jring_t* shm_ring_create_locked(char const* shm_name,
   if (shm_fd < 0) return nullptr;  // errno from open; EACCES is fatal
 
   struct stat st;
-  if (fstat(shm_fd, &st) < 0 || st.st_size < shm_size) {
-    if (errno == 0) errno = ENOENT;
+  if (fstat(shm_fd, &st) < 0) {
+    int const err = errno;
     close(shm_fd);
+    shm_fd = -1;
+    errno = err;
     return nullptr;
+  }
+  if (st.st_size < 0) {
+    close(shm_fd);
+    shm_fd = -1;
+    errno = EOVERFLOW;
+    return nullptr;
+  }
+  if (st.st_size < static_cast<off_t>(shm_size)) {
+    // Do not map an object shorter than the expected ring: even reading its
+    // header could SIGBUS. The ownership lock distinguishes a dead creator
+    // (safe to replace) from a live one (retry after it finishes sizing).
+    return shm_ring_reclaim_locked(shm_name, element_size, element_count,
+                                   shm_size, shm_fd, is_creator);
   }
   void* ptr =
       mmap(nullptr, shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
   if (ptr == MAP_FAILED) {
+    int const err = errno;
     perror("mmap failed");
     close(shm_fd);
+    shm_fd = -1;
+    errno = err;
     return nullptr;
   }
   auto* ring = reinterpret_cast<jring_t*>(ptr);
@@ -274,6 +367,7 @@ static inline jring_t* shm_ring_create_locked(char const* shm_name,
       errno = ETIMEDOUT;
       munmap(ptr, shm_size);
       close(shm_fd);
+      shm_fd = -1;
       return nullptr;
     }
     return ring;
@@ -285,19 +379,17 @@ static inline jring_t* shm_ring_create_locked(char const* shm_name,
     // still hold mappings of this inode, and re-initialising it in place
     // would make their accesses SIGBUS. The old inode stays alive until
     // those peers drop it.
-    shm_unlink(shm_name);
     munmap(ptr, shm_size);
-    close(shm_fd);
-    shm_fd = shm_open(shm_name, O_CREAT | O_EXCL | O_RDWR, 0666);
-    if (shm_fd < 0) return nullptr;  // transient; retry
-    *is_creator = true;
-    return shm_ring_init_fresh(shm_name, shm_fd, shm_size, element_size,
-                               element_count);
+    return shm_ring_reclaim_locked(shm_name, element_size, element_count,
+                                   shm_size, shm_fd, is_creator);
   }
   if (errno != EWOULDBLOCK && errno != EAGAIN) {
+    int const err = errno;
     perror("flock failed");
     munmap(ptr, shm_size);
     close(shm_fd);
+    shm_fd = -1;
+    errno = err;
     return nullptr;
   }
 
@@ -307,6 +399,7 @@ static inline jring_t* shm_ring_create_locked(char const* shm_name,
     errno = ETIMEDOUT;
     munmap(ptr, shm_size);
     close(shm_fd);
+    shm_fd = -1;
     return nullptr;
   }
   return ring;

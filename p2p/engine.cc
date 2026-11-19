@@ -1460,21 +1460,10 @@ bool Endpoint::connect_local(std::string const& remote_gpu_bdf,
   constexpr int kRetrySleepMs = 10;
   constexpr int kAttachDeadlineMs = 2000;
 
-  // Normalise once: the same-GPU check and the ring name must agree on the
-  // BDF format (gpu_bus_id_ is normalised).
-  std::string const remote_bdf = normalize_pci_bus_id(remote_gpu_bdf);
-
-  // Same GPU across processes is not supported: the CONNECT would land in the
-  // inbox ring named after this endpoint's own BDF, which accept_local()
-  // deliberately skips, so the peer would wait forever. Fail fast instead.
-  if (!same_process && remote_bdf == gpu_bus_id_) {
-    std::cerr << "[connect_local] Error: same-GPU cross-process connection to "
-              << remote_bdf
-              << " is not supported (accept_local never reads its own-BDF "
-                 "ring); use same_process=true within one process"
-              << std::endl;
-    return false;
-  }
+  // Normalise once so the remote BDF and shared-memory ring name use the same
+  // format as gpu_bus_id_. Same-GPU connect_local is retained for IPC flows
+  // that exchange advertised metadata without calling accept_local().
+  std::string const remote_bdf = uccl::normalize_pci_bus_id(remote_gpu_bdf);
 
   Conn* conn = new Conn;
   conn->remote_gpu_bdf_ = remote_bdf;
@@ -1540,8 +1529,11 @@ bool Endpoint::connect_local(std::string const& remote_gpu_bdf,
   conn_id = next_conn_id_.fetch_add(1);
   conn->conn_id_ = conn_id;
 
-  if (!same_process) {
-    // Cross-process: send CONNECT handshake via shm ring.
+  if (!same_process && remote_bdf != gpu_bus_id_) {
+    // Cross-GPU: send the CONNECT handshake through the shm ring. A same-GPU
+    // connector sends nothing: accept_local() never reads its own-BDF ring,
+    // so the message would sit unconsumed and occupy a slot forever
+    // (shm_ring_send busy-waits once the ring is full).
     ShmMsg msg;
     std::strncpy(msg.src_bdf, gpu_bus_id_.c_str(), sizeof(msg.src_bdf) - 1);
     msg.src_bdf[sizeof(msg.src_bdf) - 1] = '\0';

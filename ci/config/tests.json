@@ -2,6 +2,27 @@
   "schema": 1,
   "tests": [
     {
+      "id": "util.shm_ring",
+      "sources": [
+        "include/util/shm_ring_test.cc"
+      ],
+      "tier": "cpu",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "include/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "make -C p2p test_shm_ring PYTHON=/nonexistent/ci-python && ./p2p/test_shm_ring"
+    },
+    {
       "id": "ci.selftest",
       "enabled": true,
       "tier": "cpu",
@@ -4452,6 +4473,12 @@
     }
   ],
   "support": [
+    {
+      "sources": [
+        "include/util/shm_ring_stress_test.cc"
+      ],
+      "reason": "Manual shared-ring stress harness; high-iteration fork/flock tests are intentionally not part of CI."
+    },
     {
       "sources": [
         "p2p/tests/native_runtime.py",
