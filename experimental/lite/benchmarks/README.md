@@ -40,6 +40,7 @@ in Git history. Restore those logs before rerunning historical summarizers.
 
 | File | Scope and method |
 | --- | --- |
+| [nccl_local8_strict_20261119](data/nccl_local8_strict_20261119/README.md) | Strict eight-L4 BF16 NCCL ABI replacement: unchanged nccl-tests, zero native fallback, ABI/queue/loader/affinity checks, and 126/126 points without measured slowdown versus fresh original-UCCL controls. Native NCCL is faster at 25 points; negative candidates and the worker-isolation diagnosis are retained. |
 | [host_oneshot_small_2x4l4_20261117](data/host_oneshot_small_2x4l4_20261117/README.md) | Two-node FP32 small AllReduce: fresh current/P2P-one-shot/host-one-shot comparison, three rotated rounds with 30 checked calls per size; host one-shot wins at tested 1–16 KiB sizes, loses from 32 KiB; explicit selection and retained negative results. |
 | [oneshot_small_2x4l4_20261117](data/oneshot_small_2x4l4_20261117/README.md) | Earlier P2P one-shot experiment on two four-L4 hosts: slower at every tested 1–256 KiB size; checked rounds and repeated in-place calls retained. |
 | [ag_combined_latest_2x4l4_20261117](data/ag_combined_latest_2x4l4_20261117/README.md) | Two-host FP32 AllGather: combined CE/SM path ported to the latest uccl-lite branch, fresh 1 KiB–1 GiB checks and timings, preserved NCCL figure controls. |

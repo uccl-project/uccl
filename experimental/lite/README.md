@@ -310,6 +310,7 @@ The `Process (CPU)` operators can be used in different collectives:
 - [Collective algorithms](docs/collectives.md) and [two-node design](docs/multinode.md)
 - [Fusion design and workloads](docs/fusion.md)
 - [NCCL drop-in and SGLang integration](integration/nccl_lite/README.md)
+- [Strict eight-L4 NCCL `.so` replacement and nccl-tests validation](integration/nccl_lite/LOCAL8.md)
 - [Full measurement files](benchmarks/README.md) and [validation limits](docs/validation.md)
 
 UCCL Lite provides specialized research kernels and benchmarks, with an

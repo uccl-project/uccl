@@ -1,6 +1,11 @@
 // Strict NCCL ABI compatibility: no native NCCL dependency or fallback.
 #include "host_control.h"
+#ifdef UCCL_LITE_NCCL_LOCAL8
+#include "local_strict.h"
+#else
 #include "uccl_lite/collectives.h"
+#endif
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdio>
@@ -17,6 +22,22 @@
 #include <unistd.h>
 
 namespace {
+#ifdef UCCL_LITE_NCCL_LOCAL8
+using Backend = uccl_lite::nccl_detail::LocalCollectives;
+using BackendOperation = int;
+using BackendId = Backend::Id;
+constexpr int kHosts = 1, kLocalRanks = 8, kElementBytes = 2;
+constexpr ncclDataType_t kDtype = ncclBfloat16;
+constexpr char kProfileMagic[] = "UCCL_LITE_LOCAL8_STRICT_V1";
+#else
+using Backend = uccl_lite::NetworkCollectives;
+using BackendOperation = uccl_lite::NetworkOperation;
+using BackendId = uccl_lite::NetworkId;
+constexpr int kHosts = 2, kLocalRanks = 4, kElementBytes = 4;
+constexpr ncclDataType_t kDtype = ncclFloat32;
+constexpr char kProfileMagic[] = "UCCL_LITE_MSCCLPP_STRICT_V1";
+#endif
+size_t extentScale(int op) { return kElementBytes * (op == 3 ? 1 : 8); }
 thread_local std::string lastError;
 thread_local int groupDepth = 0;
 std::atomic<bool> live{false};
@@ -53,7 +74,7 @@ std::string uuid(int device) {
 }
 struct Policy {
   std::map<std::pair<int, size_t>, bool> shapes;
-  std::array<std::string, 2> hosts, identities;
+  std::array<std::string, kHosts> hosts, identities;
   std::array<std::string, 8> uuids;
   uint64_t digest = 0;
   size_t capacity = 0;
@@ -73,25 +94,26 @@ Policy const& policy() {
     std::string data((std::istreambuf_iterator<char>(file)), {});
     std::istringstream input(data);
     std::string magic;
-    if (!(input >> magic) || magic != "UCCL_LITE_MSCCLPP_STRICT_V1")
-      return Policy{};
+    if (!(input >> magic) || magic != kProfileMagic) return Policy{};
     char hostname[256]{};
     gethostname(hostname, sizeof(hostname) - 1);
     int driver = 0, runtime = 0, nccl = 0;
     cudaDriverGetVersion(&driver);
     cudaRuntimeGetVersion(&runtime);
     nccl = NCCL_VERSION_CODE;
-    for (int n = 0; n < 2; ++n) {
+    for (int n = 0; n < kHosts; ++n) {
       int d, r, v;
       if (!(input >> result.hosts[n] >> result.identities[n] >> d >> r >> v))
         return Policy{};
-      for (int i = 0; i < 4; ++i)
-        if (!(input >> result.uuids[4 * n + i])) return Policy{};
+      for (int i = 0; i < kLocalRanks; ++i)
+        if (!(input >> result.uuids[kLocalRanks * n + i])) return Policy{};
       if (result.hosts[n] == hostname && result.identities[n] == verified &&
           driver == d && runtime == r && nccl == v)
         result.node = n;
     }
-    if (result.hosts[0] == result.hosts[1] || result.node < 0) return Policy{};
+    if ((kHosts == 2 && result.hosts.front() == result.hosts.back()) ||
+        result.node < 0)
+      return Policy{};
     std::string line;
     std::getline(input, line);
     while (std::getline(input, line)) {
@@ -102,7 +124,7 @@ Policy const& policy() {
       std::string extra;
       if (!(row >> op >> count) || row >> extra || op < 1 || op > 3 || !count)
         return Policy{};
-      size_t scale = op == 3 ? 4 : 32;
+      size_t scale = extentScale(op);
       if (count > (1UL << 30) / scale || (count * scale) % 128 ||
           !result.shapes.emplace(std::make_pair(op, count), true).second)
         return Policy{};
@@ -121,7 +143,7 @@ struct ncclComm {
   bool finalized = false;
   ncclResult_t error = ncclSuccess;
   std::mutex mutex;
-  std::unique_ptr<uccl_lite::NetworkCollectives> network;
+  std::unique_ptr<Backend> transport;
   std::map<std::pair<int, size_t>, uint64_t> counts;
 };
 
@@ -149,7 +171,7 @@ char const* ncclGetLastError(ncclComm_t) { return lastError.c_str(); }
 ncclResult_t ncclGetUniqueId(ncclUniqueId* id) {
   if (!id) return ncclInvalidArgument;
   try {
-    auto bytes = uccl_lite::NetworkCollectives::createUniqueId();
+    auto bytes = Backend::createUniqueId();
     static_assert(sizeof(*id) == sizeof(bytes));
     std::memcpy(id, bytes.data(), bytes.size());
     return ncclSuccess;
@@ -175,10 +197,11 @@ ncclResult_t ncclCommInitRank(ncclComm_t* output, int ranks, ncclUniqueId id,
       uint64_t digest;
       int valid, node, device, pid;
     };
-    Vote local{p.digest,
-               int(!p.shapes.empty() && p.node == rank / 4 &&
-                   device == rank % 4 && uuid(device) == p.uuids[rank]),
-               p.node, device, int(getpid())};
+    Vote local{
+        p.digest,
+        int(!p.shapes.empty() && p.node == rank / kLocalRanks &&
+            device == rank % kLocalRanks && uuid(device) == p.uuids[rank]),
+        p.node, device, int(getpid())};
     std::array<Vote, 8> votes{};
     uccl_lite::nccl_detail::HostControl control(
         std::getenv("UCCL_LITE_MSCCLPP_CONTROL_ROOT"), &id, sizeof(id), rank,
@@ -186,19 +209,20 @@ ncclResult_t ncclCommInitRank(ncclComm_t* output, int ranks, ncclUniqueId id,
     control.allGather(&local, votes.data(), sizeof(local));
     for (int i = 0; i < ranks; ++i) {
       if (!votes[i].valid || votes[i].digest != local.digest ||
-          votes[i].node != i / 4 || votes[i].device != i % 4)
+          votes[i].node != i / kLocalRanks ||
+          votes[i].device != i % kLocalRanks)
         throw std::runtime_error("profile/topology consensus failed");
-      for (int j = i / 4 * 4; j < i; ++j)
+      for (int j = i / kLocalRanks * kLocalRanks; j < i; ++j)
         if (votes[i].pid == votes[j].pid)
           throw std::runtime_error("multiple ranks per process");
     }
     auto comm = std::make_unique<ncclComm>();
     comm->rank = rank;
     comm->device = device;
-    uccl_lite::NetworkId bytes{};
+    BackendId bytes{};
     std::memcpy(bytes.data(), &id, sizeof(id));
-    comm->network = std::make_unique<uccl_lite::NetworkCollectives>(
-        bytes, rank, device, device / 2, p.capacity);
+    comm->transport =
+        std::make_unique<Backend>(bytes, rank, device, device / 2, p.capacity);
     *output = comm.release();
     std::fprintf(stderr, "UCCL Lite strict: rank=%d native_nccl_loaded=0\n",
                  rank);
@@ -239,7 +263,7 @@ ncclResult_t ncclCommFinalize(ncclComm_t comm) {
   if (!comm) return ncclInvalidArgument;
   if (cudaDeviceSynchronize() != cudaSuccess) return ncclUnhandledCudaError;
   try {
-    comm->network->synchronize();
+    comm->transport->synchronize();
   } catch (std::exception const& error) {
     std::fprintf(stderr, "UCCL Lite finalize: %s\n", error.what());
     comm->error = ncclSystemError;
@@ -256,7 +280,7 @@ ncclResult_t uccl_lite_nccl_synchronize(ncclComm_t comm) {
   std::lock_guard<std::mutex> lock(comm->mutex);
   if (comm->error != ncclSuccess) return comm->error;
   try {
-    comm->network->synchronize();
+    comm->transport->synchronize();
     return ncclSuccess;
   } catch (std::exception const& error) {
     std::fprintf(stderr, "UCCL Lite diagnostic synchronize: %s\n",
@@ -280,7 +304,7 @@ ncclResult_t ncclCommAbort(ncclComm_t comm) {
   // Do not wait on a lost peer. Retain active transports until process exit.
   if (!comm) return ncclInvalidArgument;
   comm->finalized = true;
-  if (comm->error == ncclSuccess && comm->network->idle()) {
+  if (comm->error == ncclSuccess && comm->transport->idle()) {
     delete comm;
     live = false;
   }
@@ -325,7 +349,7 @@ ncclResult_t invoke(ncclComm_t comm, int op, void const* input, void* output,
   if (!comm || comm->finalized) return ncclInvalidArgument;
   if (!count) return ncclSuccess;
   if (groupDepth) return fail("grouped collectives unsupported");
-  if (dtype != ncclFloat32 || (op != 1 && reduction != ncclSum) ||
+  if (dtype != kDtype || (op != 1 && reduction != ncclSum) ||
       !policy().shapes.count({op, count}))
     return fail(
         "collective dtype/reduction/extent is outside the strict profile");
@@ -336,10 +360,10 @@ ncclResult_t invoke(ncclComm_t comm, int op, void const* input, void* output,
     return fail("network graph capture unsupported");
   std::lock_guard<std::mutex> guard(comm->mutex);
   try {
-    if (!comm->network->initialized()) comm->network->prepare();
-    comm->network->enqueue(static_cast<uccl_lite::NetworkOperation>(op), input,
-                           output, count, stream);
-    ++comm->counts[{op, count * (op == 3 ? 4 : 32)}];
+    if (!comm->transport->initialized()) comm->transport->prepare();
+    comm->transport->enqueue(static_cast<BackendOperation>(op), input, output,
+                             count, stream);
+    ++comm->counts[{op, count * extentScale(op)}];
     return ncclSuccess;
   } catch (std::exception const& error) {
     comm->error = ncclSystemError;
