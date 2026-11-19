@@ -66,8 +66,8 @@ production backend admission or a performance claim for other hardware/software.
 
 ## README figure provenance
 
-The main README AllGather figure uses the **fresh combined measurements in this
-record for both panels**: latency at 1 KiB–1 MiB and bus bandwidth at 1 MiB–1 GiB.
+The historical combined AllGather figure uses the **fresh combined measurements
+in this record for both panels**: latency at 1 KiB–1 MiB and bus bandwidth at 1 MiB–1 GiB.
 Bus bandwidth is computed as `7N/(8t)` in decimal GB/s; it is not raw link bandwidth.
 
 All 66 plotted NCCL values are retained numerically unchanged from
