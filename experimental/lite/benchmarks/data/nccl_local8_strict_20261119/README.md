@@ -54,28 +54,36 @@ identify the measured configuration. The replacement library SHA-256 is
 
 ## README figures
 
-The [single-node README figures](../../../README.md#single-node-collectives)
-use the multi-node drop-in layout: one column per collective, small-message
-latency above large-message bus throughput. The main row compares the
-drop-in with native NCCL using only `native_comparison.json` (matched nccl-tests
-batch timing). An expandable second row compares the drop-in with original
-UCCL using only `comparison.csv` (matched per-call timing). Both drop-in layouts
-are plotted; the original reference retains AR in place and AG/RS out of place.
-The historical standalone figures remain available separately.
+The [Testbed 1 figures](../../../README.md#single-node-collectives) retain the
+existing four-series layout, colors and legend. **UCCL Lite** now uses the
+qualified `.so` per-call timings from `comparison.csv`: AR in place and AG/RS
+out of place, with one fixed configuration for all sizes. The measurement
+protocol is recorded above. The three historical NCCL curves and the tuned
+run bounds are unchanged: [default controls](../overview_8l4_20261114/README.md)
+and [CE/SM controls](../nccl_tuned_testbeds12_20261115/README.md).
 
-Bus throughput uses the eight-rank nccl-tests normalization, matching the
-multi-node figures: `7N/(4t)` for AR and `7N/(8t)` for AG/RS, in decimal GB/s.
-Bytes mean complete AG output or AR/RS input per rank. The source measurements and timing
-protocols above are unchanged; no best variant per size is selected.
+These are BF16 measurements on the same eight-L4 host with maximum-rank
+per-call CUDA-event timing. UCCL uses eight processes/one GPU each; the NCCL
+controls use one process/eight GPUs and come from separate measurement windows.
+Each backend has two sweeps/runs, each with three repetitions of five warmups
+and ten timed calls; points aggregate repetition medians, then run medians.
+The tuned NCCL settings were selected per size on calibration data and frozen
+before independent validation. No best-per-size selection is applied to UCCL.
+The matched native nccl-tests batch comparison remains in
+[native_comparison.json](native_comparison.json); it is not used in these
+per-call figures.
 
-With Python 3 and Matplotlib available, run `make nccl-local8-figures` to
-regenerate the six SVGs under `docs/assets/` and PNG/PDF previews under
-`build/figures/`. The generator verifies the input
-checksums and exports [every plotted point](readme_figure_inputs.csv) and
-[figure provenance](readme_figure_provenance.json), including source/script/SVG
-hashes. The qualified build's `source_hashes.json` retains the measured
-Makefile, also archived in `measurements.tar.gz`; the later Makefile change
-only adds this figure-generation target.
+The panels show 1-KiB–1-MiB latency and 1-MiB–1-GiB bus throughput. Size is
+complete AG output or AR/RS input per rank; bandwidth is `7N/(4t)` for AR and
+`7N/(8t)` for AG/RS in decimal GB/s. With Python 3 and Matplotlib available,
+`make nccl-local8-figures` reproduces the three SVGs using the original overview
+renderer, with PNG/PDF previews under `build/figures/`. [Plotted values](readme_figure_inputs.csv)
+and [provenance](readme_figure_provenance.json) record every source and figure
+hash. Original measurements and negative results remain in their datasets.
+
+The qualified build's `source_hashes.json` retains the measured Makefile, also
+archived in `measurements.tar.gz`; the later Makefile change only adds the
+figure-generation target.
 
 ## Correctness and reuse
 

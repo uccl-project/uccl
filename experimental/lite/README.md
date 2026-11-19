@@ -114,76 +114,16 @@ workload from Testbed 1's SGLang serving and DDP/FSDP training.
 
 ### Single-node collectives
 
-#### Testbed 1 · strict NCCL drop-in
-
-One host with **eight L4 GPUs**, BF16 AllGather and SUM AllReduce/ReduceScatter,
-1 KiB–1 GiB, out-of-place and in-place. Both backends run **unchanged nccl-tests**
-with eight MPI ranks and one GPU each. Each point is the median of two runs per
-backend, with five warmups and twenty timed iterations per run in
-NCCL/UCCL/UCCL/NCCL order. One fixed drop-in configuration supplies all sizes,
-with no native NCCL fallback or best-variant-per-size selection.
+#### Testbed 1
 
 <table>
   <tr><th>AllReduce</th><th>AllGather</th><th>ReduceScatter</th></tr>
   <tr>
-    <td width="33%"><a href="benchmarks/data/nccl_local8_strict_20261119/README.md"><img src="docs/assets/collectives-8l4-dropin-native-allreduce.svg" alt="Eight-L4 BF16 AllReduce: strict UCCL Lite drop-in, both layouts, matched nccl-tests batch timing against native NCCL 2.28.9; latency and bus throughput" width="100%"></a></td>
-    <td width="33%"><a href="benchmarks/data/nccl_local8_strict_20261119/README.md"><img src="docs/assets/collectives-8l4-dropin-native-allgather.svg" alt="Eight-L4 BF16 AllGather: strict UCCL Lite drop-in, both layouts, matched nccl-tests batch timing against native NCCL 2.28.9; latency and bus throughput" width="100%"></a></td>
-    <td width="33%"><a href="benchmarks/data/nccl_local8_strict_20261119/README.md"><img src="docs/assets/collectives-8l4-dropin-native-reducescatter.svg" alt="Eight-L4 BF16 ReduceScatter: strict UCCL Lite drop-in, both layouts, matched nccl-tests batch timing against native NCCL 2.28.9; latency and bus throughput" width="100%"></a></td>
+    <td width="33%"><a href="benchmarks/data/nccl_local8_strict_20261119/README.md"><img src="docs/assets/collectives-8l4-dropin-allreduce.svg" alt="8xL4 GPU AllReduce: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (default)" width="100%"></a></td>
+    <td width="33%"><a href="benchmarks/data/nccl_local8_strict_20261119/README.md"><img src="docs/assets/collectives-8l4-dropin-allgather.svg" alt="8xL4 GPU AllGather: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (default)" width="100%"></a></td>
+    <td width="33%"><a href="benchmarks/data/nccl_local8_strict_20261119/README.md"><img src="docs/assets/collectives-8l4-dropin-reducescatter.svg" alt="8xL4 GPU ReduceScatter: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (default)" width="100%"></a></td>
   </tr>
 </table>
-
-Native NCCL 2.28.9 uses default algorithms, protocols and channel counts. These
-curves use maximum-rank batch timing. Size means complete AG output or AR/RS
-input per rank. As in the multi-node figures, bus throughput is `7N/(4t)` for
-AR and `7N/(8t)` for AG/RS, in GB/s. Native NCCL is faster at **25/126** points:
-0 AllReduce, 8 AllGather and 17 ReduceScatter points.
-
-<details>
-<summary>Matched per-call comparison against original UCCL Lite</summary>
-
-<table>
-  <tr><th>AllReduce</th><th>AllGather</th><th>ReduceScatter</th></tr>
-  <tr>
-    <td width="33%"><a href="benchmarks/data/nccl_local8_strict_20261119/README.md"><img src="docs/assets/collectives-8l4-dropin-original-allreduce.svg" alt="Eight-L4 BF16 AllReduce: strict UCCL Lite drop-in, both layouts, matched per-call timing against original standalone UCCL Lite; latency and bus throughput" width="100%"></a></td>
-    <td width="33%"><a href="benchmarks/data/nccl_local8_strict_20261119/README.md"><img src="docs/assets/collectives-8l4-dropin-original-allgather.svg" alt="Eight-L4 BF16 AllGather: strict UCCL Lite drop-in, both layouts, matched per-call timing against original standalone UCCL Lite; latency and bus throughput" width="100%"></a></td>
-    <td width="33%"><a href="benchmarks/data/nccl_local8_strict_20261119/README.md"><img src="docs/assets/collectives-8l4-dropin-original-reducescatter.svg" alt="Eight-L4 BF16 ReduceScatter: strict UCCL Lite drop-in, both layouts, matched per-call timing against original standalone UCCL Lite; latency and bus throughput" width="100%"></a></td>
-  </tr>
-</table>
-
-Both sides use input-ready maximum-rank per-call CUDA events, including host
-submission and ABI staging/copies, excluding preparation and verification.
-Each size has two jobs per backend/layout, reversing backend order in the
-second job; each job has three repetitions of five warmups and ten checked
-timed calls. Points aggregate repetition medians, then job medians. Original
-UCCL uses one process/eight GPUs, AR in place and AG/RS out of place; both
-drop-in layouts use eight processes/one GPU each and compare to those original
-paths. All **126/126** points pass the no-measured-slowdown gate. These per-call
-measurements are separate from the nccl-tests batch curves above.
-
-</details>
-
-[Qualification and timing methodology](benchmarks/data/nccl_local8_strict_20261119/README.md),
-[original-UCCL CSV](benchmarks/data/nccl_local8_strict_20261119/comparison.csv),
-[native NCCL data](benchmarks/data/nccl_local8_strict_20261119/native_comparison.json),
-and [build/API scope](integration/nccl_lite/LOCAL8.md). Reproduce the figures
-with `make nccl-local8-figures`.
-
-<details>
-<summary>Historical standalone UCCL Lite and tuned NCCL comparisons</summary>
-
-These earlier measurements retain their recorded implementations and NCCL
-controls. They do not measure the strict drop-in library above.
-
-<table>
-  <tr><th>AllReduce</th><th>AllGather</th><th>ReduceScatter</th></tr>
-  <tr>
-    <td width="33%"><img src="docs/assets/collectives-8l4-allreduce-overview.svg" alt="8xL4 GPU AllReduce: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (default)" width="100%"></td>
-    <td width="33%"><img src="docs/assets/collectives-8l4-allgather-overview.svg" alt="8xL4 GPU AllGather: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (default)" width="100%"></td>
-    <td width="33%"><img src="docs/assets/collectives-8l4-reducescatter-overview.svg" alt="8xL4 GPU ReduceScatter: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (default)" width="100%"></td>
-  </tr>
-</table>
-
-</details>
 
 #### Testbed 2
 
