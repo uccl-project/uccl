@@ -11,9 +11,6 @@
 
 - **Provide a drop-in NCCL replacement.** Preserve NCCL's API and ABI so
   supported workloads can use UCCL Lite without application code changes.
-  The [qualified multi-node implementation](integration/nccl_lite/MSCCLPP.md)
-  supports eager FP32 AllGather and SUM AllReduce/ReduceScatter without native
-  NCCL fallback; unsupported configurations return explicit errors.
 - **Exploit PCIe hierarchy.** Map collective stages to PCIe and NUMA groups.
   Reduce within groups before exchanging across them, then distribute results
   locally to limit cross-socket traffic.
