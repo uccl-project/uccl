@@ -2381,13 +2381,20 @@ bool Endpoint::remove_remote_endpoint(uint64_t conn_id) {
 }
 
 bool Endpoint::start_passive_accept() {
-  if (!passive_accept_) {
-    passive_accept_stop_.store(false, std::memory_order_release);
+  start_passive_accept_local();
+  if (!passive_accept_thread_.joinable()) {
     passive_accept_thread_ =
         std::thread(&Endpoint::passive_accept_thread_func, this);
+  }
+  return true;
+}
+
+bool Endpoint::start_passive_accept_local() {
+  if (!passive_accept_local_thread_.joinable()) {
+    passive_accept_stop_.store(false, std::memory_order_release);
+    passive_accept_ = true;
     passive_accept_local_thread_ =
         std::thread(&Endpoint::passive_accept_local_thread_func, this);
-    passive_accept_ = true;
   }
   return true;
 }

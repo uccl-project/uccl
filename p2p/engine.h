@@ -281,6 +281,9 @@ class Endpoint {
    * afterwards. */
   bool start_passive_accept();
 
+  /* Accept local IPC peers while the caller handles network accept(). */
+  bool start_passive_accept_local();
+
   ~Endpoint();
 
   /* Stop accepting incoming connections, used in ~Endpoint() by setting
