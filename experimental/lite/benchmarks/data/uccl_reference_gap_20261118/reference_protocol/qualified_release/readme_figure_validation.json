@@ -1,0 +1,11 @@
+{
+  "index_build": "strict adapter,ABI client,standalone multinode_allreduce compiled",
+  "cross_directory_runtime_identity_equal": false,
+  "reason": "NVCC directory-derived anonymous namespace names change rodata/fatbin metadata and layout; host text is identical and normalized CUDA SASS matches",
+  "cuda_sass_equal_after_namespace_normalization": true,
+  "figure_points": 198,
+  "deterministic_svgs": 3,
+  "staged_document_links": true,
+  "runtime_source_inputs_unchanged": true,
+  "scope": "Publication checks only; GPU performance/correctness results remain the recorded qualification, not a new benchmark run."
+}

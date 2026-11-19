@@ -137,6 +137,88 @@ $(BUILD)/uccl_lite_compact_collectives: benchmarks/cpu_router/compact_collective
 
 -include $(wildcard $(BUILD)/*.d)
 
+# Optional NCCL ABI adapter: MSCCL++ algorithm runtime + retained UCCL kernels.
+include integration/nccl_lite/policy.mk
+
+.PHONY: nccl-dropin-figures
+nccl-dropin-figures:
+	MPLCONFIGDIR=$(abspath $(BUILD)/mplconfig) python3 -B scripts/plot_nccl_dropin.py --preview
+
+# Track named policy changes even when an existing BUILD directory is reused.
+# Experimental EXTRA_NVCC_FLAGS changes still require a fresh BUILD directory.
+.PHONY: uccl_lite_nccl_policy_force
+uccl_lite_nccl_policy_force:
+
+$(BUILD)/nccl_lite/build.policy: uccl_lite_nccl_policy_force
+	mkdir -p $(@D)
+	@printf '%s\n' '$(UCCL_LITE_NCCL_POLICY)' > $@.tmp
+	@cmp -s $@.tmp $@ || mv $@.tmp $@
+	@rm -f $@.tmp
+
+.PHONY: nccl-mscclpp nccl-mscclpp-strict
+nccl-mscclpp: nccl-mscclpp-strict
+nccl-mscclpp-strict: $(BUILD)/nccl_lite/strict/libnccl.so.2 $(BUILD)/nccl_lite/libuccl_lite_nccl_mscclpp.so
+
+$(BUILD)/nccl_lite/libuccl_lite_nccl_strict.so: integration/nccl_lite/mscclpp_strict.cc $(BUILD)/nccl_lite/mscclpp_backend.o include/uccl_lite/collectives.h integration/nccl_lite/host_control.h integration/nccl_lite/mscclpp_exports.version
+	$(CXX) -O3 -std=c++17 -fPIC -shared -pthread -Iinclude -I$(CUDA_HOME)/include -I$(NCCL_HOME)/include $< $(BUILD)/nccl_lite/mscclpp_backend.o -Wl,--version-script=integration/nccl_lite/mscclpp_exports.version -Wl,-soname,libnccl.so.2 -L$(MSCCLPP_IB_BUILD)/lib -lmscclpp -Wl,-rpath,$(MSCCLPP_IB_BUILD)/lib -L$(CUDA_HOME)/lib64 -lcudart -Wl,-rpath,$(CUDA_HOME)/lib64 $(UCCL_LITE_NCCL_POLICY_LIBS) $(NCCL_STRICT_EXTRA_LIBS) -o $@
+
+$(BUILD)/nccl_lite/strict/libnccl.so.2: $(BUILD)/nccl_lite/libuccl_lite_nccl_strict.so
+	mkdir -p $(@D)
+	ln -sfn ../libuccl_lite_nccl_strict.so $@
+$(BUILD)/nccl_lite/mscclpp_backend.o: src/multinode/mscclpp_backend.cu src/multinode/device_collectives.cuh src/multinode/algorithm_transport.h include/uccl_lite/collectives.h
+	mkdir -p $(@D)
+	$(NVCC) $(NVCC_FLAGS) $(UCCL_LITE_NCCL_POLICY_FLAGS) -std=c++20 -Xcompiler=-fPIC -Xcompiler=-fvisibility=hidden $(IB_INC) -c $< -o $@
+
+$(BUILD)/nccl_lite/mscclpp_backend.o: $(BUILD)/nccl_lite/build.policy integration/nccl_lite/policy.mk
+
+$(BUILD)/nccl_lite/network_sizes_check: tests/multinode/network_sizes.cu $(BUILD)/nccl_lite/mscclpp_backend.o
+	$(NVCC) $(NVCC_FLAGS) -std=c++20 $(IB_INC) $(MPI_INC) $< $(BUILD)/nccl_lite/mscclpp_backend.o -o $@ $(IB_LIB) $(MPI_LIB) -lcudart -lpthread $(UCCL_LITE_NCCL_POLICY_LIBS) $(NCCL_STRICT_EXTRA_LIBS)
+
+$(BUILD)/nccl_lite/network_queue_check: tests/multinode/network_queue.cu $(BUILD)/nccl_lite/mscclpp_backend.o
+	$(NVCC) $(NVCC_FLAGS) -std=c++20 $(IB_INC) $(MPI_INC) $< $(BUILD)/nccl_lite/mscclpp_backend.o -o $@ $(IB_LIB) $(MPI_LIB) -lcudart -lpthread $(UCCL_LITE_NCCL_POLICY_LIBS) $(NCCL_STRICT_EXTRA_LIBS)
+
+$(BUILD)/nccl_lite/shared_host_packets_check: tests/multinode/shared_host_packets.cu src/multinode/shared_host_packets.h
+	mkdir -p $(@D)
+	$(NVCC) $(NVCC_FLAGS) -std=c++20 $(IB_INC) $(MPI_INC) $< -o $@ $(IB_LIB) $(MPI_LIB) -lcudart -lpthread
+
+# The previous mixed-adapter filename now resolves to the strict library too.
+$(BUILD)/nccl_lite/libuccl_lite_nccl_mscclpp.so: $(BUILD)/nccl_lite/libuccl_lite_nccl_strict.so
+	ln -sfn libuccl_lite_nccl_strict.so $@
+
+-include $(wildcard $(BUILD)/nccl_lite/*.d)
+
+$(BUILD)/nccl_lite/mscclpp_abi_check: tests/nccl_mscclpp/abi.cu
+	mkdir -p $(@D)
+	$(NVCC) $(NVCC_FLAGS) -std=c++17 $(MPI_INC) -I$(NCCL_HOME)/include $< -o $@ $(MPI_LIB) -L$(NCCL_HOME)/lib -lnccl -Xlinker -rpath=$(NCCL_HOME)/lib
+
+$(BUILD)/nccl_lite/mscclpp_strict_abi_check: tests/nccl_mscclpp/strict_abi.cu
+	mkdir -p $(@D)
+	$(NVCC) $(NVCC_FLAGS) -std=c++17 $(MPI_INC) -I$(NCCL_HOME)/include $< -o $@ $(MPI_LIB) -L$(NCCL_HOME)/lib -lnccl -Xlinker -rpath=$(NCCL_HOME)/lib
+
+$(BUILD)/nccl_lite/mscclpp_strict_abi_extended_check: tests/nccl_mscclpp/strict_abi.cu
+	mkdir -p $(@D)
+	$(NVCC) $(NVCC_FLAGS) -std=c++17 -DUCCL_LITE_ABI_EXTENDED $(MPI_INC) -I$(NCCL_HOME)/include $< -o $@ $(MPI_LIB) -L$(NCCL_HOME)/lib -lnccl -Xlinker -rpath=$(NCCL_HOME)/lib
+
+$(BUILD)/nccl_lite/mscclpp_strict_abi_boundary_check: tests/nccl_mscclpp/strict_abi.cu
+	mkdir -p $(@D)
+	$(NVCC) $(NVCC_FLAGS) -std=c++17 -DUCCL_LITE_ABI_EXTENDED -DUCCL_LITE_ABI_BOUNDARY512 $(MPI_INC) -I$(NCCL_HOME)/include $< -o $@ $(MPI_LIB) -L$(NCCL_HOME)/lib -lnccl -Xlinker -rpath=$(NCCL_HOME)/lib
+
+$(BUILD)/nccl_lite/mscclpp_strict_abi_serial_check: tests/nccl_mscclpp/strict_abi.cu
+	mkdir -p $(@D)
+	$(NVCC) $(NVCC_FLAGS) -std=c++17 -DUCCL_LITE_ABI_EXTENDED -DUCCL_LITE_ABI_BOUNDARY512 -DUCCL_LITE_ABI_SERIAL_PACKET $(MPI_INC) -I$(NCCL_HOME)/include $< -o $@ $(MPI_LIB) -L$(NCCL_HOME)/lib -lnccl -Xlinker -rpath=$(NCCL_HOME)/lib
+
+$(BUILD)/nccl_lite/mscclpp_strict_abi_medium64_check: tests/nccl_mscclpp/strict_abi.cu
+	mkdir -p $(@D)
+	$(NVCC) $(NVCC_FLAGS) -std=c++17 -DUCCL_LITE_ABI_EXTENDED -DUCCL_LITE_ABI_BOUNDARY512 -DUCCL_LITE_ABI_SERIAL_PACKET -DUCCL_LITE_ABI_MEDIUM64 $(MPI_INC) -I$(NCCL_HOME)/include $< -o $@ $(MPI_LIB) -L$(NCCL_HOME)/lib -lnccl -Xlinker -rpath=$(NCCL_HOME)/lib
+
+$(BUILD)/nccl_lite/mscclpp_strict_abi_medium128_check: tests/nccl_mscclpp/strict_abi.cu
+	mkdir -p $(@D)
+	$(NVCC) $(NVCC_FLAGS) -std=c++17 -DUCCL_LITE_ABI_EXTENDED -DUCCL_LITE_ABI_BOUNDARY512 -DUCCL_LITE_ABI_SERIAL_PACKET -DUCCL_LITE_ABI_MEDIUM64 -DUCCL_LITE_ABI_MEDIUM128 $(MPI_INC) -I$(NCCL_HOME)/include $< -o $@ $(MPI_LIB) -L$(NCCL_HOME)/lib -lnccl -Xlinker -rpath=$(NCCL_HOME)/lib
+
+$(BUILD)/nccl_lite/mscclpp_control_check: tests/nccl_dropin/host_control.cc integration/nccl_lite/host_control.h
+	mkdir -p $(@D)
+	$(CXX) -O2 -std=c++17 -pthread $< -o $@
+
 # Historical serving data verification and README-style SVGs; no GPU required.
 PYTHON ?= python3
 .PHONY: vllm-pcie-figures
@@ -274,3 +356,31 @@ pro6000-ar-large-traces: pro6000-ar-large-summary
 pro6000-ar-large-figures: pro6000-ar-large-traces
 	MPLCONFIGDIR=$(abspath $(BUILD)/mplconfig) $(PYTHON) -B scripts/plot_pro6000_allreduce.py --summary $(BUILD)/pro6000-ar-large-report/summary.csv --name collectives-pro6000x8-allreduce-fp32-ce-ring --preview
 	MPLCONFIGDIR=$(abspath $(BUILD)/mplconfig) $(PYTHON) -B scripts/plot_pro6000_bottleneck.py --staged $(BUILD)/pro6000-ar-large-report/extracted/profiles/profile-final-staged/compact-analysis.json --ring $(BUILD)/pro6000-ar-large-report/extracted/profiles/profile-final-ring/compact-analysis.json --preview
+
+$(BUILD)/nccl_lite/host_packet_transport_check: tests/multinode/host_packet_transport.cu src/multinode/host_packet_transport.h src/multinode/shared_host_packets.h
+	mkdir -p $(@D)
+	$(NVCC) $(NVCC_FLAGS) -std=c++20 $(IB_INC) $(MPI_INC) $< -o $@ $(IB_LIB) $(MPI_LIB) -lcudart -lpthread
+
+$(BUILD)/nccl_lite/host_packet_callbacks_check: tests/multinode/host_packet_callbacks.cu src/multinode/host_packet_transport.h src/multinode/shared_host_packets.h
+	mkdir -p $(@D)
+	$(NVCC) $(NVCC_FLAGS) -std=c++20 $(IB_INC) $(MPI_INC) $< -o $@ $(IB_LIB) $(MPI_LIB) -lcudart -lpthread
+
+$(BUILD)/nccl_lite/async_host_gather_check: tests/multinode/async_host_gather.cu src/multinode/async_host_gather.cuh src/multinode/host_packet_transport.h src/multinode/shared_host_packets.h
+	mkdir -p $(@D)
+	$(NVCC) $(NVCC_FLAGS) $(UCCL_LITE_NCCL_POLICY_FLAGS) -std=c++20 $(IB_INC) $(MPI_INC) $< -o $@ $(IB_LIB) $(MPI_LIB) -lcudart -lpthread
+
+$(BUILD)/nccl_lite/async_host_gather_check: $(BUILD)/nccl_lite/build.policy integration/nccl_lite/policy.mk
+
+# Asynchronous graph calls with fresh data and allocation reuse; no native link.
+$(BUILD)/nccl_lite/sync_device_check: tests/nccl_mscclpp/sync_device.cu $(BUILD)/nccl_lite/strict/libnccl.so.2
+	$(NVCC) $(NVCC_FLAGS) -std=c++17 $(MPI_INC) -I$(NCCL_HOME)/include $< -o $@ $(MPI_LIB) -L$(BUILD)/nccl_lite -l:libuccl_lite_nccl_strict.so -lcuda -Xlinker -rpath=$(abspath $(BUILD)/nccl_lite/strict)
+
+$(BUILD)/nccl_lite/graph_queue_check: tests/nccl_mscclpp/graph_queue.cu $(BUILD)/nccl_lite/strict/libnccl.so.2
+	$(NVCC) $(NVCC_FLAGS) -std=c++17 $(MPI_INC) -I$(NCCL_HOME)/include $< -o $@ $(MPI_LIB) -L$(BUILD)/nccl_lite -l:libuccl_lite_nccl_strict.so -Xlinker -rpath=$(abspath $(BUILD)/nccl_lite/strict)
+
+$(BUILD)/nccl_lite/layout_queue_check: tests/nccl_mscclpp/layout_queue.cu $(BUILD)/nccl_lite/strict/libnccl.so.2
+	$(NVCC) $(NVCC_FLAGS) -std=c++17 $(MPI_INC) -I$(NCCL_HOME)/include $< -o $@ $(MPI_LIB) -L$(BUILD)/nccl_lite -l:libuccl_lite_nccl_strict.so -Xlinker -rpath=$(abspath $(BUILD)/nccl_lite/strict)
+
+# Explicit per-call comparison including internal retirement; no native link.
+$(BUILD)/nccl_lite/reference_timing_check: tests/nccl_mscclpp/reference_timing.cu $(BUILD)/nccl_lite/strict/libnccl.so.2
+	$(NVCC) $(NVCC_FLAGS) -std=c++17 $(MPI_INC) -I$(NCCL_HOME)/include $< -o $@ $(MPI_LIB) -L$(BUILD)/nccl_lite -l:libuccl_lite_nccl_strict.so -Xlinker -rpath=$(abspath $(BUILD)/nccl_lite/strict)

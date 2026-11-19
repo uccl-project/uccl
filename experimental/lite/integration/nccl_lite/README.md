@@ -1,9 +1,15 @@
 # UCCL Lite NCCL AG/RS/AR compatibility layer
 
-For the separate calibrated **NCCL ABI drop-in with stock FSDP**, use
-[DROPIN.md](DROPIN.md). It loads `build/libuccl_lite_nccl.so`, retains NCCL for
-unvalidated cases, and has its own measurements. The historical proxy and
-fusion experiments below use `build/libuccl_lite_nccl_compat.so`.
+For the **strict two-host NCCL `.so` replacement**, use [MSCCLPP.md](MSCCLPP.md).
+It reuses MSCCL++ runtime components with UCCL Lite collectives, forbids native
+NCCL fallback, and has passed the recorded FP32 AG/AR/RS 1-KiB–1-GiB qualification
+on two four-L4 hosts. `make nccl-mscclpp-strict` selects the qualified policy.
+See the [full evidence and scope](../../benchmarks/data/uccl_reference_gap_20261118/reference_protocol/qualified_release/README.md).
+
+The separate historical [stock-FSDP drop-in](DROPIN.md) loads
+`build/libuccl_lite_nccl.so` and retains NCCL for unvalidated cases. It is not
+the strict replacement above. The proxy/fusion experiments below use
+`build/libuccl_lite_nccl_compat.so` and have their own measurements.
 
 This is an experimental **single-node, eight-process, BF16** NCCL compatibility
 layer for AllGather, ReduceScatter(SUM), and AllReduce(SUM). It forwards other

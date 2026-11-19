@@ -169,7 +169,42 @@ workload from Testbed 1's SGLang serving and DDP/FSDP training.
 
 ### Multi-node collectives
 
-#### Testbed 3 × 2 nodes
+#### Testbed 3 × 2 nodes · strict NCCL drop-in
+
+The new `.so` curves below come from **unchanged nccl-tests** (`all_reduce_perf`,
+`all_gather_perf`, `reduce_scatter_perf`), running UCCL Lite with no native NCCL
+fallback. FP32, 1 KiB–1 GiB, out-of-place and in-place; each point is the median
+of three runs with 20 warmups and 30 timed iterations. One fixed library supplies
+all sizes; no best-variant-per-size envelope is used.
+
+<table>
+  <tr><th>AllReduce</th><th>AllGather</th><th>ReduceScatter</th></tr>
+  <tr>
+    <td width="33%"><a href="benchmarks/data/uccl_reference_gap_20261118/reference_protocol/qualified_release/nccl_tests_vs_old.md"><img src="docs/assets/collectives-2x4l4-dropin-allreduce.svg" alt="FP32 AllReduce on two four-L4 hosts: strict UCCL Lite .so measured with stock nccl-tests, out-of-place and in-place, alongside old standalone UCCL Lite; different timing scopes" width="100%"></a></td>
+    <td width="33%"><a href="benchmarks/data/uccl_reference_gap_20261118/reference_protocol/qualified_release/nccl_tests_vs_old.md"><img src="docs/assets/collectives-2x4l4-dropin-allgather.svg" alt="FP32 AllGather on two four-L4 hosts: strict UCCL Lite .so measured with stock nccl-tests, out-of-place and in-place, alongside old standalone UCCL Lite; different timing scopes" width="100%"></a></td>
+    <td width="33%"><a href="benchmarks/data/uccl_reference_gap_20261118/reference_protocol/qualified_release/nccl_tests_vs_old.md"><img src="docs/assets/collectives-2x4l4-dropin-reducescatter.svg" alt="FP32 ReduceScatter on two four-L4 hosts: strict UCCL Lite .so measured with stock nccl-tests, out-of-place and in-place, alongside old standalone UCCL Lite; different timing scopes" width="100%"></a></td>
+  </tr>
+</table>
+
+**Timing scopes differ:** the old curves use the original standalone per-call
+benchmarks with full retirement; the new curves use nccl-tests batch timing.
+Visual gaps are not matched speedup ratios. The new runs use eight MPI ranks,
+one GPU each; old AG uses four ranks with two GPUs each, while old AR/RS uses
+eight ranks. Effective throughput is complete-buffer bytes divided by latency,
+not the nccl-tests bus-bandwidth normalization. Size means complete AG output,
+complete RS input, or AR buffer.
+
+The separate, aligned per-call comparison passes **126/126 size/layout points**
+against the original UCCL Lite references. See the [qualification report](benchmarks/data/uccl_reference_gap_20261118/reference_protocol/qualified_release/README.md),
+[full tables and CSV](benchmarks/data/uccl_reference_gap_20261118/reference_protocol/qualified_release/nccl_tests_vs_old.md),
+and [build/API scope](integration/nccl_lite/MSCCLPP.md). Reproduce these figures
+with `make nccl-dropin-figures`.
+
+<details>
+<summary>Historical standalone UCCL Lite and NCCL comparisons</summary>
+
+These earlier measurements retain their original implementations, timing scopes
+and recorded NCCL controls; they do not represent the current drop-in `.so`.
 
 <table>
   <tr><th>AllReduce</th><th>AllGather</th><th>ReduceScatter</th></tr>
@@ -179,6 +214,8 @@ workload from Testbed 1's SGLang serving and DDP/FSDP training.
     <td width="33%"><img src="docs/assets/collectives-2x4l4-reducescatter-nccl-tuned.svg" alt="Two-node ReduceScatter latency and throughput, UCCL Lite, NCCL SM (tuned), NCCL CE (tuned), NCCL (default)" width="100%"></td>
   </tr>
 </table>
+
+</details>
 
 ### Fusion
 
