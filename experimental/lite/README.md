@@ -176,23 +176,11 @@ workload from Testbed 1's SGLang serving and DDP/FSDP training.
 <table>
   <tr><th>AllReduce</th><th>AllGather</th><th>ReduceScatter</th></tr>
   <tr>
-    <td width="33%"><img src="docs/assets/collectives-2x4l4-dropin-allreduce.svg" alt="Two-node FP32 AllReduce: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, drop-in UCCL Lite, NCCL SM (tuned), NCCL CE (tuned), NCCL (default)" width="100%"></td>
-    <td width="33%"><img src="docs/assets/collectives-2x4l4-dropin-allgather.svg" alt="Two-node FP32 AllGather: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, drop-in UCCL Lite, NCCL SM (tuned), NCCL CE (tuned), NCCL (default)" width="100%"></td>
-    <td width="33%"><img src="docs/assets/collectives-2x4l4-dropin-reducescatter.svg" alt="Two-node FP32 ReduceScatter: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, drop-in UCCL Lite, NCCL SM (tuned), NCCL CE (tuned), NCCL (default)" width="100%"></td>
+    <td width="33%"><img src="docs/assets/collectives-2x4l4-dropin-allreduce.svg" alt="Two-node FP32 AllReduce: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (prior)" width="100%"></td>
+    <td width="33%"><img src="docs/assets/collectives-2x4l4-dropin-allgather.svg" alt="Two-node FP32 AllGather: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (prior)" width="100%"></td>
+    <td width="33%"><img src="docs/assets/collectives-2x4l4-dropin-reducescatter.svg" alt="Two-node FP32 ReduceScatter: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (prior)" width="100%"></td>
   </tr>
 </table>
-
-UCCL Lite uses the [qualified NCCL drop-in](benchmarks/data/uccl_reference_gap_20261118/reference_protocol/qualified_release/README.md),
-FP32, out-of-place, eight MPI ranks with one GPU each, and no native NCCL fallback.
-Points are medians of three maximum-rank per-call means with full send retirement;
-AG uses 20 warmups/30 timed calls, AR 20/10, and RS 10/10. One fixed library
-supplies all sizes, not a best-variant-per-size envelope.
-The [recorded NCCL controls](docs/multinode.md#fresh-nccl-smce-references) are
-unchanged and come from separate measurement windows; AG controls use four MPI
-processes with two GPUs each. Size means complete AG output, complete RS input,
-or AR buffer. Bus throughput is `7N/(4t)` for AR and `7N/(8t)` for AG/RS, in GB/s.
-See [build/API scope](integration/nccl_lite/MSCCLPP.md); regenerate with
-`make nccl-dropin-figures`.
 
 ### Fusion
 
