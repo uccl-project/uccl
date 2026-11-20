@@ -362,7 +362,8 @@ class Endpoint {
                   std::vector<size_t> len_v, std::vector<char*> out_buf_v,
                   size_t num_iovs);
 
-  /*Connect to a local process via shared memory.*/
+  /* Connect to a local process via shared memory. Same-GPU cross-process
+   * connections provide IPC metadata only; do not pair them with accept_local. */
   bool connect_local(std::string const& remote_gpu_bdf, uint64_t& conn_id,
                      bool same_process = false);
 
