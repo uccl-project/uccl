@@ -413,6 +413,7 @@ Endpoint::~Endpoint() {
 
   if (passive_accept_) {
     passive_accept_stop_.store(true, std::memory_order_release);
+    passive_accept_cv_.notify_all();
     if (passive_accept_thread_.joinable()) {
       passive_accept_thread_.join();
     }
