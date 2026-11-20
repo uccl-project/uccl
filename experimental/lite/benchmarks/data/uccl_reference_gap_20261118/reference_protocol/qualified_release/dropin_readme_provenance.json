@@ -1,0 +1,17 @@
+{
+  "hardware": "2 hosts \u00d7 4 L4",
+  "dtype": "FP32",
+  "layout": "out-of-place",
+  "uccl_series": "fixed drop-in library; no per-size best-of selection",
+  "uccl_timing": "unchanged nccl-tests batch timing; three runs, 20 warmups, 30 timed iterations",
+  "nccl_controls": "Recorded NCCL controls retained from existing figures; not rerun or newly matched to the drop-in harness. Multi-node prior curve is not uniformly default NCCL.",
+  "throughput": "bus-normalized: 2*(ranks-1)/ranks for AR; (ranks-1)/ranks for AG/RS; bytes / us / 1000",
+  "size_definition": "AG full output; RS full input; AR input/output per rank",
+  "source_sha256": {
+    "benchmarks/data/ag_latency_2x4l4_20261116/figure_inputs.csv": "3c31287c2388c8ae44be30579d1a2896b1c3405179caab0c5adbdc750ef3256b",
+    "benchmarks/data/nccl_tuned_2x4l4_20261116/figure_inputs.csv": "746a03914fe67ae2ba5d4300a367eb4c98707c8a030a9e31d886a6c279349634",
+    "benchmarks/data/uccl_reference_gap_20261118/reference_protocol/qualified_release/nccl_tests_vs_old.csv": "e02239c9e380a135a85dcb2a80045d250c1fb563eea454bd3abc077e2fdc3bb9"
+  },
+  "script_sha256": "63a17d2b65a0ba70b63e4b3e94729b0654167f1c0d1beacc30a877be3f769c7e",
+  "points": 264
+}

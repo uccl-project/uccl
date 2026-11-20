@@ -1,0 +1,19 @@
+{
+  "hardware": "4 L4, one host",
+  "dtype": "FP32",
+  "layout": "out-of-place",
+  "uccl_series": "fixed drop-in library; no per-size best-of selection",
+  "uccl_timing": "three repetitions of ten per-call samples; AR host enqueue/completion (5 warmups), AG/RS max-GPU events (20 warmups); core2 placement",
+  "nccl_controls": "Recorded NCCL controls retained from existing figures; not rerun or newly matched to the drop-in harness. Multi-node prior curve is not uniformly default NCCL.",
+  "throughput": "bus-normalized: 2*(ranks-1)/ranks for AR; (ranks-1)/ranks for AG/RS; bytes / us / 1000",
+  "size_definition": "AG full output; RS full input; AR input/output per rank",
+  "source_sha256": {
+    "benchmarks/data/nccl_local_strict_4l4_20261119/comparison.csv": "db256a695cdd8d783432eb1f0000b7392ac274c47eb0ef91047966adf4967b28",
+    "benchmarks/data/nccl_tuned_4l4_20261115/cases.csv": "2c0754e6dfb18e8466c2dfd53084b65f2edcad96f50909cca850abcc74aa6435",
+    "benchmarks/data/small_medium_4l4_20261113/ag_selected.csv": "16c8610234cf162dd7b5eaac3d5dd85b5b84b24f67bb1fda7e48f4d9d920b1f8",
+    "benchmarks/data/small_medium_4l4_20261113/ar_selected.csv": "1259b22040e138b24d9d25366c5d56a9afa63d5124cb6ee5307ef5abff7f9a5a",
+    "benchmarks/data/small_medium_4l4_20261113/rs_selected.csv": "b87a91cdf09ee135f45db2769a47284cd274db4b3f68ae87ca85420a2f98ad76"
+  },
+  "script_sha256": "63a17d2b65a0ba70b63e4b3e94729b0654167f1c0d1beacc30a877be3f769c7e",
+  "points": 264
+}
