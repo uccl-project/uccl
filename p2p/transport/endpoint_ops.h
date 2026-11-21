@@ -48,6 +48,11 @@ struct DirectEndpointOps {
     s->recv_routine();
   }
 
+  // Called by the receive proxy when its task ring is empty.
+  static void uccl_drive_recv_idle(std::shared_ptr<T> const& s) {
+    s->recv_routine();
+  }
+
   static bool uccl_check_ureq_once(std::shared_ptr<T> const& s,
                                    UcclRequest* ureq) {
     if (ureq->type == ReqType::ReqWrite || ureq->type == ReqType::ReqRead) {

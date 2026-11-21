@@ -22,6 +22,13 @@ struct EndpointOps<CxiEndpoint> : DirectEndpointOps<CxiEndpoint> {
     return nullptr;
   }
 
+  // The target NIC completes RMA without software, and the CQ holds only
+  // completions of this endpoint's own operations, which the waiting threads
+  // poll. So the idle receive proxy polls only when the target needs progress.
+  static void uccl_drive_recv_idle(std::shared_ptr<CxiEndpoint> const& s) {
+    if (s->needs_target_progress()) s->recv_routine();
+  }
+
   static int uccl_read_async(std::shared_ptr<CxiEndpoint> const& s, Conn* conn,
                              P2PMhandle* local_mh, void* dst, size_t size,
                              FifoItem const& slot_item, UcclRequest* ureq) {
@@ -60,8 +67,16 @@ struct EndpointOps<CxiEndpoint> : DirectEndpointOps<CxiEndpoint> {
     s->uccl_deregmr(mhandle->cxi_region);
   }
 
+  // The proxy threads are pinned to this node. Use the node of the CXI NIC
+  // the endpoint opened, as the verbs path does; the socket interface is on
+  // one node for all GPUs.
   static int uccl_get_numa_node(std::shared_ptr<CxiEndpoint> const& s,
                                 int gpu_idx) {
+    (void)gpu_idx;
+    int const node = s ? s->nic_numa_node() : -1;
+    if (node >= 0) return node;
+    UCCL_LOG(WARN) << "CXI: NUMA node of the NIC is unknown; pinning proxy "
+                      "threads to the node of the socket interface";
     return get_numa_node_from_iface();
   }
 

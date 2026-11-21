@@ -130,6 +130,15 @@ inline void uccl_drive_recv(GenericEndpoint const& ep) {
       ep);
 }
 
+inline void uccl_drive_recv_idle(GenericEndpoint const& ep) {
+  return std::visit(
+      [&](auto const& s) {
+        using T = std::decay_t<decltype(*s)>;
+        return EndpointOps<T>::uccl_drive_recv_idle(s);
+      },
+      ep);
+}
+
 inline bool uccl_check_ureq_once(GenericEndpoint const& ep, UcclRequest* ureq) {
   return std::visit(
       [&](auto const& s) -> bool {
