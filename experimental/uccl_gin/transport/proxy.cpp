@@ -1,4 +1,5 @@
 #include "proxy.hpp"
+#include "affinity.hpp"
 #include "bench_utils.hpp"
 #include "d2h_queue_host.hpp"
 #include "ep_util.hpp"
@@ -8,6 +9,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <thread>
 #include <errno.h>
 #include <fcntl.h>
@@ -125,8 +127,22 @@ double Proxy::avg_wr_latency_us() const {
 
 uint64_t Proxy::completed_wr() const { return completion_count_; }
 
+static bool pin_to_taskset_if_requested() {
+  char const* mode = std::getenv("UCCL_PROXY_USE_TASKSET");
+  if (!mode || (strcmp(mode, "1") != 0 && strcmp(mode, "2") != 0)) return false;
+  bool reserve_submit_cpu = strcmp(mode, "2") == 0;
+  if (!pin_thread_to_allowed_cpu(reserve_submit_cpu)) {
+    fprintf(stderr, "Unable to pin proxy inside inherited CPU affinity\n");
+    std::abort();
+  }
+  printf("CPU_PROXY_AFFINITY taskset cpu=%d reserved_submit=%d\n",
+         sched_getcpu(), reserve_submit_cpu);
+  return true;
+}
+
 void Proxy::pin_thread_to_cpu_wrapper() {
   if (cfg_.pin_thread) {
+    if (pin_to_taskset_if_requested()) return;
     // TODO(MaoZiming): improves pinning.
     // Offset LL-mode proxies onto a separate CPU range so a high-throughput
     // Buffer and an LL-mode Buffer running in the same process don't fight
@@ -151,6 +167,7 @@ void Proxy::pin_thread_to_cpu_wrapper() {
 
 void Proxy::pin_thread_to_numa_wrapper() {
   if (cfg_.pin_thread) {
+    if (pin_to_taskset_if_requested()) return;
     assert(ctx_.numa_node != -1);
     int const cpu_local_rank = cfg_.nic_local_rank;
     pin_thread_unique(ctx_.numa_node, cpu_local_rank, cfg_.thread_idx,
@@ -1206,9 +1223,24 @@ void Proxy::post_gpu_commands_mixed(
     // only after those payload counts, and each count arrives with its payload
     // WRITE completion. Only plain WRITEs lack that ordering and must remain
     // sender-side completion dependencies.
+    // UCCL_GIN_TAIL_POLICY=qp drops these dependencies on RC: a tail ATOMIC
+    // follows its payload on the same lane QP, which executes in order, and
+    // PCIe never lets an ATOMIC pass an earlier WRITE, so the tail still lands
+    // after the payload without waiting for the payload's sender-side CQE.
+    // Ordering then holds per lane, as the GIN contract requires. EFA's SRD
+    // does not order a QP, so EFA builds keep the wait (the default, "cqe").
+    static bool const kTailWaitsForCqe = [] {
+#ifdef EFA
+      return true;
+#else
+      char const* p = std::getenv("UCCL_GIN_TAIL_POLICY");
+      return p == nullptr || std::strcmp(p, "qp") != 0;
+#endif
+    }();
     for (size_t i = 0; i < rdma_wrs.size(); ++i) {
-      if (get_base_cmd(rdma_cmds[i].cmd_type) == CmdType::WRITE_VALUE ||
-          rdma_cmds[i].atomic_val == 0) {
+      if (kTailWaitsForCqe &&
+          (get_base_cmd(rdma_cmds[i].cmd_type) == CmdType::WRITE_VALUE ||
+           rdma_cmds[i].atomic_val == 0)) {
         atomic_dependency_wrs_.push_back(rdma_wrs[i]);
       }
     }

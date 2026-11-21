@@ -118,3 +118,6 @@ ci-results/
 
 # Lightweight environment for formatting hooks
 /.venv-format/
+
+# Pinned checkpoint metadata for the MoE reproduction driver.
+!experimental/uccl_gin/moe/checkpoint_manifest.json

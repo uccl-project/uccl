@@ -4,12 +4,18 @@ GPU-initiated rail operations publish commands to a mapped host FIFO. CPU proxie
 translate them into RDMA writes and ordered counter updates. The public device
 API exposes `put`, `put_tail_add`, `put_value`, `red_add_rel`, `quiet` and scalar
 `flush`. LSA operations are not implemented by this standalone backend.
+`put_value` (WRITE_VALUE) is implemented on the EFA path only; RC/IB proxies
+reject it, and the microbench skips its `put_value` check on IB builds.
 
 This integration reuses DanielDanyang's
 [rail-primitives increment](https://github.com/DanielDanyang/uccl-danyang/tree/29e7e7ca868590fb3a70bc96ebf42271983ab9b6/experimental/uccl_gin).
 It is applied to official UCCL main, preserving the mainline CUDA-device/NIC
 selection and the shared CUDA, ROCm, Hygon and Cambricon runtime mappings.
 The optional NCCL-EP adapter and cooperative/signal fixes are a separate change.
+
+For the SM100-family expert kernels, complete Qwen model reproduction and
+measured HT scheduling results, see [the MoE implementation](moe/README.md) and
+[qualification results](moe/SM100_RESULTS.md).
 
 ```mermaid
 flowchart LR

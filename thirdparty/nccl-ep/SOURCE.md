@@ -12,11 +12,21 @@ decodes the globally packed expert bitmap, and backward combine returns weights
 in the original top-k slots. The imported Python ctypes wrapper is omitted; this
 integration builds the native C/CUDA library.
 
+Further local correctness fixes handle unaligned S2D maps with the existing
+barrier protocol, decode globally packed expert bitmaps, drain an HT group
+collectively before releasing its window, and correct receive counts and
+validation/cleanup in the native EP fixtures.
+
 `NCCL_EP_USE_UCCL_GIN=ON` selects UCCL for HT rail operations; intra-node work
 retains NCCL/CUDA primitives. The host adapter bootstraps over the EP NCCL
 communicator and registers the existing GIN payload window with UCCL. It does not
 require MPI_COMM_WORLD to match an EP subgroup. Only contiguous, equal-size node
 rank groups are supported. The 13-bit atomic byte-offset protocol bounds the
 indexed signal range; unsupported topologies return ncclInvalidUsage at setup.
-Distributed RDMA execution still needs a suitable testbed. Native local fixtures
-check kernel behavior with test completions and cannot qualify network E2E.
+The opt-in scheduler bounds concurrent groups using queried kernel resources
+and measured complete-group memory. The SM100-family experiments and pinned
+single-GPU Qwen inference are documented in
+[moe/README.md](../../experimental/uccl_gin/moe/README.md) and
+[SM100_RESULTS.md](../../experimental/uccl_gin/moe/SM100_RESULTS.md).
+Their intra-node/loopback measurements do not qualify distributed model RDMA
+or a production serving system.

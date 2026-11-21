@@ -18,6 +18,33 @@
 namespace nccl_ep {
 namespace hybridep {
 
+static thread_local LaunchPolicy launch_policy;
+
+bool set_launch_policy(LaunchPolicy policy) {
+    if (!(policy.stages == 0 || policy.stages == 4 || policy.stages == 8 || policy.stages == 12) ||
+        !(policy.blocks == 4 || policy.blocks == 8 || policy.blocks == 16)) return false;
+    launch_policy = policy;
+    return true;
+}
+
+template<int Stages, class Function>
+void select_blocks(Function const& function) {
+    switch (launch_policy.blocks) {
+        case 4: function(std::integral_constant<int, Stages>{}, std::integral_constant<int, 4>{}); break;
+        case 8: function(std::integral_constant<int, Stages>{}, std::integral_constant<int, 8>{}); break;
+        case 16: function(std::integral_constant<int, Stages>{}, std::integral_constant<int, 16>{}); break;
+    }
+}
+
+template<class Function>
+void select_candidate(int stages, Function const& function) {
+    switch (stages) {
+        case 4: select_blocks<4>(function); break;
+        case 8: select_blocks<8>(function); break;
+        case 12: select_blocks<12>(function); break;
+    }
+}
+
 // ============================================================================
 // Kernel: Convert sparse topk_idx to dense routing map
 // ============================================================================
@@ -380,6 +407,7 @@ build_dispatch_param(const DispatchParams& params) {
     kp.attn_to_rdma_map = params.attn_to_rdma_map;
     kp.sparse_to_dense_map = params.sparse_to_dense_map;
     kp.expected_rdma_flag_value = params.expected_rdma_flag_value;
+    kp.expected_signal_generations = params.expected_signal_generations;
     kp.expected_intra_node_flag_value = params.expected_intra_node_flag_value;
     kp.rdma_inter_node_group_flags = params.rdma_inter_node_group_flags;
     kp.intra_node_write_completion_flags = params.intra_node_write_completion_flags;
@@ -425,7 +453,8 @@ void dispatch_impl(
     int max_tokens_per_rank,
     int num_nodes,
     bool use_fp8,
-    cudaStream_t stream
+    cudaStream_t stream,
+    KernelResources* resources = nullptr
 ) {
     HYBRIDEP_SWITCH_DATATYPE(use_fp8, {
         HYBRIDEP_SWITCH_NUM_LSA_TEAMS(num_nodes, {
@@ -443,13 +472,14 @@ void dispatch_impl(
 
                 auto kp = build_dispatch_param<TOKEN_DATA_TYPE, LSA_TEAM_SIZE>(params);
 
-                HybridEPType::template dispatch<
-                    TOKEN_DATA_TYPE,
-                    HYBRIDEP_DISPATCH_NUM_OF_STAGES,
-                    HYBRIDEP_DISPATCH_NUM_OF_IN_FLIGHT_S2G,
-                    HT_OF_NUM_TOKENS_PER_CHUNK,
-                    HYBRIDEP_DISPATCH_NUM_OF_BLOCKS,
-                    FORWARD_DISPATCH>(kp, stream);
+                int stages = launch_policy.stages ? launch_policy.stages : HYBRIDEP_DISPATCH_NUM_OF_STAGES;
+                select_candidate(stages, [&](auto stage, auto blocks) {
+                    constexpr int count = decltype(stage)::value;
+                    HybridEPType::template dispatch<
+                        TOKEN_DATA_TYPE, count, count < 12 ? count / 2 - 1 : 4,
+                        HT_OF_NUM_TOKENS_PER_CHUNK, decltype(blocks)::value,
+                        FORWARD_DISPATCH>(kp, stream, resources);
+                });
             });
         });
     });
@@ -516,6 +546,7 @@ build_combine_param(const CombineParams& params) {
 
     // Sync flags
     kp.expected_rdma_flag_value = params.combine_expected_rdma_flag_value;
+    kp.expected_signal_generations = params.expected_signal_generations;
     kp.expected_intra_node_flag_value = params.combine_expected_intra_node_flag_value;
     kp.rdma_inter_node_group_flags = params.combine_rdma_inter_node_group_flags;
     kp.intra_node_write_completion_flags = params.combine_intra_node_write_completion_flags;
@@ -553,7 +584,8 @@ void combine_impl(
     const CombineParams& params,
     int max_tokens_per_rank,
     int num_nodes,
-    cudaStream_t stream
+    cudaStream_t stream,
+    KernelResources* resources = nullptr
 ) {
     // HT combine doesn't support FP8, only BF16
     using TOKEN_DATA_TYPE = uint16_t;
@@ -580,14 +612,14 @@ void combine_impl(
                     ? HYBRIDEP_COMBINE_SINGLENODE_NUM_OF_STAGES_S2G
                     : HYBRIDEP_COMBINE_MULTINODE_NUM_OF_STAGES_S2G;
 
-                HybridEPType::template combine<
-                    num_stages_g2s,
-                    num_stages_s2g,
-                    HT_OF_NUM_TOKENS_PER_CHUNK,
-                    HYBRIDEP_COMBINE_NUM_OF_TOKENS_PER_GROUP,
-                    HYBRIDEP_COMBINE_NUM_OF_BLOCKS,
-                    HYBRIDEP_COMBINE_NUM_OF_ADDITIONAL_IN_FLIGHT_S2G,
-                    BACKWARD_COMBINE>(kp, stream);
+                int stages = launch_policy.stages ? launch_policy.stages : num_stages_g2s;
+                select_candidate(stages, [&](auto stage, auto blocks) {
+                    HybridEPType::template combine<
+                        decltype(stage)::value, num_stages_s2g,
+                        HT_OF_NUM_TOKENS_PER_CHUNK, HYBRIDEP_COMBINE_NUM_OF_TOKENS_PER_GROUP,
+                        decltype(blocks)::value, HYBRIDEP_COMBINE_NUM_OF_ADDITIONAL_IN_FLIGHT_S2G,
+                        BACKWARD_COMBINE>(kp, stream, resources);
+                });
             });
         });
 }
@@ -608,6 +640,30 @@ void call_combine(
             params, max_tokens_per_rank,
             num_nodes, stream);
     }
+}
+
+void query_schedule_resources(int hidden, int experts_per_rank, int local_ranks,
+                              int nodes, ScheduleResources& resources, bool backward_combine) {
+    void* dispatch_pointers[32]{};
+    uint16_t* combine_pointers[32]{};
+    DispatchParams dispatch{};
+    dispatch.hidden_dim = hidden;
+    dispatch.experts_per_rank = experts_per_rank;
+    dispatch.num_ranks_per_node = local_ranks;
+    dispatch.expert_output_token_ptrs = dispatch_pointers;
+    dispatch_impl<true>(dispatch, MAX_SUPPORTED_TOKENS_PER_RANK, nodes, false,
+                        nullptr, &resources.dispatch);
+    CombineParams combine{};
+    combine.hidden_dim = hidden;
+    combine.experts_per_rank = experts_per_rank;
+    combine.num_ranks_per_node = local_ranks;
+    combine.expert_input_token_ptrs = combine_pointers;
+    if (backward_combine)
+        combine_impl<true>(combine, MAX_SUPPORTED_TOKENS_PER_RANK, nodes,
+                           nullptr, &resources.combine);
+    else
+        combine_impl<false>(combine, MAX_SUPPORTED_TOKENS_PER_RANK, nodes,
+                            nullptr, &resources.combine);
 }
 
 } // namespace hybridep
