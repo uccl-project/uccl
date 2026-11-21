@@ -13,6 +13,7 @@
 #include "util/util.h"
 #include <infiniband/verbs.h>
 #include <atomic>
+#include <condition_variable>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -81,6 +82,12 @@ struct Conn {
 
   ShmRingHandle remote_inbox_;
   bool shm_attached_ = false;
+
+  // Accepted by a passive accept thread and not yet returned by accept() or
+  // accept_local(). Guarded by Endpoint::conn_mu_.
+  bool accept_pending_ = false;
+  // GPU index the peer reported, kept for accept() to return.
+  int accepted_gpu_idx_ = -1;
 };
 
 // Custom hash function for std::vector<uint8_t>
@@ -277,8 +284,11 @@ class Endpoint {
   /* Remove a remote endpoint previously added via add_remote_endpoint. */
   bool remove_remote_endpoint(uint64_t conn_id);
 
-  /* Start a background thread for accepting, and one should not call accept()
-   * afterwards. */
+  /* Accept network and local IPC peers on background threads. accept() and
+   * accept_local() may still be called afterwards: they return the peers those
+   * threads accepted, oldest first within each path and each exactly once.
+   * Do not call this while accept() or accept_local() is blocked in another
+   * thread. */
   bool start_passive_accept();
 
   ~Endpoint();
@@ -462,10 +472,12 @@ class Endpoint {
   /* MPSC ring: caller threads push IpcInflightOp*, poller thread drains it. */
   std::thread ipc_poller_thread_;
   /* For background passive accept thread. */
-  bool passive_accept_;
+  std::atomic<bool> passive_accept_;
   std::atomic<bool> passive_accept_stop_{false};
   std::thread passive_accept_thread_;
   std::thread passive_accept_local_thread_;
+  /* Notified when a passive accept thread marks a Conn accept_pending_. */
+  std::condition_variable_any passive_accept_cv_;
 
   /* adaptive sleeping tracker for the thread funcs */
   P2PAdaptiveSleeper send_proxy_adaptive_sleeper_;
@@ -483,6 +495,13 @@ class Endpoint {
   void recv_proxy_thread_func();
   void passive_accept_thread_func();
   void passive_accept_local_thread_func();
+  /* Consume one incoming connection. With passive accept running, only its
+   * threads call these; accept()/accept_local() take what they publish. */
+  bool do_accept(std::string& ip_addr, int& remote_gpu_idx, uint64_t& conn_id);
+  bool do_accept_local(std::string& remote_gpu_bdf, uint64_t& conn_id);
+  void publish_passive_accept(uint64_t conn_id, int remote_gpu_idx);
+  bool take_passive_accept(bool local, std::string& peer, int& remote_gpu_idx,
+                           uint64_t& conn_id);
   void ipc_poller_thread_func();
 
   std::shared_ptr<UnifiedTask> create_task(uint64_t conn_id, uint64_t mr_id,
