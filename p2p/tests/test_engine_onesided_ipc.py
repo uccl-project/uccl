@@ -396,6 +396,71 @@ def test_readv_ipc_async(ep, conn_id, rank, use_cpu: bool):
         _send_int(1, dst=0)
 
 
+def test_remote_extents(ep, conn_id, rank, use_cpu):
+    size = BUF_ELEMS * 4
+    advertised = (size, size // 2)
+    if rank == 0:
+        buffers = [torch.full((BUF_ELEMS,), 3.0, device=_device()) for _ in range(2)]
+        for buffer, length in zip(buffers, advertised, strict=True):
+            ok, info = ep.advertise_ipc(conn_id, buffer.data_ptr(), length)
+            if not ok:
+                raise RuntimeError("extent scenario could not advertise its buffer")
+            _send_bytes(bytes(info), dst=1)
+    else:
+        infos = [_recv_bytes(src=0) for _ in range(2)]
+        buffers, ptrs = _make_client_bufs((7.0, 7.0), use_cpu, (BUF_ELEMS,) * 2)
+
+    for name in (
+        "write_ipc",
+        "read_ipc",
+        "write_ipc_async",
+        "read_ipc_async",
+        "writev_ipc",
+        "readv_ipc",
+        "writev_ipc_async",
+        "readv_ipc_async",
+    ):
+        vector = name.startswith(("readv", "writev"))
+        for valid in (False, True):
+            for buffer in buffers:
+                buffer.fill_(3.0 if rank == 0 else 7.0)
+            torch.cuda.synchronize()
+            dist.barrier()
+            bad = False
+            if rank == 1:
+                length = size // 2 if valid else size
+                call = getattr(ep, name)
+                result = (
+                    call(conn_id, ptrs, [size, length], infos)
+                    if vector
+                    else call(conn_id, ptrs[1], length, infos[1])
+                )
+                if name.endswith("_async"):
+                    ok, transfer_id = result
+                    if ok:
+                        _poll_done(ep, transfer_id)
+                    elif transfer_id != 0:
+                        bad = True
+                else:
+                    ok = result
+                bad |= ok != valid
+                torch.cuda.synchronize()
+            dist.barrier()
+            changed = valid and (
+                (rank == 0 and name.startswith("write"))
+                or (rank == 1 and name.startswith("read"))
+            )
+            for index, buffer in enumerate(buffers):
+                expected = torch.full_like(buffer, 3.0 if rank == 0 else 7.0)
+                if changed and (vector or index == 1):
+                    expected[: advertised[index] // 4] = 7.0 if rank == 0 else 3.0
+                bad |= not torch.equal(buffer, expected)
+            failed = torch.tensor([int(bad)], dtype=torch.int32)
+            dist.all_reduce(failed)
+            if failed.item():
+                raise RuntimeError(f"{name}: remote extent rejection/retry failed")
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 
 
@@ -474,6 +539,7 @@ def main():
         assert ok, "connect_local failed"
 
     tests = [
+        ("remote_extents", test_remote_extents),
         ("write_ipc", test_write_ipc),
         ("write_ipc_async", test_write_ipc_async),
         ("read_ipc", test_read_ipc),

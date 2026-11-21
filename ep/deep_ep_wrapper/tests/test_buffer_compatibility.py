@@ -39,6 +39,9 @@ def _load_deep_ep_wrapper(monkeypatch, current_device):
 
     torch_dist = ModuleType("torch.distributed")
     torch_dist.ProcessGroup = type("ProcessGroup", (), {})
+    # Single-rank stand-ins for the cross-rank config gather in Buffer.__init__.
+    torch_dist.get_world_size = lambda group=None: 1
+    torch_dist.all_gather_object = lambda out, obj, group=None: out.__setitem__(0, obj)
     torch.distributed = torch_dist
 
     uccl = ModuleType("uccl")
@@ -53,6 +56,7 @@ def _load_deep_ep_wrapper(monkeypatch, current_device):
     wrapper_utils.check_nvlink_connections = lambda *args, **kwargs: None
     wrapper_utils.initialize_uccl = lambda *args, **kwargs: None
     wrapper_utils.destroy_uccl = lambda *args, **kwargs: None
+    wrapper_utils.detect_group_topology = lambda *args, **kwargs: None
     wrapper_utils._fp8_e4m3_dtype = object()
 
     monkeypatch.setitem(sys.modules, "torch", torch)
@@ -87,6 +91,9 @@ def test_enable_shrink_compatibility(isolated_deep_ep_import):
         raise ReachedNormalInitialization
 
     cuda.current_device = mark_normal_initialization
+    # The stubs cannot build a config signature; ep/tests/test_config_check.py
+    # covers the check itself.
+    monkeypatch.setenv("UCCL_EP_CONFIG_CHECK", "0")
     with pytest.raises(ReachedNormalInitialization):
         deep_ep.Buffer(group=object(), enable_shrink=False)
 
@@ -95,3 +102,11 @@ def test_event_handle_is_the_stream_aware_wrapper(isolated_deep_ep_import):
     deep_ep, _ = _load_deep_ep_wrapper(isolated_deep_ep_import, lambda: 0)
 
     assert deep_ep.EventHandle is sys.modules["deep_ep.utils"].EventHandle
+
+
+def test_config_check_ships_with_the_wrapper(isolated_deep_ep_import):
+    _load_deep_ep_wrapper(isolated_deep_ep_import, lambda: 0)
+
+    # Not a top-level config_check that happens to be importable from ep/bench.
+    check = sys.modules["deep_ep.buffer"].check_consistency
+    assert check.__module__ == "deep_ep.config_check"

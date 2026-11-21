@@ -42,6 +42,7 @@ void EpollClient::stop() {
   for (auto& kv : conns_) {
     if (kv.second.fd >= 0) ::close(kv.second.fd);
   }
+  events_.clear();
   conns_.clear();
 }
 
@@ -83,25 +84,26 @@ std::string EpollClient::connect_to_server(std::string const& server_ip,
 
   // Add to epoll
   epoll_event ev{};
-  ev.data.ptr = new std::string(conn_key);  // store conn_key in ptr
+  ev.data.u64 = next_event_id_++;
   ev.events = EPOLLIN | EPOLLET | EPOLLOUT;
   if (epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, sock, &ev) < 0) {
     perror("epoll_ctl add");
     ::close(sock);
-    delete static_cast<std::string*>(ev.data.ptr);
     return "";
   }
 
   // Create connection state
   ClientConnection conn;
   conn.fd = sock;
+  conn.event_id = ev.data.u64;
   conn.server_ip = server_ip;
   conn.server_port = server_port;
   conn.connected = true;
   conn.expected_len = 0;
   conn.last_activity = std::chrono::steady_clock::now();
 
-  conns_[conn_key] = std::move(conn);
+  auto entry = conns_.emplace(conn_key, std::move(conn)).first;
+  events_.emplace(entry->second.event_id, entry);
 
   std::cout << "Connected to " << server_ip << ":" << server_port
             << " (fd=" << sock << ")\n";
@@ -168,20 +170,20 @@ void EpollClient::event_loop() {
     }
     for (int i = 0; i < n; ++i) {
       epoll_event& ev = events[i];
-      std::string* conn_key_ptr = static_cast<std::string*>(ev.data.ptr);
-      if (!conn_key_ptr) continue;
+      std::lock_guard<std::mutex> lk(conns_mtx_);
+      // epoll_wait can return events for a socket that has since been replaced.
+      auto event = events_.find(ev.data.u64);
+      if (event == events_.end()) continue;
+      auto const& conn_key = event->second->first;
 
-      std::string conn_key = *conn_key_ptr;
-
-      if ((ev.events & EPOLLERR) || (ev.events & EPOLLHUP)) {
+      if (ev.events & (EPOLLERR | EPOLLHUP)) {
         UCCL_LOG(WARN) << "Error/HUP on connection: " << conn_key;
-        std::lock_guard<std::mutex> lk(conns_mtx_);
         close_connection(conn_key);
         continue;
       }
-
       if (ev.events & EPOLLIN) handle_read(conn_key);
-      if (ev.events & EPOLLOUT) handle_write(conn_key);
+      if ((ev.events & EPOLLOUT) && events_.count(ev.data.u64))
+        handle_write(conn_key);
     }
   }
 }
@@ -189,7 +191,6 @@ void EpollClient::event_loop() {
 void EpollClient::handle_read(std::string const& conn_key) {
   char buf[4096];
 
-  std::lock_guard<std::mutex> lk(conns_mtx_);
   auto it = conns_.find(conn_key);
   if (it == conns_.end()) return;
   ClientConnection& conn = it->second;
@@ -268,7 +269,6 @@ void EpollClient::parse_responses(ClientConnection& conn) {
 }
 
 void EpollClient::handle_write(std::string const& conn_key) {
-  std::lock_guard<std::mutex> lk(conns_mtx_);
   auto it = conns_.find(conn_key);
   if (it == conns_.end()) return;
   ClientConnection& conn = it->second;
@@ -301,5 +301,6 @@ void EpollClient::close_connection(std::string const& conn_key) {
     }
     ::close(it->second.fd);
   }
+  events_.erase(it->second.event_id);
   conns_.erase(it);
 }

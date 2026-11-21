@@ -13,6 +13,7 @@
 #include "util/util.h"
 #include <infiniband/verbs.h>
 #include <atomic>
+#include <condition_variable>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -51,8 +52,7 @@ struct P2PMhandle {
   // True when only the compression context was prepared and no user-buffer MR
   // was registered (mr_array/cache_refs are empty).
   bool compress_only = false;
-  // Buffer passed to reg_compress_only(); sends on a compress_only handle must
-  // use exactly this address and length.
+  // The prepared compression context describes exactly this registered range.
   void const* registered_addr = nullptr;
   size_t registered_len = 0;
 };
@@ -82,6 +82,12 @@ struct Conn {
 
   ShmRingHandle remote_inbox_;
   bool shm_attached_ = false;
+
+  // Accepted by a passive accept thread and not yet returned by accept() or
+  // accept_local(). Guarded by Endpoint::conn_mu_.
+  bool accept_pending_ = false;
+  // GPU index the peer reported, kept for accept() to return.
+  int accepted_gpu_idx_ = -1;
 };
 
 // Custom hash function for std::vector<uint8_t>
@@ -278,8 +284,11 @@ class Endpoint {
   /* Remove a remote endpoint previously added via add_remote_endpoint. */
   bool remove_remote_endpoint(uint64_t conn_id);
 
-  /* Start a background thread for accepting, and one should not call accept()
-   * afterwards. */
+  /* Accept network and local IPC peers on background threads. accept() and
+   * accept_local() may still be called afterwards: they return the peers those
+   * threads accepted, oldest first within each path and each exactly once.
+   * Do not call this while accept() or accept_local() is blocked in another
+   * thread. */
   bool start_passive_accept();
 
   ~Endpoint();
@@ -363,7 +372,8 @@ class Endpoint {
                   size_t num_iovs);
 
   /* Connect to a local process via shared memory. Same-GPU cross-process
-   * connections provide IPC metadata only; do not pair them with accept_local. */
+   * connections provide IPC metadata only; do not pair them with accept_local.
+   */
   bool connect_local(std::string const& remote_gpu_bdf, uint64_t& conn_id,
                      bool same_process = false);
 
@@ -468,10 +478,12 @@ class Endpoint {
   /* MPSC ring: caller threads push IpcInflightOp*, poller thread drains it. */
   std::thread ipc_poller_thread_;
   /* For background passive accept thread. */
-  bool passive_accept_;
+  std::atomic<bool> passive_accept_;
   std::atomic<bool> passive_accept_stop_{false};
   std::thread passive_accept_thread_;
   std::thread passive_accept_local_thread_;
+  /* Notified when a passive accept thread marks a Conn accept_pending_. */
+  std::condition_variable_any passive_accept_cv_;
 
   /* adaptive sleeping tracker for the thread funcs */
   P2PAdaptiveSleeper send_proxy_adaptive_sleeper_;
@@ -489,6 +501,14 @@ class Endpoint {
   void recv_proxy_thread_func();
   void passive_accept_thread_func();
   void passive_accept_local_thread_func();
+  /* Consume one incoming connection. With passive accept running, only its
+   * threads call these; accept()/accept_local() take what they publish. */
+  bool do_accept(std::string& ip_addr, int& remote_gpu_idx, uint64_t& conn_id);
+  bool do_accept_local(std::string& remote_gpu_bdf, uint64_t& conn_id,
+                       int64_t timeout_ms = -1);
+  void publish_passive_accept(uint64_t conn_id, int remote_gpu_idx);
+  bool take_passive_accept(bool local, std::string& peer, int& remote_gpu_idx,
+                           uint64_t& conn_id, int64_t timeout_ms = -1);
   void ipc_poller_thread_func();
 
   std::shared_ptr<UnifiedTask> create_task(uint64_t conn_id, uint64_t mr_id,
@@ -500,11 +520,11 @@ class Endpoint {
   std::shared_ptr<UnifiedTask> create_writev_task(
       uint64_t conn_id, std::vector<void*>&& data_v,
       std::vector<size_t>&& size_v, std::vector<uint64_t>&& mr_id_v,
-      std::vector<FifoItem>&& slot_item_v);
+      std::vector<FifoItem>&& slot_item_v, size_t num_iovs);
   std::shared_ptr<UnifiedTask> create_readv_task(
       uint64_t conn_id, std::vector<void*>&& data_v,
       std::vector<size_t>&& size_v, std::vector<uint64_t>&& mr_id_v,
-      std::vector<FifoItem>&& slot_item_v);
+      std::vector<FifoItem>&& slot_item_v, size_t num_iovs);
   bool run_raw_one_sided_pipeline(SendConnection* send_group,
                                   SendType send_type,
                                   std::vector<P2PMhandle*> const& mhandle_v,

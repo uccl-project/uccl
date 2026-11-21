@@ -25,6 +25,7 @@ def load_buffer_config_methods():
     )
     methods = {
         "_config_from_env",
+        "_default_rdma_recv_tokens",
         "_validated_env_configs",
         "get_dispatch_config",
         "get_combine_config",
@@ -41,7 +42,6 @@ def load_buffer_config_methods():
     )
     result = namespace["Buffer"]
     result.num_sms = 20
-    result._is_efa = staticmethod(lambda: False)
     return result
 
 
@@ -51,18 +51,28 @@ Buffer = load_buffer_config_methods()
 class RuntimeConfigTest(unittest.TestCase):
     def test_defaults_and_matching_overrides(self):
         cases = [
-            ({}, (20, 6, 256, 6, 128), (20, 4, 256, 6, 128)),
+            (8, {}, (20, 6, 256, 6, 128), (20, 4, 256, 6, 128)),
             (
+                16,
+                {"EFA_HOME": str(Path(__file__).parent)},
+                (20, 36, 288, 20, 512),
+                (20, 4, 288, 12, 512),
+            ),
+            (32, {"EFA_HOME": ""}, (20, 32, 288, 32, 128), (20, 1, 288, 8, 128)),
+            (
+                8,
                 {"UCCL_EP_DISPATCH_CONFIG": "20,8,256,6,128"},
                 (20, 8, 256, 6, 128),
                 (20, 4, 256, 6, 128),
             ),
             (
+                8,
                 {"UCCL_EP_COMBINE_CONFIG": "20,9,256,6,128"},
                 (20, 6, 256, 6, 128),
                 (20, 9, 256, 6, 128),
             ),
             (
+                8,
                 {
                     "UCCL_EP_DISPATCH_CONFIG": "24,8,256,6,128",
                     "UCCL_EP_COMBINE_CONFIG": "24,9,256,6,128",
@@ -71,10 +81,13 @@ class RuntimeConfigTest(unittest.TestCase):
                 (24, 9, 256, 6, 128),
             ),
         ]
-        for env, dispatch, combine in cases:
-            with self.subTest(env=env), patch.dict(os.environ, env, clear=True):
-                self.assertEqual(Buffer.get_dispatch_config(8).values, dispatch)
-                self.assertEqual(Buffer.get_combine_config(8).values, combine)
+        for ranks, env, dispatch, combine in cases:
+            with (
+                self.subTest(ranks=ranks, env=env),
+                patch.dict(os.environ, env, clear=True),
+            ):
+                self.assertEqual(Buffer.get_dispatch_config(ranks).values, dispatch)
+                self.assertEqual(Buffer.get_combine_config(ranks).values, combine)
 
     def test_mismatched_overrides_rejected_by_both_getters(self):
         cases = [

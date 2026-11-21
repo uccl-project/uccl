@@ -26,6 +26,104 @@ from report import report_logs, report_results
 from run import Worker, collect_results, write_summary
 
 
+class CpuSetupTests(unittest.TestCase):
+    def setup_runner(self, sources, *, curl_exit=0, apt_exit=0, repeats=1):
+        # Run the real setup script with only OS/package-manager calls doubled.
+        # All APT configuration writes stay inside this temporary fixture.
+        harness = r"""
+grep() {
+  local args=() arg
+  for arg in "$@"; do
+    case "$arg" in /etc/apt/*) arg="$APT_FIXTURE$arg";; esac
+    args+=("$arg")
+  done
+  command grep "${args[@]}"
+}
+curl() { echo curl >> "$APT_TRACE"; return "$CURL_EXIT"; }
+fake_apt() {
+  printf 'apt-get %s\n' "$*" >> "$APT_TRACE"
+  if [[ " $* " == *" update "* ]]; then return "$APT_EXIT"; fi
+}
+sudo() {
+  case "$1" in
+    tee) command tee -a "$APT_FIXTURE/etc/apt/apt-mirrors.txt";;
+    apt-get) shift; fake_apt "$@";;
+    env)
+      [[ "$2" == DEBIAN_FRONTEND=noninteractive && "$3" == apt-get ]] || return 97
+      shift 3; fake_apt "$@";;
+    *) return 97;;
+  esac
+}
+source "$1"
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            apt = root / "etc/apt"
+            (apt / "sources.list.d").mkdir(parents=True)
+            if sources is not None:
+                (apt / "sources.list.d/ubuntu.sources").write_text(sources)
+            mirrors = apt / "apt-mirrors.txt"
+            mirrors.write_text("https://archive.ubuntu.com/ubuntu/\n")
+            trace = root / "trace"
+            env = dict(
+                os.environ,
+                APT_FIXTURE=str(root),
+                APT_TRACE=str(trace),
+                CURL_EXIT=str(curl_exit),
+                APT_EXIT=str(apt_exit),
+            )
+            script = Path(__file__).resolve().parents[1] / "setup_cpu.sh"
+            for _ in range(repeats):
+                result = subprocess.run(
+                    ["bash", "-c", harness, "setup-test", str(script)],
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                if result.returncode:
+                    break
+            return result, trace.read_text(), mirrors.read_text()
+
+    def test_preferred_mirror_is_probed_and_added_once(self):
+        result, trace, mirrors = self.setup_runner(
+            "URIs: mirror+file:/etc/apt/apt-mirrors.txt\n", repeats=2
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(trace.count("curl\n"), 1)
+        self.assertEqual(mirrors.count("priority:0"), 1)
+        self.assertIn("https://archive.ubuntu.com/ubuntu/", mirrors)
+        self.assertEqual(trace.count("Acquire::Retries=3"), 4)
+        self.assertEqual(trace.count("install -y build-essential"), 2)
+
+    def test_unreachable_preferred_mirror_keeps_runner_defaults(self):
+        result, trace, mirrors = self.setup_runner(
+            "URIs: mirror+file:/etc/apt/apt-mirrors.txt\n", curl_exit=28
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "::warning::Preferred Ubuntu mirror is unreachable", result.stdout
+        )
+        self.assertNotIn("priority:0", mirrors)
+        self.assertIn("install -y", trace)
+
+    def test_changed_or_missing_sources_warn_and_still_install(self):
+        for sources in ["URIs: https://archive.ubuntu.com/ubuntu/\n", None]:
+            with self.subTest(sources=sources):
+                result, trace, mirrors = self.setup_runner(sources)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("::warning::Runner APT sources", result.stdout)
+                self.assertNotIn("curl", trace)
+                self.assertEqual(mirrors, "https://archive.ubuntu.com/ubuntu/\n")
+                self.assertIn("update --error-on=any", trace)
+                self.assertIn("install -y", trace)
+
+    def test_apt_errors_still_fail_setup(self):
+        result, trace, _ = self.setup_runner(None, apt_exit=17)
+        self.assertEqual(result.returncode, 17)
+        self.assertNotIn("install -y", trace)
+
+
 class AdmissionTests(unittest.TestCase):
     def process(self, pid, uid=1000, ppid=1, name="python3", **kwargs):
         return dict(
@@ -713,7 +811,7 @@ class SelectionTests(unittest.TestCase):
         for name in normal_ids | perf_ids:
             self.assertFalse(
                 any(
-                    source.startswith(("examples/", "experimental/"))
+                    source.startswith(("collective/examples/", "experimental/"))
                     for source in definitions[name]["sources"]
                 ),
                 name,

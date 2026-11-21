@@ -82,6 +82,16 @@ DietGPU provides lossless GPU-side compression for float16/bfloat16/float32 tens
 
 Compression also applies to one-sided `write`/`writev` when `UCCL_P2P_COMPRESS_STRATEGY=split_only`. Only the `split_only` strategy is supported for the write path (not `encode`/`full`). The mechanism is transparent: the sender compresses float data in two GPU kernel phases and writes the result directly into a pre-allocated GPU buffer on the receiver side; once all data arrives, the receiver decompresses into the advertised destination address and sends a small RDMA ack to release the sender's buffer slot. Both sides must be built with `USE_DIETGPU=1`.
 
+NFH is a second codec for the same write path, for bfloat16 only. It sends the sign + mantissa byte of every value first and codes the exponents with a length-limited Huffman code; the compressed size never exceeds the input size. Build it alongside (or instead of) DietGPU and select it at runtime:
+```bash
+USE_DIETGPU=1 USE_NFH=1 make -j install
+# or
+USE_DIETGPU=1 USE_NFH=1 bash build.sh cu12 p2p --install
+
+UCCL_P2P_COMPRESS_STRATEGY=split_only UCCL_P2P_COMPRESS_CODEC=nfh <your command>
+```
+Both peers must use the same codec. With NFH, float16/float32 writes go uncompressed. `UCCL_DIETGPU_SM_USAGE` limits the SMs NFH uses, as it does for DietGPU. `make -C rdma/nfh test` builds and runs the codec's round-trip checks.
+
 ## Device and transport backends
 
 The device runtime is selected at **build time**; network transport is selected
@@ -173,6 +183,7 @@ Notes:
 | UCCL_P2P_MAX_INFLIGHT_OPS | Maximum one-sided in-flight operations; CXI defaults lower than RDMA | 32 for CXI, otherwise internal maximum |
 | UCCL_LIBFABRIC_SO | Override libfabric shared-library path for the CXI dlsym wrapper | auto-detect `libfabric.so` / `libfabric.so.1` |
 | UCCL_P2P_COMPRESS_STRATEGY | DietGPU compression strategy (requires `USE_DIETGPU=1` build) | none |
+| UCCL_P2P_COMPRESS_CODEC | Compression codec: `dietgpu` or `nfh` (NFH requires a `USE_NFH=1` build; bfloat16 only) | dietgpu, or nfh in a build without DietGPU |
 | UCCL_RDMA_ADAPTIVE_SLEEP | Enable adaptive sleeping on proxy threads, by putting the proxy threads into a sleeping state if there have been no new work requests / RDMA completion events after 120s. | null |
 
 `UCCL_P2P_COMPRESS_STRATEGY` accepted values:
