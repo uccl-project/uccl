@@ -39,3 +39,25 @@ def test_blocking_accept_after_passive_accept():
         check=True,
         timeout=30,
     )
+
+
+def test_accept_local_timeout_with_and_without_passive_accept():
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import time\n"
+            "from uccl import p2p\n"
+            "ep = p2p.Endpoint()\n"
+            "for passive in (False, True):\n"
+            "    if passive: ep.start_passive_accept()\n"
+            "    for timeout_ms in (0, 50):\n"
+            "        start = time.monotonic()\n"
+            "        ok, _, conn_id = ep.accept_local(timeout_ms=timeout_ms)\n"
+            "        assert not ok and conn_id == (1 << 64) - 1\n"
+            "        assert time.monotonic() - start >= timeout_ms / 1000\n"
+            "del ep\n",
+        ],
+        check=True,
+        timeout=20,
+    )

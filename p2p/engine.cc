@@ -1510,29 +1510,40 @@ bool Endpoint::advertisev(std::vector<uint64_t> mr_id_v,
 
 bool Endpoint::connect_local(std::string const& remote_gpu_bdf,
                              uint64_t& conn_id, bool same_process) {
-  constexpr int kMaxRetry = 20;
   constexpr int kRetrySleepMs = 10;
+  constexpr int kAttachDeadlineMs = 2000;
+
+  // Normalise once so the remote BDF and shared-memory ring name use the same
+  // format as gpu_bus_id_. Same-GPU connect_local is retained for IPC flows
+  // that exchange advertised metadata without calling accept_local().
+  std::string const remote_bdf = uccl::normalize_pci_bus_id(remote_gpu_bdf);
 
   Conn* conn = new Conn;
-  conn->remote_gpu_bdf_ = remote_gpu_bdf;
-  conn->remote_gpu_ordinal_ = visible_ordinal_of_bdf(remote_gpu_bdf);
+  conn->remote_gpu_bdf_ = remote_bdf;
+  conn->remote_gpu_ordinal_ = visible_ordinal_of_bdf(remote_bdf);
 
   if (same_process) {
     // Same process: use inbox_rings_ directly, no shm attach needed.
-    auto it = inbox_rings_.find(remote_gpu_bdf);
+    auto it = inbox_rings_.find(remote_bdf);
     if (it != inbox_rings_.end()) {
       conn->remote_inbox_ = it->second;
     }
     conn->shm_attached_ = false;
   } else {
     // cross process: attach remote inbox via shared memory
-    conn->remote_inbox_.shm_name = shm_ring_name(gpu_bus_id_, remote_gpu_bdf);
+    conn->remote_inbox_.shm_name = shm_ring_name(gpu_bus_id_, remote_bdf);
 
+    // The peer may be starting up (or replacing a stale ring), in which
+    // case attach reports "no live owner" until its engine is up. Retry
+    // until the deadline. EACCES is not transient and stops the loop.
     jring_t* ring = nullptr;
     int attempts = 0;
     int attach_errno = 0;
-    while (attempts < kMaxRetry) {
+    auto const deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(kAttachDeadlineMs);
+    for (;;) {
       errno = 0;
+      conn->remote_inbox_.shm_size = 0;  // re-detect every attempt
       ring = uccl::attach_shared_ring(conn->remote_inbox_.shm_name.c_str(),
                                       conn->remote_inbox_.shm_fd,
                                       conn->remote_inbox_.shm_size);
@@ -1544,6 +1555,9 @@ bool Endpoint::connect_local(std::string const& remote_gpu_bdf,
       // A permission error does not go away; only retry while the peer may
       // still be creating its ring.
       if (attach_errno == EACCES) {
+        break;
+      }
+      if (std::chrono::steady_clock::now() >= deadline) {
         break;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(kRetrySleepMs));
@@ -1568,8 +1582,11 @@ bool Endpoint::connect_local(std::string const& remote_gpu_bdf,
   conn_id = next_conn_id_.fetch_add(1);
   conn->conn_id_ = conn_id;
 
-  if (!same_process) {
-    // Cross-process: send CONNECT handshake via shm ring.
+  if (!same_process && remote_bdf != gpu_bus_id_) {
+    // Cross-GPU: send the CONNECT handshake through the shm ring. A same-GPU
+    // connector sends nothing: accept_local() never reads its own-BDF ring,
+    // so the message would sit unconsumed and occupy a slot forever
+    // (shm_ring_send busy-waits once the ring is full).
     ShmMsg msg;
     std::strncpy(msg.src_bdf, gpu_bus_id_.c_str(), sizeof(msg.src_bdf) - 1);
     msg.src_bdf[sizeof(msg.src_bdf) - 1] = '\0';
@@ -1589,16 +1606,27 @@ bool Endpoint::connect_local(std::string const& remote_gpu_bdf,
   return true;
 }
 
-bool Endpoint::accept_local(std::string& remote_gpu_bdf, uint64_t& conn_id) {
+bool Endpoint::accept_local(std::string& remote_gpu_bdf, uint64_t& conn_id,
+                            int64_t timeout_ms) {
+  // Define the out-parameter before any failure return (timeout, shutdown):
+  // 0 is a valid conn id, so use the top of the range as the invalid handle.
+  conn_id = UINT64_MAX;
   if (passive_accept_.load(std::memory_order_acquire)) {
     int remote_gpu_idx;
-    return take_passive_accept(true, remote_gpu_bdf, remote_gpu_idx, conn_id);
+    return take_passive_accept(true, remote_gpu_bdf, remote_gpu_idx, conn_id,
+                               timeout_ms);
   }
-  return do_accept_local(remote_gpu_bdf, conn_id);
+  return do_accept_local(remote_gpu_bdf, conn_id, timeout_ms);
 }
 
-bool Endpoint::do_accept_local(std::string& remote_gpu_bdf, uint64_t& conn_id) {
+bool Endpoint::do_accept_local(std::string& remote_gpu_bdf, uint64_t& conn_id,
+                               int64_t timeout_ms) {
   std::cout << "Waiting for local CONNECT..." << std::endl;
+
+  auto const deadline = timeout_ms < 0
+                            ? std::chrono::steady_clock::time_point::max()
+                            : std::chrono::steady_clock::now() +
+                                  std::chrono::milliseconds(timeout_ms);
 
   // recv CONNECT
   ShmMsg msg;
@@ -1611,6 +1639,17 @@ bool Endpoint::do_accept_local(std::string& remote_gpu_bdf, uint64_t& conn_id) {
         shm_ring_recv(handle.ring, msg);
         goto got;
       }
+    }
+    if (passive_accept_stop_.load(std::memory_order_acquire) ||
+        stop_.load(std::memory_order_acquire)) {
+      std::cout << "[accept_local] endpoint is stopping, giving up"
+                << std::endl;
+      return false;
+    }
+    if (std::chrono::steady_clock::now() >= deadline) {
+      std::cerr << "[accept_local] Error: timed out after " << timeout_ms
+                << " ms waiting for a local CONNECT" << std::endl;
+      return false;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
@@ -1638,6 +1677,12 @@ got:
     conn->remote_inbox_.ring = uccl::attach_shared_ring(
         conn->remote_inbox_.shm_name.c_str(), conn->remote_inbox_.shm_fd,
         conn->remote_inbox_.shm_size);
+    if (conn->remote_inbox_.ring == nullptr) {
+      std::cerr << "[accept_local] Error: failed to attach remote inbox "
+                << conn->remote_inbox_.shm_name << std::endl;
+      delete conn;
+      return false;
+    }
     conn->shm_attached_ = true;
   }
 
@@ -2474,7 +2519,12 @@ void Endpoint::publish_passive_accept(uint64_t conn_id, int remote_gpu_idx) {
 }
 
 bool Endpoint::take_passive_accept(bool local, std::string& peer,
-                                   int& remote_gpu_idx, uint64_t& conn_id) {
+                                   int& remote_gpu_idx, uint64_t& conn_id,
+                                   int64_t timeout_ms) {
+  auto const deadline = timeout_ms < 0
+                            ? std::chrono::steady_clock::time_point::max()
+                            : std::chrono::steady_clock::now() +
+                                  std::chrono::milliseconds(timeout_ms);
   std::unique_lock<std::shared_mutex> lock(conn_mu_);
   while (!passive_accept_stop_.load(std::memory_order_acquire) &&
          !uccl_accept_stopped(ep_)) {
@@ -2494,7 +2544,10 @@ bool Endpoint::take_passive_accept(bool local, std::string& peer,
       conn_id = oldest->conn_id_;
       return true;
     }
-    passive_accept_cv_.wait_for(lock, std::chrono::milliseconds(100));
+    auto const now = std::chrono::steady_clock::now();
+    if (now >= deadline) return false;
+    passive_accept_cv_.wait_until(
+        lock, std::min(deadline, now + std::chrono::milliseconds(100)));
     if (inside_python) {
       // The signal check takes the GIL; do not hold conn_mu_ across it.
       lock.unlock();

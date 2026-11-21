@@ -371,12 +371,18 @@ class Endpoint {
                   std::vector<size_t> len_v, std::vector<char*> out_buf_v,
                   size_t num_iovs);
 
-  /*Connect to a local process via shared memory.*/
+  /* Connect to a local process via shared memory. Same-GPU cross-process
+   * connections provide IPC metadata only; do not pair them with accept_local.
+   */
   bool connect_local(std::string const& remote_gpu_bdf, uint64_t& conn_id,
                      bool same_process = false);
 
-  /*Accept an incoming local connection via shared memory. */
-  bool accept_local(std::string& remote_gpu_bdf, uint64_t& conn_id);
+  /*Accept an incoming local connection via shared memory.
+   * timeout_ms >= 0 bounds the wait in milliseconds; timeout_ms < 0 waits
+   * forever. Returns false on timeout or when the endpoint is stopping;
+   * conn_id is set to UINT64_MAX when the call returns false. */
+  bool accept_local(std::string& remote_gpu_bdf, uint64_t& conn_id,
+                    int64_t timeout_ms = -1);
 
   /* One-sided write and read via IPC. */
   bool write_ipc(uint64_t conn_id, void const* data, size_t size,
@@ -498,10 +504,11 @@ class Endpoint {
   /* Consume one incoming connection. With passive accept running, only its
    * threads call these; accept()/accept_local() take what they publish. */
   bool do_accept(std::string& ip_addr, int& remote_gpu_idx, uint64_t& conn_id);
-  bool do_accept_local(std::string& remote_gpu_bdf, uint64_t& conn_id);
+  bool do_accept_local(std::string& remote_gpu_bdf, uint64_t& conn_id,
+                       int64_t timeout_ms = -1);
   void publish_passive_accept(uint64_t conn_id, int remote_gpu_idx);
   bool take_passive_accept(bool local, std::string& peer, int& remote_gpu_idx,
-                           uint64_t& conn_id);
+                           uint64_t& conn_id, int64_t timeout_ms = -1);
   void ipc_poller_thread_func();
 
   std::shared_ptr<UnifiedTask> create_task(uint64_t conn_id, uint64_t mr_id,
