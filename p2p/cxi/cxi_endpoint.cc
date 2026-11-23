@@ -368,7 +368,7 @@ fi_addr_t CxiEndpoint::insert_peer(EndpointInfo const& info) {
 
 ConnID CxiEndpoint::uccl_connect(int remote_gpuidx, std::string remote_ip,
                                  uint16_t remote_port) {
-  int32_t peer_id = next_send_peer_id_.fetch_add(1, std::memory_order_relaxed);
+  int32_t peer_id = next_peer_id_.fetch_add(1, std::memory_order_relaxed);
 
   std::string conn_key;
   while (conn_key.empty()) {
@@ -475,7 +475,7 @@ void CxiEndpoint::process_meta(std::string const& input, std::string& output,
 
   EndpointInfo peer_info = deserialize_endpoint_info(input);
   fi_addr_t addr = insert_peer(peer_info);
-  uint64_t peer_id = next_recv_peer_id_.fetch_add(1, std::memory_order_relaxed);
+  uint64_t peer_id = next_peer_id_.fetch_add(1, std::memory_order_relaxed);
 
   {
     std::unique_lock<std::shared_mutex> lock(peer_mutex_);

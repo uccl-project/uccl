@@ -121,8 +121,9 @@ class CxiEndpoint {
   int gpu_index_ = INVALID_GPU;
   bool fabric_initialized_ = false;
   std::atomic<bool> stop_accept_{false};
-  std::atomic<int32_t> next_send_peer_id_{0};
-  std::atomic<int32_t> next_recv_peer_id_{0};
+  // One counter for connected and accepted peers: both share peers_ and
+  // peer_oob_conn_keys_, so their ids must not overlap.
+  std::atomic<int32_t> next_peer_id_{0};
   std::atomic<int64_t> next_request_id_{0};
 
   fi_info* info_ = nullptr;
