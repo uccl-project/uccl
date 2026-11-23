@@ -974,6 +974,10 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
                      std::vector<size_t> const& size_v,
                      std::vector<FifoItem> const& slot_item_v,
                      size_t num_iovs) {
+  if (unlikely(num_iovs > mr_id_v.size() || num_iovs > dst_v.size())) {
+    UCCL_LOG(ERROR) << "readv input vector is shorter than num_iovs";
+    return false;
+  }
   if (!remote_extents_fit(size_v, slot_item_v, num_iovs)) return false;
   auto* conn = get_conn(conn_id);
   if (unlikely(conn == nullptr)) {
@@ -1291,6 +1295,10 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
                       std::vector<size_t> const& size_v,
                       std::vector<FifoItem> const& slot_item_v,
                       size_t num_iovs) {
+  if (unlikely(num_iovs > mr_id_v.size() || num_iovs > src_v.size())) {
+    UCCL_LOG(ERROR) << "writev input vector is shorter than num_iovs";
+    return false;
+  }
   if (!remote_extents_fit(size_v, slot_item_v, num_iovs)) return false;
   auto* conn = get_conn(conn_id);
   if (unlikely(conn == nullptr)) {
