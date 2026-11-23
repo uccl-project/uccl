@@ -268,13 +268,17 @@ bool CxiEndpoint::initialize_rdma_ctx_for_gpu(
   UCCL_LOG(INFO) << "CxiEndpoint initialized for GPU " << gpu_index
                  << " on domain "
                  << (info_->domain_attr->name ? info_->domain_attr->name : "?")
-                 << ", NIC NUMA node " << nic_numa_node();
+                 << ", NIC NUMA node " << nic_numa_node(gpu_index);
   return true;
 }
 
-int CxiEndpoint::nic_numa_node() const {
-  if (!info_ || !info_->domain_attr || !info_->domain_attr->name) return -1;
-  return sysfs_numa_node(cxi_device_dir(info_->domain_attr->name));
+// Before the domain is open (lazy engine setup), use the NIC that init_fabric
+// will open for this GPU.
+int CxiEndpoint::nic_numa_node(int gpu_index) const {
+  bool const open = info_ && info_->domain_attr && info_->domain_attr->name;
+  std::string const name =
+      open ? info_->domain_attr->name : cxi_domain_name_for_gpu(gpu_index);
+  return name.empty() ? -1 : sysfs_numa_node(cxi_device_dir(name));
 }
 
 void CxiEndpoint::init_fabric(int gpu_index) {

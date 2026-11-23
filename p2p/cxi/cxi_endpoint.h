@@ -58,8 +58,8 @@ class CxiEndpoint {
   void create_unified_p2p_socket() {}
 
   int gpu_index() const { return gpu_index_; }
-  // NUMA node of the CXI NIC this endpoint opened, or -1 if it is unknown.
-  int nic_numa_node() const;
+  // NUMA node of this GPU's CXI NIC, or -1 if it is unknown.
+  int nic_numa_node(int gpu_index) const;
   // True if remote accesses to this endpoint's MRs make events that need
   // progress here (MR match events, set by FI_CXI_MR_MATCH_EVENTS).
   bool needs_target_progress() const { return mr_match_events_; }

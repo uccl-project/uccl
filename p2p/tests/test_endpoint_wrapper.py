@@ -28,7 +28,11 @@ struct NCCLEndpoint {
 struct CxiEndpoint {
   int calls = 0;
   int numa = -1;
-  int nic_numa_node() const { return numa; }
+  mutable int numa_gpu = -1;
+  int nic_numa_node(int gpu) const {
+    numa_gpu = gpu;
+    return numa;
+  }
   int send_notification(uint64_t peer, NotifyMsg const& message) {
     assert(peer == 17 && message.value == 23);
     ++calls;
@@ -69,6 +73,7 @@ int main() {
   assert(uccl_get_numa_node(GenericEndpoint{cxi}, 3) == 9);
   cxi->numa = 1;
   assert(uccl_get_numa_node(GenericEndpoint{cxi}, 3) == 1);
+  assert(cxi->numa_gpu == 3);
   assert(uccl_send_notification(GenericEndpoint{nccl}, 17, NotifyMsg{23}) == 42);
   assert(uccl_send_notification(GenericEndpoint{cxi}, 17, NotifyMsg{23}) == -7);
   assert(nccl->calls == 1 && cxi->calls == 1);
