@@ -947,6 +947,22 @@
       ]
     },
     {
+      "id": "p2p.cxi.payload",
+      "sources": [
+        "p2p/tests/test_cxi_payload.py"
+      ],
+      "enabled": false,
+      "tier": "integration",
+      "reason": "Requires two nodes with CXI (Slingshot) NICs; no CI target has one. Run it by hand as the file docstring shows.",
+      "targets": [],
+      "requires": [
+        "cuda",
+        "cxi"
+      ],
+      "nodes": 2,
+      "gpus": 1
+    },
+    {
       "id": "p2p.engine_write_compress",
       "sources": [
         "p2p/tests/test_engine_write_compress.py"
