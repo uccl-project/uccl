@@ -1490,6 +1490,11 @@ bool Endpoint::advertise(uint64_t mr_id, void* addr, size_t len,
 bool Endpoint::advertisev(std::vector<uint64_t> mr_id_v,
                           std::vector<void*> addr_v, std::vector<size_t> len_v,
                           std::vector<char*> out_buf_v, size_t num_iovs) {
+  if (unlikely(num_iovs > mr_id_v.size() || num_iovs > addr_v.size() ||
+               num_iovs > len_v.size() || num_iovs > out_buf_v.size())) {
+    UCCL_LOG(ERROR) << "advertisev input vector is shorter than num_iovs";
+    return false;
+  }
   std::vector<P2PMhandle*> mhandles(num_iovs);
 
   for (int i = 0; i < num_iovs; i++) {

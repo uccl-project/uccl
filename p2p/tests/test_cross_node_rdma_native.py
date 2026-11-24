@@ -171,26 +171,31 @@ def run_initiator(mode: str, peer_ip: str, rendezvous_port: int, gpu_idx: int) -
         assert ok, "write failed"
         print("✓ Initiator RDMA-WRITE completed")
     elif mode == "readv-invalid-length":
+        # The Python binding rejects mismatched lengths before calling the
+        # engine, so accept either its RuntimeError or a False return.
         word = ctypes.sizeof(ctypes.c_float)
-        if ep.readv(
-            conn_id,
-            [mr_id],
-            [dev_ptr.value],
-            [word, word],
-            [fifo_meta, fifo_meta],
-            2,
-        ):
-            raise RuntimeError("readv accepted vectors shorter than num_iovs")
-        if ep.writev(
-            conn_id,
-            [mr_id],
-            [dev_ptr.value],
-            [word, word],
-            [fifo_meta, fifo_meta],
-            2,
-        ):
-            raise RuntimeError("writev accepted vectors shorter than num_iovs")
-        print("✓ Initiator rejected short readv/writev vectors")
+        for name, fn in (("readv", ep.readv), ("writev", ep.writev)):
+            try:
+                ok = fn(
+                    conn_id,
+                    [mr_id],
+                    [dev_ptr.value],
+                    [word, word],
+                    [fifo_meta, fifo_meta],
+                    2,
+                )
+            except RuntimeError as e:
+                if "length num_iovs" not in str(e):
+                    raise
+                ok = False
+            if ok:
+                raise RuntimeError(f"{name} accepted vectors shorter than num_iovs")
+        # advertisev has no binding-side length check, so this reaches the
+        # engine guard directly.
+        ok, _ = ep.advertisev([mr_id], [dev_ptr.value], [NBYTES], 2)
+        if ok:
+            raise RuntimeError("advertisev accepted vectors shorter than num_iovs")
+        print("✓ Initiator rejected short readv/writev/advertisev vectors")
     elif mode == "readv-reject":
         word = ctypes.sizeof(ctypes.c_float)
         ptrs = [dev_ptr.value + i * word for i in range(READV_WINDOW)] + [0]
