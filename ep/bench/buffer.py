@@ -913,7 +913,7 @@ class Buffer:
         self._next_low_latency_combine_buffer = torch.empty(
             (num_local_experts, num_recv_tokens, hidden),
             dtype=torch.bfloat16,
-            device="cuda",
+            device=src_info.device,
         )
         return self._next_low_latency_combine_buffer
 
