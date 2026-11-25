@@ -1034,6 +1034,33 @@
       ]
     },
     {
+      "id": "p2p.rdma_native.readv_invalid_length",
+      "sources": [
+        "p2p/tests/test_cross_node_rdma_native.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gh200"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cuda",
+        "rdma",
+        "gpu-rdma"
+      ],
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 180,
+      "command": "if [[ $CI_NODE == 0 ]]; then role=acceptor; peer=(); else role=initiator; peer=(--peer-ip \"$MASTER_ADDR\"); fi\npython3 p2p/tests/test_cross_node_rdma_native.py --role \"$role\" --mode readv-invalid-length --rendezvous-port \"$MASTER_PORT\" \"${peer[@]}\"",
+      "setup": [
+        "p2p"
+      ]
+    },
+    {
       "id": "p2p.engine_write_compress",
       "sources": [
         "p2p/tests/test_engine_write_compress.py"
