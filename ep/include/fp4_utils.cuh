@@ -25,19 +25,6 @@ namespace fp4 {
 
 enum Mode : int { kNone = 0, kNVFP4 = 1, kMXFP4 = 2 };
 
-template <int kMode>
-struct Traits;
-template <>
-struct Traits<kNVFP4> {
-  static constexpr int kBlock = 16;
-  static constexpr bool kHasTokenScale = true;
-};
-template <>
-struct Traits<kMXFP4> {
-  static constexpr int kBlock = 32;
-  static constexpr bool kHasTokenScale = false;
-};
-
 constexpr float kE2M1Max = 6.0f;
 constexpr float kE4M3Max = 448.0f;
 

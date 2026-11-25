@@ -111,7 +111,6 @@ static uint32_t fb(float f) {
   memcpy(&u, &f, 4);
   return u;
 }
-static bool is_nan(float f) { return (fb(f) & 0x7fffffffu) > 0x7f800000u; }
 static bool is_sub(float f) {
   uint32_t const u = fb(f) & 0x7fffffffu;
   return u != 0u && u < 0x00800000u;
