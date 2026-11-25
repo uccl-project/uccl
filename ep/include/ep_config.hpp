@@ -315,6 +315,132 @@ struct LowLatencyLayout {
   }
 };
 
+// Layout for the per-rank dedup LL kernels (internode_ll_dedup.cu). The
+// signaling regions are the same as LowLatencyLayout's, but the data regions
+// are sized by ranks instead of experts: a token crosses once per
+// destination rank. `data_offset` moves the data regions: a peer can be one
+// call ahead, so when default and dedup calls alternate on one buffer their
+// data regions must not overlap (place dedup after the default layout).
+struct LowLatencyDedupLayout {
+  size_t total_bytes = 0;
+  size_t send_buffer_bytes = 0;  // per LL buffer
+  LowLatencyBuffer buffers[2];
+
+  LowLatencyDedupLayout(void* rdma_buffer, int num_max_dispatch_tokens_per_rank,
+                        int hidden, int num_ranks, int num_experts,
+                        void* atomic_buffer_ptr = nullptr,
+                        size_t data_offset = 0) {
+    auto advance = [](void* ptr, size_t count) {
+      return static_cast<void*>(static_cast<uint8_t*>(ptr) + count);
+    };
+    int const num_scales = hidden / 128;
+    // Header: src token | 8 x int16 expert ids | 8 x fp32 weights
+    size_t const num_bytes_per_dispatch_msg =
+        4 * sizeof(int4) + std::max(hidden * sizeof(nv_bfloat16),
+                                    hidden + num_scales * sizeof(float));
+    size_t const num_bytes_per_combine_msg = hidden * sizeof(nv_bfloat16);
+    size_t const num_slots =
+        static_cast<size_t>(num_ranks) * num_max_dispatch_tokens_per_rank;
+    // Combine staging: a raw slot and a compressed slot per row, each with a
+    // 16-byte header
+    send_buffer_bytes = align<size_t>(
+        std::max(num_max_dispatch_tokens_per_rank * num_bytes_per_dispatch_msg,
+                 2 * num_slots * (num_bytes_per_combine_msg + sizeof(int4))),
+        128);
+    size_t const recv_buffer_bytes =
+        align<size_t>(num_slots * std::max(num_bytes_per_dispatch_msg,
+                                           num_bytes_per_combine_msg),
+                      128);
+
+    // Signaling, as in LowLatencyLayout
+#ifdef PER_EXPERT_BATCHING
+    size_t const dispatch_count_bytes =
+        static_cast<size_t>(num_ranks * num_ranks) * sizeof(int);
+    size_t const dispatch_count_bytes_internode =
+        static_cast<size_t>(num_ranks * num_ranks) * sizeof(int64_t);
+#else
+    size_t const dispatch_count_bytes = num_experts * sizeof(int);
+    size_t const dispatch_count_bytes_internode = num_experts * sizeof(int64_t);
+#endif
+    size_t const signaling_buffer_bytes =
+        std::max(dispatch_count_bytes, num_experts * sizeof(int));
+    size_t const signaling_buffer_bytes_aligned =
+        align<size_t>(signaling_buffer_bytes, 128);
+    size_t const signaling_buffer_bytes_internode_aligned = align<size_t>(
+        std::max(dispatch_count_bytes_internode, num_experts * sizeof(int64_t)),
+        128);
+    size_t const data_start =
+        std::max(signaling_buffer_bytes_aligned * 2, data_offset);
+    total_bytes = data_start + send_buffer_bytes * 2 + recv_buffer_bytes * 2;
+
+    for (int i = 0; i < 2; ++i) {
+      auto send = advance(rdma_buffer, data_start + send_buffer_bytes * i);
+      auto recv = advance(rdma_buffer, data_start + send_buffer_bytes * 2 +
+                                           recv_buffer_bytes * i);
+      auto count = static_cast<int*>(
+          advance(rdma_buffer, signaling_buffer_bytes_aligned * i));
+      auto count_internode = reinterpret_cast<int64_t*>(
+          static_cast<uint8_t*>(atomic_buffer_ptr) +
+          i * signaling_buffer_bytes_internode_aligned);
+      buffers[i] = {static_cast<int>(signaling_buffer_bytes / sizeof(int)),
+                    send,
+                    recv,
+                    count,
+                    count_internode,
+                    send,
+                    recv,
+                    count,
+                    count_internode,
+                    send,
+                    num_bytes_per_combine_msg};
+    }
+  }
+};
+
+// Dedup data regions placed after the default layout when the buffer can
+// hold both (default and dedup calls may then alternate on it), else at the
+// start (a buffer sized for dedup only).
+inline size_t dedup_data_offset(size_t num_rdma_bytes,
+                                int num_max_dispatch_tokens_per_rank,
+                                int hidden, int num_ranks, int num_experts) {
+  size_t const def = LowLatencyLayout(nullptr, num_max_dispatch_tokens_per_rank,
+                                      hidden, num_ranks, num_experts, nullptr)
+                         .total_bytes;
+  size_t const both =
+      LowLatencyDedupLayout(nullptr, num_max_dispatch_tokens_per_rank, hidden,
+                            num_ranks, num_experts, nullptr, def)
+          .total_bytes;
+  return num_rdma_bytes >= both ? def : 0;
+}
+
+size_t get_low_latency_dedup_rdma_size_hint(
+    int num_max_dispatch_tokens_per_rank, int hidden, int num_ranks,
+    int num_experts) {
+  auto num_bytes =
+      LowLatencyDedupLayout(nullptr, num_max_dispatch_tokens_per_rank, hidden,
+                            num_ranks, num_experts, nullptr)
+          .total_bytes;
+  return ((num_bytes + NUM_BUFFER_ALIGNMENT_BYTES) /
+          NUM_BUFFER_ALIGNMENT_BYTES) *
+         NUM_BUFFER_ALIGNMENT_BYTES;
+}
+
+// Buffer for alternating default and dedup LL calls (disjoint data regions)
+size_t get_low_latency_ab_rdma_size_hint(int num_max_dispatch_tokens_per_rank,
+                                         int hidden, int num_ranks,
+                                         int num_experts) {
+  size_t const def = LowLatencyLayout(nullptr, num_max_dispatch_tokens_per_rank,
+                                      hidden, num_ranks, num_experts, nullptr)
+                         .total_bytes;
+  auto num_bytes =
+      LowLatencyDedupLayout(nullptr, num_max_dispatch_tokens_per_rank, hidden,
+                            num_ranks, num_experts, nullptr, def)
+          .total_bytes;
+  return ((num_bytes + NUM_BUFFER_ALIGNMENT_BYTES) /
+          NUM_BUFFER_ALIGNMENT_BYTES) *
+         NUM_BUFFER_ALIGNMENT_BYTES;
+}
+
 size_t get_low_latency_rdma_size_hint(int num_max_dispatch_tokens_per_rank,
                                       int hidden, int num_ranks,
                                       int num_experts) {

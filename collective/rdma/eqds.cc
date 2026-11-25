@@ -24,23 +24,13 @@ PullQuanta EQDSCC::compute_pull_target(void* context, uint32_t chunk_size) {
 
   if (pull_target_bytes > kEQDSMaxCwnd) pull_target_bytes = kEQDSMaxCwnd;
 
-  if (pull_target_bytes > credit_pull_ + credit_spec_)
-    pull_target_bytes -= (credit_pull_ + credit_spec_);
+  auto available_credit = credit();
+  if (pull_target_bytes > available_credit)
+    pull_target_bytes -= available_credit;
   else
     pull_target_bytes = 0;
 
   pull_target_bytes += unquantize(pull_);
-
-  uint32_t old_pull_target_bytes = unquantize(last_sent_pull_target_);
-
-  if (!in_speculating_ && credit_spec_ > 0 &&
-      pull_target_bytes - old_pull_target_bytes < PULL_QUANTUM / 2) {
-    if (credit_spec_ > PULL_QUANTUM)
-      credit_spec_ -= PULL_QUANTUM;
-    else
-      credit_spec_ = 0;
-    pull_target_bytes += PULL_QUANTUM;
-  }
 
   last_sent_pull_target_ = quantize_ceil(pull_target_bytes);
 
@@ -69,7 +59,7 @@ void EQDS::handle_grant_credit() {
 
   if (!list_empty(&active_senders_)) {
     while (!list_empty(&active_senders_) &&
-           (budget < kSendersPerPull ||
+           (budget < kSendersPerPull &&
             total_consumed < kCreditPerPull * kSendersPerPull)) {
       list_for_each_safe(pos, n, &active_senders_) {
         auto item = list_entry(pos, struct active_item, active_link);
@@ -83,17 +73,24 @@ void EQDS::handle_grant_credit() {
           // We have not satisfied its demand, re-add it to the active
           // sender list.
           list_add_tail(pos, &active_senders_);
+          // A failed post consumes no credit and therefore cannot advance
+          // either loop budget. Return so run_pacer() can poll completions and
+          // free a pull buffer before this sender is retried.
+          if (consumed == 0) return;
         }
 
         total_consumed += consumed;
 
+        // A zero-backlog sender needs no pull packet and therefore does not
+        // consume the per-pass grant budget.
         if (total_consumed >= kCreditPerPull * kSendersPerPull ||
-            ++budget >= kSendersPerPull)
+            (consumed > 0 && ++budget >= kSendersPerPull))
           break;
       }
     }
   } else {
-    // No active sender.
+    // Visit each idle sender once; requeued senders wait for the next pass.
+    auto* last = idle_senders_.prev;
     list_for_each_safe(pos, n, &idle_senders_) {
       auto item = list_entry(pos, struct idle_item, idle_link);
       auto* sink = item->eqds_cc;
@@ -104,6 +101,8 @@ void EQDS::handle_grant_credit() {
         // sender.
         list_add_tail(&sink->idle_item.idle_link, &idle_senders_);
       }
+
+      if (pos == last) break;
     }
   }
 }
@@ -227,6 +226,8 @@ bool EQDS::grant_credit(EQDSCC* eqds_cc, bool idle, PullQuanta* ret_increment) {
   if (!send_pull_packet(eqds_cc)) {
     eqds_cc->latest_pull_ -= increment;
     UCCL_VLOG(5) << "Failed to send pull packet.";
+    *ret_increment = 0;
+    return eqds_cc->backlog() == 0;
   }
 
   *ret_increment = increment;

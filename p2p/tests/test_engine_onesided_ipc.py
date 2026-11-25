@@ -21,6 +21,7 @@ Run with:
 import struct
 import ctypes
 import sys
+from functools import partial
 import torch
 import torch.distributed as dist
 
@@ -34,6 +35,9 @@ except ImportError as e:
 
 NUM_IOVS = 4
 BUF_ELEMS = 1024  # float32 elements → 4 KB per buffer
+UNIFORM_IOV_ELEMS = (BUF_ELEMS,) * NUM_IOVS
+# The 3 MiB + 4 B IOV uses three streams and the final 4 KiB IOV uses one.
+MIXED_IOV_ELEMS = (BUF_ELEMS, 3 * 256 * 1024 + 1, 2 * 256 * 1024, BUF_ELEMS)
 
 
 # ── torch.distributed helpers ─────────────────────────────────────────────────
@@ -97,20 +101,20 @@ def _device() -> str:
     return f"cuda:{_LOCAL_GPU_IDX}"
 
 
-def _make_client_buf(fill_val: float, use_cpu: bool) -> tuple:
+def _make_client_buf(fill_val: float, use_cpu: bool, numel=BUF_ELEMS) -> tuple:
     """Return (tensor, data_ptr) filled with fill_val on the client's device."""
     if use_cpu:
-        t = torch.full((BUF_ELEMS,), fill_val, dtype=torch.float32).pin_memory()
+        t = torch.full((numel,), fill_val, dtype=torch.float32).pin_memory()
     else:
-        t = torch.full((BUF_ELEMS,), fill_val, dtype=torch.float32, device=_device())
+        t = torch.full((numel,), fill_val, dtype=torch.float32, device=_device())
     return t, t.data_ptr()
 
 
-def _make_client_bufs(fill_vals, use_cpu: bool) -> tuple:
+def _make_client_bufs(fill_vals, use_cpu: bool, numels=UNIFORM_IOV_ELEMS) -> tuple:
     """Return (list[tensor], list[ptr]) for each fill value."""
     tensors, ptrs = [], []
-    for v in fill_vals:
-        t, p = _make_client_buf(v, use_cpu)
+    for v, n in zip(fill_vals, numels, strict=True):
+        t, p = _make_client_buf(v, use_cpu, n)
         tensors.append(t)
         ptrs.append(p)
     return tensors, ptrs
@@ -232,28 +236,24 @@ def test_read_ipc_async(ep, conn_id, rank, use_cpu: bool):
 # ── vectorized writev_ipc (sync) ──────────────────────────────────────────────
 
 
-def test_writev_ipc(ep, conn_id, rank, use_cpu: bool):
+def test_writev_ipc(ep, conn_id, rank, use_cpu: bool, numels=UNIFORM_IOV_ELEMS):
     """
     Client fills iov i with float(i+1) (GPU or pinned CPU) and writes all
     NUM_IOVS buffers into the server's zero-filled GPU destinations. Server
     verifies destination[i] == float(i+1), catching any misrouted copies.
     """
-    size_per = BUF_ELEMS * 4
+    sizes = [n * 4 for n in numels]
     if rank == 0:  # server — GPU destinations
-        dsts = [
-            torch.zeros(BUF_ELEMS, dtype=torch.float32, device=_device())
-            for _ in range(NUM_IOVS)
-        ]
+        dsts = [torch.zeros(n, dtype=torch.float32, device=_device()) for n in numels]
         ptrs = [t.data_ptr() for t in dsts]
-        ok, info_blobs = ep.advertisev_ipc(conn_id, ptrs, [size_per] * NUM_IOVS)
+        torch.cuda.current_stream().synchronize()
+        ok, info_blobs = ep.advertisev_ipc(conn_id, ptrs, sizes)
         assert ok, "advertisev_ipc failed"
         packed = struct.pack("I", NUM_IOVS) + b"".join(bytes(b) for b in info_blobs)
         _send_bytes(packed, dst=1)
         _recv_int(src=1)
         for i, dst in enumerate(dsts):
-            expected = torch.full(
-                (BUF_ELEMS,), float(i + 1), dtype=torch.float32, device=_device()
-            )
+            expected = torch.full_like(dst, float(i + 1))
             assert dst.allclose(
                 expected
             ), f"writev_ipc: destination[{i}] mismatch (expected {i+1}.0)\n{dst}"
@@ -261,10 +261,14 @@ def test_writev_ipc(ep, conn_id, rank, use_cpu: bool):
             f"[server] test_writev_ipc ({'cpu' if use_cpu else 'gpu'}, num_iovs={NUM_IOVS}) PASSED"
         )
     else:  # client — sources (GPU or CPU)
-        srcs, ptrs = _make_client_bufs([float(i + 1) for i in range(NUM_IOVS)], use_cpu)
+        srcs, ptrs = _make_client_bufs(
+            [float(i + 1) for i in range(NUM_IOVS)], use_cpu, numels
+        )
         packed = _recv_bytes(src=0)
         info_blobs = _unpack_info_blobs(packed, NUM_IOVS)
-        ok = ep.writev_ipc(conn_id, ptrs, [size_per] * NUM_IOVS, info_blobs)
+        if not use_cpu:
+            torch.cuda.current_stream().synchronize()
+        ok = ep.writev_ipc(conn_id, ptrs, sizes, info_blobs)
         assert ok, "writev_ipc failed"
         _send_int(1, dst=0)
 
@@ -311,22 +315,21 @@ def test_writev_ipc_async(ep, conn_id, rank, use_cpu: bool):
 # ── vectorized readv_ipc (sync) ───────────────────────────────────────────────
 
 
-def test_readv_ipc(ep, conn_id, rank, use_cpu: bool):
+def test_readv_ipc(ep, conn_id, rank, use_cpu: bool, numels=UNIFORM_IOV_ELEMS):
     """
     Server fills source[i] with float(i+1) on GPU. Client reads all NUM_IOVS
     buffers into zero buffers (GPU or pinned CPU) and verifies destination[i]
     == float(i+1), catching any misrouted copies.
     """
-    size_per = BUF_ELEMS * 4
+    sizes = [n * 4 for n in numels]
     if rank == 0:  # server — GPU sources
         srcs = [
-            torch.full(
-                (BUF_ELEMS,), float(i + 1), dtype=torch.float32, device=_device()
-            )
-            for i in range(NUM_IOVS)
+            torch.full((n,), float(i + 1), dtype=torch.float32, device=_device())
+            for i, n in enumerate(numels)
         ]
         ptrs = [t.data_ptr() for t in srcs]
-        ok, info_blobs = ep.advertisev_ipc(conn_id, ptrs, [size_per] * NUM_IOVS)
+        torch.cuda.current_stream().synchronize()
+        ok, info_blobs = ep.advertisev_ipc(conn_id, ptrs, sizes)
         assert ok, "advertisev_ipc failed"
         packed = struct.pack("I", NUM_IOVS) + b"".join(bytes(b) for b in info_blobs)
         _send_bytes(packed, dst=1)
@@ -335,14 +338,16 @@ def test_readv_ipc(ep, conn_id, rank, use_cpu: bool):
             f"[server] test_readv_ipc ({'cpu' if use_cpu else 'gpu'}, num_iovs={NUM_IOVS}) PASSED"
         )
     else:  # client — destinations (GPU or CPU)
-        dsts, ptrs = _make_client_bufs([0.0] * NUM_IOVS, use_cpu)
+        dsts, ptrs = _make_client_bufs([0.0] * NUM_IOVS, use_cpu, numels)
         packed = _recv_bytes(src=0)
         info_blobs = _unpack_info_blobs(packed, NUM_IOVS)
-        ok = ep.readv_ipc(conn_id, ptrs, [size_per] * NUM_IOVS, info_blobs)
+        if not use_cpu:
+            torch.cuda.current_stream().synchronize()
+        ok = ep.readv_ipc(conn_id, ptrs, sizes, info_blobs)
         assert ok, "readv_ipc failed"
         for i, dst in enumerate(dsts):
             assert dst.allclose(
-                _expected(float(i + 1), use_cpu)
+                torch.full_like(dst, float(i + 1))
             ), f"readv_ipc: destination[{i}] mismatch (expected {i+1}.0)\n{dst}"
         print(
             f"[client] test_readv_ipc ({'cpu' if use_cpu else 'gpu'}, num_iovs={NUM_IOVS}) PASSED"
@@ -389,6 +394,71 @@ def test_readv_ipc_async(ep, conn_id, rank, use_cpu: bool):
             f"[client] test_readv_ipc_async ({'cpu' if use_cpu else 'gpu'}, num_iovs={NUM_IOVS}) PASSED"
         )
         _send_int(1, dst=0)
+
+
+def test_remote_extents(ep, conn_id, rank, use_cpu):
+    size = BUF_ELEMS * 4
+    advertised = (size, size // 2)
+    if rank == 0:
+        buffers = [torch.full((BUF_ELEMS,), 3.0, device=_device()) for _ in range(2)]
+        for buffer, length in zip(buffers, advertised, strict=True):
+            ok, info = ep.advertise_ipc(conn_id, buffer.data_ptr(), length)
+            if not ok:
+                raise RuntimeError("extent scenario could not advertise its buffer")
+            _send_bytes(bytes(info), dst=1)
+    else:
+        infos = [_recv_bytes(src=0) for _ in range(2)]
+        buffers, ptrs = _make_client_bufs((7.0, 7.0), use_cpu, (BUF_ELEMS,) * 2)
+
+    for name in (
+        "write_ipc",
+        "read_ipc",
+        "write_ipc_async",
+        "read_ipc_async",
+        "writev_ipc",
+        "readv_ipc",
+        "writev_ipc_async",
+        "readv_ipc_async",
+    ):
+        vector = name.startswith(("readv", "writev"))
+        for valid in (False, True):
+            for buffer in buffers:
+                buffer.fill_(3.0 if rank == 0 else 7.0)
+            torch.cuda.synchronize()
+            dist.barrier()
+            bad = False
+            if rank == 1:
+                length = size // 2 if valid else size
+                call = getattr(ep, name)
+                result = (
+                    call(conn_id, ptrs, [size, length], infos)
+                    if vector
+                    else call(conn_id, ptrs[1], length, infos[1])
+                )
+                if name.endswith("_async"):
+                    ok, transfer_id = result
+                    if ok:
+                        _poll_done(ep, transfer_id)
+                    elif transfer_id != 0:
+                        bad = True
+                else:
+                    ok = result
+                bad |= ok != valid
+                torch.cuda.synchronize()
+            dist.barrier()
+            changed = valid and (
+                (rank == 0 and name.startswith("write"))
+                or (rank == 1 and name.startswith("read"))
+            )
+            for index, buffer in enumerate(buffers):
+                expected = torch.full_like(buffer, 3.0 if rank == 0 else 7.0)
+                if changed and (vector or index == 1):
+                    expected[: advertised[index] // 4] = 7.0 if rank == 0 else 3.0
+                bad |= not torch.equal(buffer, expected)
+            failed = torch.tensor([int(bad)], dtype=torch.int32)
+            dist.all_reduce(failed)
+            if failed.item():
+                raise RuntimeError(f"{name}: remote extent rejection/retry failed")
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
@@ -469,13 +539,16 @@ def main():
         assert ok, "connect_local failed"
 
     tests = [
+        ("remote_extents", test_remote_extents),
         ("write_ipc", test_write_ipc),
         ("write_ipc_async", test_write_ipc_async),
         ("read_ipc", test_read_ipc),
         ("read_ipc_async", test_read_ipc_async),
         ("writev_ipc", test_writev_ipc),
+        ("writev_ipc_mixed", partial(test_writev_ipc, numels=MIXED_IOV_ELEMS)),
         ("writev_ipc_async", test_writev_ipc_async),
         ("readv_ipc", test_readv_ipc),
+        ("readv_ipc_mixed", partial(test_readv_ipc, numels=MIXED_IOV_ELEMS)),
         ("readv_ipc_async", test_readv_ipc_async),
     ]
 

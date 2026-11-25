@@ -21,7 +21,7 @@ Homepage = "https://github.com/uccl-project/uccl"
 # For torch + CUDA, use ep/install_deps.sh (which auto-detects the CUDA version).
 [dependency-groups]
 dev = [
-    "black>=24.0.0",
+    "black==26.5.1",
     "clang-format==14.0.6",
     "nanobind>=2.0.0",
     "paramiko",

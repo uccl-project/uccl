@@ -1,0 +1,8 @@
+DEVICE_BACKEND := musa
+MUSA_HOME ?= /usr/local/musa
+MUSA_LIBDIR ?= $(MUSA_HOME)/lib
+DEVICE_CPPFLAGS := -DUCCL_USE_MUSA -I$(MUSA_HOME)/include
+DEVICE_LDLIBS := -L$(MUSA_LIBDIR) -lmusart -lmusa -Wl,-rpath,$(MUSA_LIBDIR)
+ENABLE_NCCL := 0
+ENABLE_CXI := 0
+ENABLE_EFA := 0

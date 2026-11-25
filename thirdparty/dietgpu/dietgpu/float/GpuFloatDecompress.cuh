@@ -388,7 +388,7 @@ struct FloatANSProviderInline {
   const void* in_[N];
 };
 
-template <FloatType FT, uint32_t BlockSize>
+template <FloatType FT>
 struct JoinFloatWriter {
   using FTI = FloatTypeInfo<FT>;
 
@@ -401,9 +401,9 @@ struct JoinFloatWriter {
         outBlock_(nullptr),
         nonCompBlock_(nullptr) {}
 
-  __host__ __device__ void setBlock(uint32_t block) {
-    outBlock_ = out_ + block * BlockSize;
-    nonCompBlock_ = nonComp_ + block * BlockSize;
+  __host__ __device__ void setBlock(uint32_t block, uint32_t blockSize) {
+    outBlock_ = out_ + block * blockSize;
+    nonCompBlock_ = nonComp_ + block * blockSize;
   }
 
   __device__ void write(uint32_t offset, uint8_t sym) {
@@ -438,8 +438,8 @@ struct JoinFloatWriter {
   const typename FTI::NonCompT* nonCompBlock_;
 };
 
-template <uint32_t BlockSize>
-struct JoinFloatWriter<FloatType::kFloat32, BlockSize> {
+template <>
+struct JoinFloatWriter<FloatType::kFloat32> {
   static constexpr bool kVectorize = false;
   using FTI = FloatTypeInfo<FloatType::kFloat32>;
 
@@ -454,12 +454,12 @@ struct JoinFloatWriter<FloatType::kFloat32, BlockSize> {
         nonCompBlock2_(nullptr),
         nonCompBlock1_(nullptr) {}
 
-  __host__ __device__ void setBlock(uint32_t block) {
-    nonCompBlock2_ = (const uint16_t*)nonComp_ + block * BlockSize;
+  __host__ __device__ void setBlock(uint32_t block, uint32_t blockSize) {
+    nonCompBlock2_ = (const uint16_t*)nonComp_ + block * blockSize;
     nonCompBlock1_ =
         (const uint8_t*)((const uint16_t*)nonComp_ + roundUp(size_, 8U)) +
-        block * BlockSize;
-    outBlock_ = out_ + block * BlockSize;
+        block * blockSize;
+    outBlock_ = out_ + block * blockSize;
   }
 
   __device__ void write(uint32_t offset, uint8_t sym) {
@@ -488,10 +488,9 @@ struct JoinFloatWriter<FloatType::kFloat32, BlockSize> {
 template <
     typename InProvider,
     typename OutProvider,
-    FloatType FT,
-    uint32_t BlockSize>
+    FloatType FT>
 struct FloatOutProvider {
-  using Writer = JoinFloatWriter<FT, BlockSize>;
+  using Writer = JoinFloatWriter<FT>;
   using FTI = FloatTypeInfo<FT>;
 
   __host__ FloatOutProvider(InProvider& inProvider, OutProvider& outProvider)
@@ -520,10 +519,10 @@ struct FloatOutProvider {
   OutProvider outProvider_;
 };
 
-template <int N, FloatType FT, uint32_t BlockSize>
+template <int N, FloatType FT>
 struct FloatOutProviderInline {
   using FTI = FloatTypeInfo<FT>;
-  using Writer = JoinFloatWriter<FT, BlockSize>;
+  using Writer = JoinFloatWriter<FT>;
 
   __host__ FloatOutProviderInline(
       int num,
@@ -587,7 +586,7 @@ FloatDecompressStatus floatDecompressDevice(
   do {                                                                    \
     auto inProviderANS = FloatANSProvider<FT, InProvider>(inProvider);    \
     auto outProviderANS =                                                 \
-        FloatOutProvider<InProvider, OutProvider, FT, kDefaultBlockSize>( \
+        FloatOutProvider<InProvider, OutProvider, FT>(                    \
             inProvider, outProvider);                                     \
                                                                           \
     ansDecodeBatch(                                                       \

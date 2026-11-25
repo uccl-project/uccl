@@ -46,6 +46,11 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+static int ep_gpu_mr_ro_flag() {
+  char const* e = std::getenv("UCCL_EP_GPU_MR_RO");
+  return (e && e[0] == '1') ? IBV_ACCESS_RELAXED_ORDERING : 0;
+}
+
 #ifdef USE_DMABUF
 // ---------------------------------------------------------------------------
 // DMA-BUF based GPU memory registration (avoids nvidia_peermem dependency)
@@ -675,8 +680,12 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
   }
   uint64_t iova = (uintptr_t)gpu_buf;
 #ifndef EFA
+  // UCCL_EP_GPU_MR_RO=1 adds PCIe relaxed ordering to the IB GPU MR. Without
+  // it, PCIe write ordering throttles RDMA writes into GPU memory (a cliff
+  // between 128 KB and 4 MB). Tails are native atomics, which cannot pass
+  // earlier relaxed writes, so ordering still holds.
   int access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                     IBV_ACCESS_REMOTE_ATOMIC;
+                     IBV_ACCESS_REMOTE_ATOMIC | ep_gpu_mr_ro_flag();
 #else
   int access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
                      IBV_ACCESS_RELAXED_ORDERING;
@@ -902,7 +911,7 @@ bool can_register_gpu_memory_for_rdma(int gpu_idx, size_t bytes) {
 
 #ifndef EFA
   int const access = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                     IBV_ACCESS_REMOTE_ATOMIC;
+                     IBV_ACCESS_REMOTE_ATOMIC | ep_gpu_mr_ro_flag();
 #else
   int const access = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
                      IBV_ACCESS_RELAXED_ORDERING;
@@ -1544,8 +1553,10 @@ static void post_rdma_async_batched_normal_mode(
       std::abort();
       continue;
     } else if (std::abs((int)cmds_to_post[i].dst_rank - (int)my_rank) %
-                   MAX_NUM_GPUS !=
+                   (S.num_local_ranks > 0 ? S.num_local_ranks : MAX_NUM_GPUS) !=
                0) {
+      // Normal mode only crosses nodes to the same local GPU index; ranks per
+      // node is the node's local rank count (not always MAX_NUM_GPUS).
       // NOTE(MaoZiming): this should not happen.
       printf("Posting rdma to a different rank\n");
       std::abort();
@@ -2306,6 +2317,9 @@ int poll_cq_once(ibv_cq* cq, ibv_wc* wc, int max_cqes) {
     wc[n].wc_flags = ibv_wc_read_wc_flags(cqx);
     wc[n].imm_data = ibv_wc_read_imm_data(cqx);
     wc[n].byte_len = ibv_wc_read_byte_len(cqx);
+    wc[n].qp_num = ibv_wc_read_qp_num(cqx);
+    wc[n].src_qp = ibv_wc_read_src_qp(cqx);
+    wc[n].slid = ibv_wc_read_slid(cqx);
     ++n;
     if (ibv_next_poll(cqx)) break;
   }
@@ -2439,6 +2453,7 @@ void remote_process_completions_normal_mode(
           uint8_t expected = 0;       // next seq expected
           uint16_t present_mask = 0;  // bitmask of buffered seqs
           int vals[kReorderingBufferSize] = {0};
+          uint32_t src_qps[kReorderingBufferSize] = {0};
         };
 
         // Thread-local map to maintain per-index state
@@ -2449,8 +2464,21 @@ void remote_process_completions_normal_mode(
           addr64->fetch_add(delta, std::memory_order_release);
         };
         uint8_t seq = aimm.GetSeq();
+        // Keeps the original "Error: duplicate seq N arrival" text as prefix.
+        auto report = [&](bool duplicate) {
+          bool slot = seq < kReorderingBufferSize;
+          fprintf(stderr,
+                  "Error: %sseq %u %s: rank=%d thread=%d index=%zu offset=%u "
+                  "expected=%u mask=0x%04x value=%d parked=%d "
+                  "parked_src_qp=0x%x qp_num=0x%x src_qp=0x%x slid=0x%x\n",
+                  duplicate ? "duplicate " : "", seq,
+                  duplicate ? "arrival" : "out of range", my_rank, idx, index,
+                  offset, sb.expected, sb.present_mask, value,
+                  slot ? sb.vals[seq] : 0, slot ? sb.src_qps[seq] : 0,
+                  cqe.qp_num, cqe.src_qp, cqe.slid);
+        };
         if (seq >= kReorderingBufferSize) {
-          fprintf(stderr, "Error: seq %u out of range\n", seq);
+          report(false);
           std::abort();
         }
         if (seq == sb.expected) {
@@ -2469,22 +2497,23 @@ void remote_process_completions_normal_mode(
         } else {
           // Out-of-order arrival — buffer it
           if (seq >= kReorderingBufferSize) {
-            fprintf(stderr, "Error: seq %u out of range\n", seq);
+            report(false);
             std::abort();
           }
           if (sb.present_mask & (1u << seq)) {
-            fprintf(stderr, "Error: duplicate seq %u arrival\n", seq);
+            report(true);
             std::abort();
           }
           uint16_t bit = static_cast<uint16_t>(1u << seq);
           if (sb.present_mask & bit) {
             // Duplicate (possible with UD/SRD). Ignore safely.
             // If you prefer strictness, keep the abort here.
-            fprintf(stderr, "Error: duplicate seq %u arrival\n", seq);
+            report(true);
             std::abort();
           } else {
             sb.present_mask |= bit;
             sb.vals[seq] = value;
+            sb.src_qps[seq] = cqe.src_qp;
           }
         }
       }

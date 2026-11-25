@@ -1,0 +1,111 @@
+{
+  "cpu": {
+    "enabled": true,
+    "hosts": [],
+    "gpus": 0,
+    "capabilities": [
+      "linux",
+      "cpu"
+    ],
+    "python": "python3",
+    "env": {}
+  },
+  "l4": {
+    "enabled": true,
+    "hosts": [
+      "l40",
+      "l41"
+    ],
+    "gpus": 4,
+    "capabilities": [
+      "linux",
+      "cpu",
+      "cuda",
+      "rdma",
+      "multigpu",
+      "x86_64",
+      "gpu-rdma"
+    ],
+    "python": "python3",
+    "cuda": "/usr/local/cuda-12.9",
+    "sm": "89",
+    "interface": "ibp55s0f0",
+    "env": {
+      "UCCL_IB_HCA": "mlx5_0",
+      "NCCL_IB_HCA": "mlx5_0"
+    }
+  },
+  "gh200": {
+    "enabled": true,
+    "hosts": [
+      "gh200_1",
+      "gh200_0"
+    ],
+    "gpus": 1,
+    "capabilities": [
+      "linux",
+      "cpu",
+      "cuda",
+      "rdma",
+      "gpu-rdma",
+      "hopper",
+      "aarch64"
+    ],
+    "python": "python3",
+    "cuda": "/usr/local/cuda-13.2",
+    "sm": "90",
+    "interfaces": {
+      "gh200_1": "enxc8a36290119d",
+      "gh200_0": "enx3c18a0d51943"
+    },
+    "nominal_rdma_gbps": 400,
+    "env": {
+      "UCCL_IB_HCA": "mlx5_0",
+      "NCCL_IB_HCA": "mlx5_0",
+      "UCCL_EP_DISABLE_GH200": "1"
+    }
+  },
+  "gb10": {
+    "enabled": true,
+    "hosts": [
+      "gb10_0",
+      "gb10_1"
+    ],
+    "gpus": 1,
+    "capabilities": [
+      "linux",
+      "cpu",
+      "cuda",
+      "rdma",
+      "blackwell",
+      "aarch64"
+    ],
+    "python": "python3",
+    "cuda": "/usr/local/cuda-13.0",
+    "sm": "121",
+    "interface": "enP2p1s0f0np0",
+    "env": {
+      "UCCL_P2P_RDMA_GID_INDEX": "3",
+      "NCCL_IB_GID_INDEX": "3",
+      "TRITON_PTXAS_PATH": "/usr/local/cuda-13.0/bin/ptxas"
+    }
+  },
+  "amd": {
+    "enabled": false,
+    "reason": "Both AMD servers are down; re-provision and validate before enabling.",
+    "hosts": [
+      "amd0",
+      "amd1"
+    ],
+    "gpus": 8,
+    "capabilities": [
+      "linux",
+      "cpu",
+      "rocm",
+      "rdma",
+      "multigpu"
+    ],
+    "python": "python3",
+    "env": {}
+  }
+}

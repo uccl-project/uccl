@@ -25,6 +25,11 @@ class Fifo {
   /// @return ProxyTrigger at the head of the FIFO.
   ProxyTrigger poll();
 
+  /// Inspect a pending trigger without acknowledging earlier entries.
+  /// offset is relative to the oldest unacknowledged entry and must be <
+  /// size().
+  ProxyTrigger poll(uint64_t offset);
+
   /// Remove the head trigger.
   void pop();
 

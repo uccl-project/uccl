@@ -511,7 +511,7 @@ provides-extras = ["rocm"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "black", specifier = ">=24.0.0" },
+    { name = "black", specifier = "==26.5.1" },
     { name = "clang-format", specifier = "==14.0.6" },
     { name = "nanobind", specifier = ">=2.0.0" },
     { name = "paramiko" },

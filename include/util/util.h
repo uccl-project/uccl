@@ -1,10 +1,12 @@
 #pragma once
+#include "gpu_topology.h"
 #ifdef USE_CUDA
 #include "cuda_runtime.h"
 #endif
 #include "util/debug.h"
 #include "util/gpu_rt.h"
 #include "util/jring.h"
+#include "util/shm_ring.h"
 #include <arpa/inet.h>
 #include <infiniband/verbs.h>
 #include <linux/in.h>
@@ -33,6 +35,7 @@
 #include <pthread.h>
 #include <sched.h>
 #include <stdarg.h>
+#include <sys/file.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
@@ -579,110 +582,6 @@ static inline jring_t* create_ring(size_t element_size, size_t element_count) {
   return ring;
 }
 
-// for consumer
-static inline jring_t* attach_shared_ring(char const* shm_name, int& shm_fd,
-                                          size_t& shm_size) {
-  shm_fd = shm_open(shm_name, O_RDWR, 0666);
-  if (shm_fd < 0) {
-    perror("shm_open attach failed");
-    return nullptr;
-  }
-
-  // Auto-detect size from the shared memory object if not provided
-  if (shm_size == 0) {
-    struct stat st;
-    if (fstat(shm_fd, &st) < 0 || st.st_size == 0) {
-      perror("fstat shm failed");
-      close(shm_fd);
-      return nullptr;
-    }
-    shm_size = static_cast<size_t>(st.st_size);
-  }
-
-  void* ptr =
-      mmap(nullptr, shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
-
-  if (ptr == MAP_FAILED) {
-    perror("mmap attach failed");
-    close(shm_fd);
-    return nullptr;
-  }
-
-  return reinterpret_cast<jring_t*>(ptr);
-}
-
-// for creator
-static inline jring_t* create_shared_ring(char const* shm_name,
-                                          size_t element_size,
-                                          size_t element_count, int& shm_fd,
-                                          size_t& shm_size, bool* is_creator) {
-  shm_size = jring_get_buf_ring_size(element_size, element_count);
-
-  // try exclusive create
-  shm_fd = shm_open(shm_name, O_CREAT | O_EXCL | O_RDWR, 0666);
-
-  if (shm_fd >= 0) {
-    *is_creator = true;
-  } else {
-    if (errno != EEXIST) {
-      perror("shm_open failed");
-      return nullptr;
-    }
-
-    *is_creator = false;
-    return attach_shared_ring(shm_name, shm_fd, shm_size);
-  }
-
-  // creator does truncate
-  if (ftruncate(shm_fd, shm_size) < 0) {
-    perror("ftruncate failed");
-    close(shm_fd);
-    shm_unlink(shm_name);
-    return nullptr;
-  }
-
-  void* ptr =
-      mmap(nullptr, shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
-
-  if (ptr == MAP_FAILED) {
-    perror("mmap failed");
-    close(shm_fd);
-    shm_unlink(shm_name);
-    return nullptr;
-  }
-
-  auto* ring = reinterpret_cast<jring_t*>(ptr);
-
-  if (jring_init(ring, element_count, element_size, 1, 1) < 0) {
-    munmap(ptr, shm_size);
-    close(shm_fd);
-    shm_unlink(shm_name);
-    return nullptr;
-  }
-
-  return ring;
-}
-
-// for consumer
-static inline void detach_shared_ring(jring_t* ring, int shm_fd,
-                                      size_t shm_size) {
-  if (ring) {
-    munmap(reinterpret_cast<void*>(ring), shm_size);
-  }
-
-  if (shm_fd >= 0) {
-    close(shm_fd);
-  }
-}
-
-// for creator
-static inline void destroy_shared_ring(char const* shm_name, jring_t* ring,
-                                       int shm_fd, size_t shm_size) {
-  detach_shared_ring(ring, shm_fd, shm_size);
-
-  shm_unlink(shm_name);
-}
-
 static inline uint16_t ipv4_checksum(void const* data, size_t header_length) {
   unsigned long sum = 0;
 
@@ -1182,34 +1081,12 @@ inline void checkMemoryLocation(void* ptr) {
 #endif
 
 inline int get_dev_idx(void* ptr) {
-#if defined(__CAMBRICON_PLATFORM_MLU__)
-  cnrtPointerAttributes_t attributes;
-  if (cnrtPointerGetAttributes(&attributes, ptr) == cnrtSuccess &&
-      attributes.type == cnrtMemTypeDevice) {
+  gpuPointerAttribute_t attributes{};
+  if (gpuPointerGetAttributes(&attributes, ptr) == gpuSuccess &&
+      gpuMemTypeOf(attributes) == gpuMemoryTypeDevice) {
     return attributes.device;
   }
   return -1;
-#elif !defined(__HIP_PLATFORM_AMD__)
-  cudaPointerAttributes attributes;
-  cudaError_t err = cudaPointerGetAttributes(&attributes, ptr);
-  if (err == cudaSuccess) {
-    if (attributes.type == cudaMemoryTypeDevice) {
-      return attributes.device;
-    }
-    return -1;
-  }
-  return -1;
-#else
-  hipPointerAttribute_t attributes;
-  hipError_t err = hipPointerGetAttributes(&attributes, ptr);
-  if (err == hipSuccess) {
-    if (gpuMemTypeOf(attributes) == hipMemoryTypeDevice) {
-      return attributes.device;
-    }
-    return -1;
-  }
-  return -1;
-#endif
 }
 
 inline int get_dev_numa_node(char const* dev_name) {
@@ -1363,7 +1240,8 @@ static int cal_pcie_distance(fs::path const& devA, fs::path const& devB) {
 
   // thread-safe cache
   static std::mutex cache_mutex;
-  static std::unordered_map<fs::path, std::vector<std::string>>
+  static std::unordered_map<fs::path, std::vector<std::string>,
+                            TopologyPathHash>
       dev_to_chain_cache;
 
   std::vector<std::string> chainA, chainB;
@@ -1462,94 +1340,7 @@ static inline std::vector<fs::path> get_gpu_cards() {
     gpu_bdfs_ranked.emplace_back(normalize_pci_bus_id(bdf));
   }
 
-  // 2) Map each BDF -> canonical sysfs PCI path
-  std::vector<fs::path> gpu_cards;
-  gpu_cards.reserve(num_gpus);
-  std::unordered_map<fs::path, int> rank_map;
-
-  for (int rank = 0; rank < (int)gpu_bdfs_ranked.size(); ++rank) {
-    std::string const& bdf_lower = gpu_bdfs_ranked[rank];
-    fs::path pci_path = sysfs_pci_path_from_bdf(bdf_lower);
-
-    // Optional sanity check: ensure it's actually a GPU (NVIDIA=0x10de,
-    // AMD=0x1002)
-    bool ok = true;
-    try {
-      std::ifstream vf(pci_path / "vendor");
-      std::string vs;
-      if (vf >> vs) {
-        // vs may be "0x10de" or "0x1002"
-        uint32_t vendor = std::stoul(vs, nullptr, 0);
-        // NVIDIA=0x10de, AMD=0x1002, Cambricon MLU=0xcabc
-        if (!(vendor == 0x10de || vendor == 0x1002 || vendor == 0xcabc))
-          ok = false;
-      }
-    } catch (...) {
-      // If vendor check fails due to restricted sysfs, keep going.
-    }
-    if (!ok) continue;
-
-    rank_map[pci_path] = rank;
-    gpu_cards.push_back(pci_path);
-  }
-
-  // 3) Fallbacks (only if needed): DRM class (cardX) or
-  // /proc/driver/nvidia/gpus
-  if (gpu_cards.empty()) {
-    fs::path const drm_class{"/sys/class/drm"};
-    std::regex const card_re(R"(card(\d+))");
-    if (fs::exists(drm_class)) {
-      for (auto const& entry : fs::directory_iterator(drm_class)) {
-        std::string const name = entry.path().filename().string();
-        std::smatch m;
-        if (!std::regex_match(name, m, card_re)) continue;
-        fs::path dev_path;
-        try {
-          dev_path = fs::canonical(entry.path() / "device");
-        } catch (...) {
-          continue;
-        }
-        // Extract BDF and try to match ranks
-        std::string bdf_name = dev_path.filename().string();
-        std::string nbdf = normalize_pci_bus_id(bdf_name);
-        auto it =
-            std::find(gpu_bdfs_ranked.begin(), gpu_bdfs_ranked.end(), nbdf);
-        if (it == gpu_bdfs_ranked.end()) continue;
-        rank_map[dev_path] = int(std::distance(gpu_bdfs_ranked.begin(), it));
-        gpu_cards.push_back(dev_path);
-      }
-    }
-#ifndef __HIP_PLATFORM_AMD__
-    if (gpu_cards.empty()) {
-      fs::path const nvidia_gpus{"/proc/driver/nvidia/gpus"};
-      if (fs::exists(nvidia_gpus)) {
-        for (auto const& entry : fs::directory_iterator(nvidia_gpus)) {
-          fs::path dev_path;
-          try {
-            dev_path = fs::canonical(entry.path());
-          } catch (...) {
-            continue;
-          }
-          std::string bdf_name = dev_path.filename().string();  // already BDF
-          std::string nbdf = normalize_pci_bus_id(bdf_name);
-          auto it =
-              std::find(gpu_bdfs_ranked.begin(), gpu_bdfs_ranked.end(), nbdf);
-          if (it == gpu_bdfs_ranked.end()) continue;
-          rank_map[dev_path] = int(std::distance(gpu_bdfs_ranked.begin(), it));
-          gpu_cards.push_back(dev_path);
-        }
-      }
-    }
-#endif
-  }
-
-  // 4) Sort by original runtime rank
-  std::sort(gpu_cards.begin(), gpu_cards.end(),
-            [&rank_map](fs::path const& a, fs::path const& b) {
-              return rank_map[a] < rank_map[b];
-            });
-
-  return gpu_cards;
+  return gpu_paths_from_runtime_bdfs(gpu_bdfs_ranked);
 }
 
 static inline std::vector<std::pair<std::string, fs::path>> get_rdma_nics() {
@@ -1688,28 +1479,29 @@ static inline std::string sanitize_bdf(std::string const& bdf) {
 static inline std::vector<std::string> enumerate_all_gpu_bdfs() {
   std::vector<std::string> all_bdfs;
 
-#if defined(__CAMBRICON_PLATFORM_MLU__)
-  // Cambricon: enumerate every visible MLU's BDF via CNRT.
-  int mlu_count = 0;
-  if (gpuGetDeviceCount(&mlu_count) == gpuSuccess) {
-    char bdf[64];
-    for (int i = 0; i < mlu_count; ++i) {
-      if (gpuDeviceGetPCIBusId(bdf, sizeof(bdf), i) == gpuSuccess)
-        all_bdfs.push_back(normalize_pci_bus_id(bdf));
+  if constexpr (uccl::device::Backend::runtime_discovery ==
+                uccl::device::RuntimeDiscovery::First) {
+    // Supplement system discovery with runtime-visible device BDFs.
+    int device_count = 0;
+    if (gpuGetDeviceCount(&device_count) == gpuSuccess) {
+      char bdf[64];
+      for (int i = 0; i < device_count; ++i) {
+        if (gpuDeviceGetPCIBusId(bdf, sizeof(bdf), i) == gpuSuccess)
+          all_bdfs.push_back(normalize_pci_bus_id(bdf));
+      }
     }
   }
-#endif
 
-#if !defined(__CAMBRICON_PLATFORM_MLU__) && !defined(__HIP_PLATFORM_AMD__)
-  // NVIDIA: /proc/driver/nvidia/gpus/<bdf>/  lists every GPU the driver sees.
-  fs::path const nvidia_gpus{"/proc/driver/nvidia/gpus"};
-  if (fs::exists(nvidia_gpus)) {
-    for (auto const& entry : fs::directory_iterator(nvidia_gpus)) {
-      all_bdfs.push_back(
-          normalize_pci_bus_id(entry.path().filename().string()));
+  if constexpr (uccl::device::Backend::scan_nvidia_proc) {
+    // NVIDIA: /proc/driver/nvidia/gpus/<bdf>/  lists every GPU the driver sees.
+    fs::path const nvidia_gpus{"/proc/driver/nvidia/gpus"};
+    if (fs::exists(nvidia_gpus)) {
+      for (auto const& entry : fs::directory_iterator(nvidia_gpus)) {
+        all_bdfs.push_back(
+            normalize_pci_bus_id(entry.path().filename().string()));
+      }
     }
   }
-#endif
 
   // DRM class (works on AMD and as a fallback when procfs is unavailable).
   if (all_bdfs.empty()) {
@@ -1730,6 +1522,18 @@ static inline std::vector<std::string> enumerate_all_gpu_bdfs() {
     }
   }
 
+  if constexpr (uccl::device::Backend::runtime_discovery ==
+                uccl::device::RuntimeDiscovery::Supplement) {
+    // Retain runtime-visible devices even when DRM nodes are unavailable.
+    int count = 0;
+    if (gpuGetDeviceCount(&count) == gpuSuccess) {
+      char bdf[64];
+      for (int i = 0; i < count; ++i) {
+        if (gpuDeviceGetPCIBusId(bdf, sizeof(bdf), i) == gpuSuccess)
+          all_bdfs.push_back(normalize_pci_bus_id(bdf));
+      }
+    }
+  }
   std::sort(all_bdfs.begin(), all_bdfs.end());
   all_bdfs.erase(std::unique(all_bdfs.begin(), all_bdfs.end()), all_bdfs.end());
   return all_bdfs;

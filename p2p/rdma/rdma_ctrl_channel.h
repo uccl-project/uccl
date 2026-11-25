@@ -27,9 +27,8 @@ class SendControlChannel : public RDMADataChannel {
   void bind_write_meta_ring(std::shared_ptr<RegMemBlock> local_mirror,
                             RemoteMemInfo const& remote_ring);
 
-  // Push one WriteReqMeta to the receiver. Caller is responsible for choosing
-  // a slot index that is not currently in flight (monotonic counter mod
-  // kWriteMetaRingCapacity is sufficient because depth ≥ max in-flight).
+  // Push one WriteReqMeta to the receiver. The caller reserves the slot until
+  // the matching decompression ACK arrives.
   // Slot is filled locally + RDMA WRITE WITH IMM (with kWriteMetaBit) lands
   // the same 64 bytes on the receiver, triggering its IMM CQE handler.
   bool push_write_meta(WriteReqMeta const& meta, uint32_t slot);

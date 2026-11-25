@@ -4,9 +4,8 @@ Cross-node test for UCCL P2P Engine — torch-free variant.
 
 Buffers are allocated via ctypes against the platform GPU runtime, so torch is
 never imported (avoids dual-runtime conflicts with a native-linked uccl.p2p).
-Runtime backend is auto-detected: Hygon DCU / HIP by default, Cambricon MLU /
-CNRT when neuware is present. Force it with UCCL_GPU_RT=hip|cnrt, or point at a
-specific shared library with UCCL_GPU_RT_LIB.
+Runtime selection comes from uccl.p2p.backend_info(). UCCL_GPU_RT_LIB can
+optionally override the runtime library path in a test installation.
 
 Run on the "acceptor" machine (owns the buffer being written to / read from):
     python3 test_cross_node_rdma_native.py --role acceptor --mode write
@@ -15,6 +14,9 @@ Run on the "acceptor" machine (owns the buffer being written to / read from):
 Run on the "initiator" machine, pointing at the acceptor's rendezvous IP:
     python3 test_cross_node_rdma_native.py --role initiator --peer-ip <acceptor_ip> --mode write
     python3 test_cross_node_rdma_native.py --role initiator --peer-ip <acceptor_ip> --mode read
+
+Run the same script revision on both peers. Use --mode readv-reject with the
+RDMA or EFA transport to check a rejected second window.
 """
 
 from __future__ import annotations
@@ -33,83 +35,26 @@ except ImportError as e:
     sys.stderr.write(f"Failed to import p2p: {e}\n")
     raise
 
-RT_SUCCESS = 0
 DEFAULT_RENDEZVOUS_PORT = 29500
 NUM_FLOATS = 1024
 NBYTES = NUM_FLOATS * 4
+READV_WINDOW = 8
 
 
-def _detect_backend():
-    kind = os.environ.get("UCCL_GPU_RT", "").lower()
-    lib = os.environ.get("UCCL_GPU_RT_LIB", "")
-    if not kind:
-        if lib:
-            kind = "cnrt" if "cnrt" in lib else "hip"
-        elif os.path.isdir("/usr/local/neuware") and not os.path.exists(
-            "/opt/dtk/lib/libamdhip64.so"
-        ):
-            kind = "cnrt"
-        else:
-            kind = "hip"
-    if not lib:
-        lib = (
-            "/usr/local/neuware/lib64/libcnrt.so"
-            if kind == "cnrt"
-            else "/opt/dtk/lib/libamdhip64.so"
-        )
-    return kind, lib
+from native_runtime import Rt as NativeRuntime
 
 
-class Rt:
-    """Minimal GPU-runtime shim over HIP (hip*) or Cambricon CNRT (cnrt*)."""
-
-    def __init__(self):
-        self.kind, path = _detect_backend()
-        try:
-            self.lib = ctypes.CDLL(path)
-        except OSError as e:
-            sys.exit(f"Cannot load {path}: {e}")
-        if self.kind == "cnrt":
-            self._h2d, self._d2h = 0, 2  # cnrtMemTransDir_t
-            self._malloc, self._memcpy = self.lib.cnrtMalloc, self.lib.cnrtMemcpy
-            self._free, self._set = self.lib.cnrtFree, self.lib.cnrtSetDevice
-        else:
-            self.lib.hipInit(ctypes.c_uint(0))
-            self._h2d, self._d2h = 1, 2  # hipMemcpyKind
-            self._malloc, self._memcpy = self.lib.hipMalloc, self.lib.hipMemcpy
-            self._free, self._set = self.lib.hipFree, self.lib.hipSetDevice
-
-    def _chk(self, err, name):
-        if err != RT_SUCCESS:
-            sys.exit(f"[FAIL] {name} returned error code {err}")
-
-    def set_device(self, idx):
-        self._chk(self._set(idx), f"set_device({idx})")
-
+class Rt(NativeRuntime):
     def alloc_filled(self, value: float) -> ctypes.c_void_p:
         host_buf = (ctypes.c_float * NUM_FLOATS)(*([value] * NUM_FLOATS))
-        ptr = ctypes.c_void_p(0)
-        self._chk(self._malloc(ctypes.byref(ptr), ctypes.c_size_t(NBYTES)), "malloc")
-        self._chk(
-            self._memcpy(
-                ptr, host_buf, ctypes.c_size_t(NBYTES), ctypes.c_int(self._h2d)
-            ),
-            "memcpy H->D",
-        )
+        ptr = self.malloc(NBYTES)
+        self.memcpy_h2d(ptr, host_buf, NBYTES)
         return ptr
 
     def read_first8(self, ptr: ctypes.c_void_p) -> list:
         host_buf = (ctypes.c_float * 8)()
-        self._chk(
-            self._memcpy(
-                host_buf, ptr, ctypes.c_size_t(8 * 4), ctypes.c_int(self._d2h)
-            ),
-            "memcpy D->H",
-        )
+        self.memcpy_d2h(host_buf, ptr, ctypes.sizeof(host_buf))
         return list(host_buf)
-
-    def free(self, ptr):
-        self._free(ptr)
 
 
 def parse_endpoint_meta(meta: bytes) -> Tuple[str, int, str]:
@@ -165,7 +110,8 @@ def run_acceptor(mode: str, rendezvous_port: int, gpu_idx: int) -> None:
     send_blob(conn, bytes(fifo_blob))
     print(f"[Acceptor] buffer exposed for RDMA {mode.upper()}, waiting for completion")
 
-    time.sleep(5)
+    if recv_exact(conn, 1) != b"D":
+        raise RuntimeError("Expected transfer completion from the initiator")
     values = rt.read_first8(dev_ptr)
     print("buffer[:8]:", values)
     if mode == "write":
@@ -176,6 +122,8 @@ def run_acceptor(mode: str, rendezvous_port: int, gpu_idx: int) -> None:
             "✓ Acceptor buffer exposed for remote RDMA-READ (no local mutation expected)"
         )
 
+    if not ep.dereg(mr_id):
+        raise RuntimeError("Failed to deregister the transfer buffer")
     rt.free(dev_ptr)
     conn.close()
     lsock.close()
@@ -186,8 +134,16 @@ def run_initiator(mode: str, peer_ip: str, rendezvous_port: int, gpu_idx: int) -
     rt = Rt()
     rt.set_device(gpu_idx)
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.connect((peer_ip, rendezvous_port))
+    deadline = time.monotonic() + 30
+    while True:
+        try:
+            sock = socket.create_connection((peer_ip, rendezvous_port), timeout=5)
+            sock.settimeout(None)
+            break
+        except (ConnectionRefusedError, TimeoutError):
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.1)
 
     ep_meta = recv_blob(sock)
     ip, port, r_gpu = parse_endpoint_meta(ep_meta)
@@ -213,6 +169,19 @@ def run_initiator(mode: str, peer_ip: str, rendezvous_port: int, gpu_idx: int) -
         ok = ep.write(conn_id, mr_id, dev_ptr.value, NBYTES, fifo_meta)
         assert ok, "write failed"
         print("✓ Initiator RDMA-WRITE completed")
+    elif mode == "readv-reject":
+        word = ctypes.sizeof(ctypes.c_float)
+        ptrs = [dev_ptr.value + i * word for i in range(READV_WINDOW)] + [0]
+        count = len(ptrs)
+        if ep.readv(
+            conn_id, [mr_id] * count, ptrs, [word] * count, [fifo_meta] * count, count
+        ):
+            raise RuntimeError("readv accepted a null destination in the second window")
+        values = rt.read_first8(dev_ptr)
+        if values != [1.0] * READV_WINDOW:
+            raise RuntimeError(
+                f"readv returned before its first window completed: {values}"
+            )
     else:
         ok = ep.read(conn_id, mr_id, dev_ptr.value, NBYTES, fifo_meta)
         assert ok, "read failed"
@@ -221,7 +190,9 @@ def run_initiator(mode: str, peer_ip: str, rendezvous_port: int, gpu_idx: int) -
         assert all(abs(v - 1.0) < 1e-5 for v in values), values
         print("✓ Initiator RDMA-READ completed and data verified")
 
-    time.sleep(2)
+    sock.sendall(b"D")
+    if not ep.dereg(mr_id):
+        raise RuntimeError("Failed to deregister the transfer buffer")
     rt.free(dev_ptr)
     sock.close()
 
@@ -231,7 +202,9 @@ def main() -> None:
         description="Cross-node UCCL P2P RDMA test (torch-free)"
     )
     parser.add_argument("--role", choices=["acceptor", "initiator"], required=True)
-    parser.add_argument("--mode", choices=["write", "read"], required=True)
+    parser.add_argument(
+        "--mode", choices=["write", "read", "readv-reject"], required=True
+    )
     parser.add_argument("--peer-ip", default=None, help="Required for --role initiator")
     parser.add_argument("--rendezvous-port", type=int, default=DEFAULT_RENDEZVOUS_PORT)
     parser.add_argument("--gpu", type=int, default=0, help="Local GPU index to use")
@@ -239,6 +212,12 @@ def main() -> None:
 
     if args.role == "initiator" and not args.peer_ip:
         parser.error("--peer-ip is required when --role initiator")
+
+    if args.mode == "readv-reject":
+        if os.environ.get("UCCL_P2P_TRANSPORT", "rdma") not in {"rdma", "ib", "efa"}:
+            parser.error("readv-reject requires the RDMA or EFA transport")
+        os.environ["UCCL_P2P_RDMA_CC"] = "none"
+        os.environ["UCCL_P2P_MAX_INFLIGHT_OPS"] = str(READV_WINDOW)
 
     if args.role == "acceptor":
         run_acceptor(args.mode, args.rendezvous_port, args.gpu)

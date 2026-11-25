@@ -62,9 +62,16 @@ int main() {
   gpuStream_t stream1;
   GPU_RT_CHECK(gpuStreamCreate(&stream1));
 
+  int clock_rate_khz = 0;
+#if defined(CUDART_VERSION) && CUDART_VERSION >= 13000
+  GPU_RT_CHECK(
+      cudaDeviceGetAttribute(&clock_rate_khz, cudaDevAttrClockRate, 0));
+#else
   gpuDeviceProp prop;
-  gpuGetDeviceProperties(&prop, 0);
-  printf("clock rate: %d kHz\n", prop.clockRate);
+  GPU_RT_CHECK(gpuGetDeviceProperties(&prop, 0));
+  clock_rate_khz = prop.clockRate;
+#endif
+  printf("clock rate: %d kHz\n", clock_rate_khz);
 
   GPUSignal* signals;
   gpuHostAlloc(&signals, sizeof(GPUSignal) * kNumThBlocks, gpuHostAllocMapped);
@@ -101,7 +108,7 @@ int main() {
   for (int i = 0; i < kNumThBlocks; ++i) {
     double avg_cycles =
         static_cast<double>(host_cycle_accum[i]) / host_op_count[i];
-    double avg_latency_us = avg_cycles * 1000 / prop.clockRate;
+    double avg_latency_us = avg_cycles * 1000 / clock_rate_khz;
     printf(
         "Block %d: Average latency = %.2f us over %u iterations, avg_cycles: "
         "%.2f\n",

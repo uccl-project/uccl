@@ -19,13 +19,22 @@ constexpr int kANSRequiredAlignment = 4;
 // not specified
 constexpr int kANSDefaultProbBits = 10;
 
+// Symbols per compressed block. Inputs encoded with kANSLargeBlockSize carry
+// fewer per-block warp states and block words; decoders read the size from
+// the archive header.
+constexpr uint32_t kANSDefaultBlockSize = 4096;
+constexpr uint32_t kANSLargeBlockSize = 16384;
+
 uint32_t getMaxCompressedSize(uint32_t uncompressedBytes);
 
 struct ANSCodecConfig {
-  inline ANSCodecConfig() : probBits(kANSDefaultProbBits), useChecksum(false) {}
+  inline ANSCodecConfig()
+      : probBits(kANSDefaultProbBits),
+        useChecksum(false),
+        blockSize(kANSDefaultBlockSize) {}
 
   explicit inline ANSCodecConfig(int pb, bool checksum = false)
-      : probBits(pb), useChecksum(checksum) {}
+      : probBits(pb), useChecksum(checksum), blockSize(kANSDefaultBlockSize) {}
 
   // What the ANS probability accuracy is; all symbols have quantized
   // probabilities of 1/2^probBits.
@@ -40,6 +49,10 @@ struct ANSCodecConfig {
   // This is an optional feature useful if DietGPU data will be stored
   // persistently on disk.
   bool useChecksum;
+
+  // Symbols per compressed block: kANSDefaultBlockSize or kANSLargeBlockSize.
+  // Encoding only; the decoder reads it from the archive header.
+  uint32_t blockSize;
 };
 
 enum class ANSDecodeError : uint32_t {

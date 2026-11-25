@@ -341,7 +341,19 @@ int main(int argc, char** argv) {
   cudaGetDeviceProperties(&prop, local_rank);
 
   // Get GPU clock rate (clockRate is in kHz)
-  float gpu_clock_ghz = prop.clockRate / 1000000.0f;
+  int clock_rate_khz = 0;
+#if CUDART_VERSION >= 13000
+  cudaError_t clock_status =
+      cudaDeviceGetAttribute(&clock_rate_khz, cudaDevAttrClockRate, local_rank);
+  if (clock_status != cudaSuccess) {
+    fprintf(stderr, "Failed to query GPU clock: %s\n",
+            cudaGetErrorString(clock_status));
+    return EXIT_FAILURE;
+  }
+#else
+  clock_rate_khz = prop.clockRate;
+#endif
+  float gpu_clock_ghz = clock_rate_khz / 1000000.0f;
 
   printf("========================================\n");
   printf("FIFO Performance Benchmark\n");

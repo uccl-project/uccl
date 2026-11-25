@@ -49,21 +49,13 @@ __global__ void fc_throughput_kernel(
     PublicationList* pub_list, uint32_t* warp_to_proxy_map,
     uint32_t* proxy_to_combiner_map, uint8_t** payload_buffers,
     uint32_t* payload_write_ptrs, ProxyWarpList* proxy_warp_lists,
-    ThroughputConfig config, WarpMetrics* metrics, bool volatile* stop_flag) {
+    ThroughputConfig config, WarpMetrics* metrics, bool volatile* stop_flag,
+    bool volatile* combiners_stop, uint32_t* producers_done) {
   const uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
   const uint32_t warp_id = tid / 32;
   const uint32_t lane_id = tid % 32;
 
   if (lane_id != 0 || warp_id >= config.num_warps) return;
-
-  // Initialize manager
-  if (warp_id == 0) {
-    const uint32_t payload_buffer_size = 128 * 1024 * 1024;
-    mgr_ptr->init(ring_buffers, config.num_proxies, config.num_warps, pub_list,
-                  warp_to_proxy_map, proxy_to_combiner_map, payload_buffers,
-                  payload_buffer_size, payload_write_ptrs, proxy_warp_lists);
-  }
-  __syncthreads();
 
   uint32_t proxy_id = warp_to_proxy_map[warp_id];
   bool is_combiner = (warp_id == proxy_to_combiner_map[proxy_id]);
@@ -75,13 +67,14 @@ __global__ void fc_throughput_kernel(
 
   if (is_combiner) {
     // Combiner logic - unchanged from original
-    mgr_ptr->run_combiner(warp_id, proxy_id, stop_flag);
+    mgr_ptr->run_combiner(warp_id, proxy_id, combiners_stop);
   } else {
     // Producer logic - NO PAYLOAD COPYING for pure FC testing
 
     // Quick warmup
     for (uint32_t i = 0; i < config.warmup_iterations && !(*stop_flag); i++) {
       TransferCmd cmd = {};
+      cmd.cmd_type = make_cmd_type(CmdType::WRITE, false, false);
       cmd.bytes = config.payload_size;  // Just record size, no actual data
       mgr_ptr->submit_request(warp_id, cmd);  // Use no-payload version
     }
@@ -97,11 +90,18 @@ __global__ void fc_throughput_kernel(
 
       // Create and submit request - metadata only
       TransferCmd cmd = {};
+      cmd.cmd_type = make_cmd_type(CmdType::WRITE, false, false);
       cmd.bytes = config.payload_size;        // Just record size
       mgr_ptr->submit_request(warp_id, cmd);  // No payload copying
 
       // Record metrics - only count requests
       metrics[warp_id].request_count++;
+    }
+    // Keep combiners alive until every producer's last request is acknowledged.
+    if (atomicAdd(producers_done, 1u) + 1 ==
+        config.num_warps - config.num_proxies) {
+      __threadfence();
+      *combiners_stop = true;
     }
   }
 }
@@ -133,6 +133,7 @@ void simple_cpu_proxy(DeviceToHostCmdBuffer* ring_buffer, int proxy_id,
 
       TransferCmd& cmd_entry = ring_buffer->load_cmd_entry(i);
       cmds_to_process.push_back(cmd_entry);
+      ring_buffer->volatile_clear_cmd_type(i);
       seen = i + 1;
     }
 
@@ -270,6 +271,13 @@ void run_throughput_test(uint32_t num_warps, uint32_t num_proxies,
   // Manager and metrics
   FCRingBufferManager* d_mgr;
   cudaMalloc(&d_mgr, sizeof(FCRingBufferManager));
+  // Initialize before any block starts; a block barrier cannot synchronize
+  // the other blocks that read this shared manager.
+  FCRingBufferManager h_mgr;
+  h_mgr.init(d_ring_buffers, config.num_proxies, config.num_warps, d_pub_list,
+             d_warp_to_proxy, d_proxy_to_combiner, d_payload_buffers,
+             payload_buffer_size, d_payload_write_ptrs, d_proxy_warp_lists);
+  cudaMemcpy(d_mgr, &h_mgr, sizeof(h_mgr), cudaMemcpyHostToDevice);
 
   WarpMetrics* d_metrics;
   cudaMallocManaged(&d_metrics, sizeof(WarpMetrics) * config.num_warps);
@@ -278,6 +286,12 @@ void run_throughput_test(uint32_t num_warps, uint32_t num_proxies,
   bool* d_stop;
   cudaMallocManaged(&d_stop, sizeof(bool));
   *d_stop = false;
+  bool* d_combiners_stop;
+  uint32_t* d_producers_done;
+  cudaMallocManaged(&d_combiners_stop, sizeof(bool));
+  cudaMallocManaged(&d_producers_done, sizeof(uint32_t));
+  *d_combiners_stop = false;
+  *d_producers_done = 0;
 
   // Start CPU proxies
   bool volatile h_stop_flag = false;
@@ -298,7 +312,7 @@ void run_throughput_test(uint32_t num_warps, uint32_t num_proxies,
   fc_throughput_kernel<<<grid, block>>>(
       d_mgr, d_ring_buffers, d_pub_list, d_warp_to_proxy, d_proxy_to_combiner,
       d_payload_buffers, d_payload_write_ptrs, d_proxy_warp_lists, config,
-      d_metrics, d_stop);
+      d_metrics, d_stop, d_combiners_stop, d_producers_done);
 
   // Wait for test duration
   std::this_thread::sleep_for(
@@ -333,6 +347,8 @@ void run_throughput_test(uint32_t num_warps, uint32_t num_proxies,
   cudaFree(d_mgr);
   cudaFree(d_metrics);
   cudaFree(d_stop);
+  cudaFree(d_combiners_stop);
+  cudaFree(d_producers_done);
 
   // Cleanup proxy warp lists
   for (uint32_t p = 0; p < config.num_proxies; p++) {

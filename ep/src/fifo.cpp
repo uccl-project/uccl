@@ -6,6 +6,7 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
+#include <stdexcept>
 #include <numaif.h>
 
 namespace mscclpp {
@@ -45,9 +46,14 @@ Fifo::Fifo(int size) {
 
 Fifo::~Fifo() = default;
 
-ProxyTrigger Fifo::poll() {
+ProxyTrigger Fifo::poll() { return poll(0); }
+
+ProxyTrigger Fifo::poll(uint64_t offset) {
+  if (offset >= static_cast<uint64_t>(pimpl_->size))
+    throw std::out_of_range("FIFO polling offset exceeds capacity");
   ProxyTrigger trigger;
-  ProxyTrigger* ptr = &pimpl_->triggers.get()[*(pimpl_->tail) % pimpl_->size];
+  ProxyTrigger* ptr =
+      &pimpl_->triggers.get()[(*(pimpl_->tail) + offset) % pimpl_->size];
   // we are loading fst first. if fst is non-zero then snd is also valid
   trigger.fst = atomicLoad(&(ptr->fst), memoryOrderAcquire);
   trigger.snd = ptr->snd;

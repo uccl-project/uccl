@@ -17,8 +17,8 @@ struct BatchWriter {
   inline __device__ BatchWriter(void* out)
       : out_((uint8_t*)out), outBlock_(nullptr) {}
 
-  inline __device__ void setBlock(uint32_t block) {
-    outBlock_ = out_ + block * kDefaultBlockSize;
+  inline __device__ void setBlock(uint32_t block, uint32_t blockSize) {
+    outBlock_ = out_ + block * blockSize;
   }
 
   inline __device__ void write(uint32_t offset, uint8_t sym) {

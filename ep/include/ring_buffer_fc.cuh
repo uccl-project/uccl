@@ -276,7 +276,7 @@ class FCRingBufferManager {
                 payload_buffers_[proxy_id] != nullptr) {
               // Use circular buffer approach - wrap around when full
               uint32_t write_pos = atomicAdd(&payload_write_ptrs_[proxy_id],
-                                             record->payload_ size);
+                                             record->payload_size);
               uint32_t actual_pos = write_pos % payload_buffer_size_;
 
               // Check if we have enough contiguous space

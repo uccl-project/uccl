@@ -2,3 +2,4 @@ pcie_bench
 gpu_to_cpu_bench
 batched_gpu_to_cpu_bench
 rdma_addressing_test
+barrier_concurrent

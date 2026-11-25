@@ -15,6 +15,7 @@
 #include "util/util.h"
 #include "util_timer.h"
 #include <gflags/gflags.h>
+#include <atomic>
 #include <chrono>
 #include <thread>
 #include <signal.h>
@@ -23,7 +24,7 @@
 
 using namespace uccl;
 
-static bool volatile quit = false;
+static std::atomic<bool> quit{false};
 
 std::optional<RDMAEndpoint> ep;
 struct {
@@ -346,10 +347,6 @@ static void server_worker(void) {
     std::cerr << "Unknown performance type: " << FLAGS_perftype << std::endl;
   }
 
-  while (!quit) {
-    std::this_thread::sleep_for(std::chrono::seconds(1));
-  }
-
   for (int i = 0; i < FLAGS_nflow; i++) {
     ep->uccl_deregmr(mhandles[i]);
     munmap(datas[i], FLAGS_msize * FLAGS_nreq * FLAGS_nmsg);
@@ -478,6 +475,7 @@ int main(int argc, char* argv[]) {
     client_worker();
   }
 
+  quit = true;
   t.join();
 
   return 0;

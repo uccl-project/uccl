@@ -61,7 +61,7 @@ struct AsymBuffer {
   __device__ __forceinline__ AsymBuffer(void** gbl_ptrs, int num_elems,
                                         int num_ranks, int sm_id = 0,
                                         int num_sms = 1, int offset = 0) {
-    EP_STATIC_ASSERT(kNumRanks > 1, "");
+    EP_STATIC_ASSERT(kNumRanks >= 1, "");
     num_bytes = num_elems * sizeof(dtype_t);
 
     int per_channel_bytes = num_bytes * num_ranks;
@@ -97,9 +97,8 @@ struct AsymBuffer {
     return reinterpret_cast<dtype_t*>(ptrs[0] + num_bytes * idx);
   }
 
+  // With one rank (a build for one GPU per node) this is ptrs[0]
   __device__ __forceinline__ dtype_t* buffer_by(int rank_idx, int idx = 0) {
-    EP_STATIC_ASSERT(kNumRanks > 1,
-                     "`buffer` is only available for single rank case");
     return reinterpret_cast<dtype_t*>(ptrs[rank_idx] + num_bytes * idx);
   }
 };

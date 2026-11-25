@@ -48,7 +48,7 @@ struct Pcb {
   uint32_t snd_ooo_acks{0};
   uint32_t rcv_nxt{kInitSeq};
   uint64_t sack_bitmap[kSackBitmapSize / kSackBitmapBucketSize]{0};
-  uint8_t sack_bitmap_count{0};
+  uint16_t sack_bitmap_count{0};
   uint16_t duplicate_acks{0};
   uint32_t fast_rexmits{0};
   uint32_t rto_rexmits{0};

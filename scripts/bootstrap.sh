@@ -42,6 +42,9 @@ activate_venv
 echo "[bootstrap] installing dev dependencies via uv sync"
 uv sync --group dev
 
+echo "[bootstrap] installing formatting commit hooks"
+bash "$UCCL_ROOT/scripts/install-hooks.sh" || { return 1 2>/dev/null || exit 1; }
+
 echo "[bootstrap] running ep/install_deps.sh"
 bash "$UCCL_ROOT/ep/install_deps.sh"
 

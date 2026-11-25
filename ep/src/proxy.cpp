@@ -8,6 +8,7 @@
 #include <arpa/inet.h>  // for htonl, ntohl
 #include <chrono>
 #include <cstdlib>
+#include <fstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -32,6 +33,18 @@ static bool is_normal_mode_remote_peer(Proxy::Config const& cfg, int my_rank,
 }
 
 static constexpr uint64_t kCxiInternalWrId = UINT64_MAX;
+
+// NUMA node of the CXI NIC that CxiTransport selects for this local rank
+// (cxi<local_rank>), or -1 if sysfs does not report it.
+static int cxi_nic_numa_node(int local_rank) {
+  std::string const path =
+      "/sys/class/cxi/cxi" + std::to_string(local_rank) + "/device/numa_node";
+  std::ifstream file(path);
+
+  int node = -1;
+  if (!(file >> node)) return -1;
+  return node;
+}
 
 #ifndef USE_SUBSET_BARRIER
 static std::string shm_name_for_barrier(std::string const& ip,
@@ -357,7 +370,20 @@ void Proxy::init_common() {
     fifo_seq_.assign(cfg_.d2h_queues.size(), 0);
     fifo_pending_.assign(cfg_.d2h_queues.size(),
                          std::deque<std::pair<uint64_t, size_t>>{});
+    fifo_pending_dst_.assign(cfg_.d2h_queues.size(), std::deque<int>{});
+    dst_pending_.assign(256, 0);  // TransferCmd::dst_rank is a uint8_t
 #endif
+
+    ctx_.numa_node = cxi_nic_numa_node(cfg_.local_rank);
+    if (ctx_.numa_node >= 0) {
+      pin_thread_to_numa_wrapper();
+    } else if (cfg_.pin_thread) {
+      fprintf(stderr,
+              "[Proxy] NUMA node of cxi%d is unknown; proxy thread %d is not "
+              "pinned\n",
+              cfg_.local_rank, cfg_.thread_idx);
+    }
+
     return;
   }
 
@@ -637,6 +663,8 @@ void Proxy::init_common() {
   fifo_seq_.assign(cfg_.d2h_queues.size(), 0);
   fifo_pending_.assign(cfg_.d2h_queues.size(),
                        std::deque<std::pair<uint64_t, size_t>>{});
+  fifo_pending_dst_.assign(cfg_.d2h_queues.size(), std::deque<int>{});
+  dst_pending_.assign(256, 0);  // TransferCmd::dst_rank is a uint8_t
 #endif
 }
 
@@ -780,6 +808,9 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
       if (acked_wrs_.find(front_wr) == acked_wrs_.end()) break;
       acked_wrs_.erase(front_wr);  // consume this completion
       pend.pop_front();            // retire pending entry
+      auto& pend_dst = fifo_pending_dst_[rb_idx];
+      if (pend_dst.front() >= 0) --dst_pending_[pend_dst.front()];
+      pend_dst.pop_front();
 
       if (front_bytes) {
         current_inflight_bytes.fetch_sub(front_bytes,
@@ -826,6 +857,47 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
 }
 
 void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
+#ifdef USE_MSCCLPP_FIFO_BACKEND
+  // All FIFOs of this thread post on the same QPs per peer, so the per-FIFO
+  // in-flight limit alone can overrun a send queue (max_send_wr =
+  // kMaxOutstandingSends) when it is raised; ibv_post_send then fails with
+  // ENOMEM. Cap the commands pending per destination (this thread's QPs to
+  // that peer), in WRs: a command is one WR, or with DMA-BUF up to three
+  // (split_for_chunks cuts at a local and at a remote MR chunk boundary), and
+  // barrier / ack writes the proxy posts itself are not FIFO commands. A full
+  // destination holds back its FIFO (backpressure) without limiting traffic
+  // to the other peers.
+  constexpr size_t kProxyWrs = 2;
+  auto const dst_cap = [this](int dst) -> size_t {
+#ifdef USE_DMABUF
+    // A transfer splits only where a local or a remote MR chunk ends; with
+    // single-chunk MRs on both sides every command is one WR.
+    auto const* c = ctxs_for_all_ranks_[dst].get();
+    bool const single_chunk =
+        c && c->gpu_mr_chunks.size() <= 1 && c->remote_mr_chunks.size() <= 1;
+    size_t const wrs_per_cmd = single_chunk ? 1 : 3;
+#else
+    size_t const wrs_per_cmd = 1;
+#endif
+    return (kMaxOutstandingSends - kProxyWrs) / wrs_per_cmd;
+  };
+  // All of this thread's QPs complete into one CQ (kMaxOutstandingSends * 2
+  // entries) and every command signals one completion (its last WR), so the
+  // thread's total is capped as well, leaving room for the barrier / ack
+  // sends and receives that complete into the same CQ.
+  size_t const thread_cap =
+      kMaxOutstandingSends * 2 - 2 * ctxs_for_all_ranks_.size() - 16;
+  size_t thread_pending = 0;
+  for (auto const& pend : fifo_pending_) thread_pending += pend.size();
+#endif
+  // A CXI QUIET read in pass k is acked at the end of pass k+1 (or later) if
+  // that pass read every sibling ring until empty; a ring that stops early
+  // keeps it pending. Assumes no other producer pushes to these rings while
+  // the QUIET is pending.
+  bool const check_cxi_quiet = cxi_quiet_pending_;
+  size_t const cxi_quiet_rb_idx =
+      check_cxi_quiet ? static_cast<size_t>(cxi_quiet_wr_ >> 32) : SIZE_MAX;
+  bool cxi_siblings_drained = true;
   // Multi-ring buffer processing: collect commands from all ring buffers
   // Process each ring buffer (similar to test_multi_ring_throughput.cu)
   for (size_t rb_idx = 0; rb_idx < cfg_.d2h_queues.size(); rb_idx++) {
@@ -842,17 +914,24 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
     size_t kMaxInflight = cfg_.use_normal_mode ? get_max_inflight_normal()
                                                : get_max_inflight_low_latency();
     size_t budget = (kMaxInflight > pending) ? (kMaxInflight - pending) : 0;
+    budget = std::min(budget, thread_cap > thread_pending
+                                  ? thread_cap - thread_pending
+                                  : size_t{0});
     size_t max_inflight_bytes = get_max_inflight_bytes() / kNumProxyThs;
 
     // Pop commands from the FIFO until the budget is reached or the max
     // inflight bytes is reached.
+    bool ring_drained = false;
     for (size_t take = 0; take < budget; ++take) {
       if (current_inflight_bytes.load(std::memory_order_acquire) >=
           max_inflight_bytes) {
         break;
       }
       auto trig = fifo->poll();
-      if (trig.fst == 0) break;
+      if (trig.fst == 0) {
+        ring_drained = true;
+        break;
+      }
       adaptive_sleeper_.update_timer();
       TransferCmd cmd = d2hq::decode_from_trigger(trig);
 
@@ -867,12 +946,21 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
         break;
       }
 
+      int const dst = (get_base_cmd(cmd.cmd_type) == CmdType::BARRIER ||
+                       get_base_cmd(cmd.cmd_type) == CmdType::QUIET)
+                          ? -1
+                          : static_cast<int>(cmd.dst_rank);
+      if (dst >= 0 && dst_pending_[dst] >= dst_cap(dst)) break;
+
       uint64_t unique_wr_id = (static_cast<uint64_t>(rb_idx) << 32) |
                               (fifo_seq_[rb_idx]++ & 0xFFFFFFFFULL);
       wrs_to_post.push_back(unique_wr_id);
       cmds_to_post.push_back(cmd);
       fifo_pending_[rb_idx].push_back(
           std::make_pair(unique_wr_id, static_cast<size_t>(cmd.bytes)));
+      fifo_pending_dst_[rb_idx].push_back(dst);
+      if (dst >= 0) ++dst_pending_[dst];
+      ++thread_pending;
       if (get_base_cmd(cmd.cmd_type) == CmdType::WRITE && cmd.bytes > 0) {
         current_inflight_bytes.fetch_add(static_cast<size_t>(cmd.bytes),
                                          std::memory_order_release);
@@ -897,6 +985,11 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
         fifo->pop();
       }
     }
+
+    if (!ring_drained && rb_idx != cxi_quiet_rb_idx) {
+      cxi_siblings_drained = false;
+    }
+
 #else
     uint64_t& ring_tail = ring_tails_[rb_idx];
     size_t& ring_seen = ring_seen_[rb_idx];
@@ -921,10 +1014,16 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
       CmdType cmd = h->volatile_load_cmd_type(i);
       // NOTE(MaoZiming): Non-blocking. prevent local and remote both while
       // loop.
-      if (cmd == CmdType::EMPTY) break;
+      if (cmd == CmdType::EMPTY) {
+        if (rb_idx != cxi_quiet_rb_idx) cxi_siblings_drained = false;
+        break;
+      }
 
       TransferCmd& cmd_entry = h->load_cmd_entry(i);
-      if (cmd_entry.cmd_type == CmdType::EMPTY) break;
+      if (cmd_entry.cmd_type == CmdType::EMPTY) {
+        if (rb_idx != cxi_quiet_rb_idx) cxi_siblings_drained = false;
+        break;
+      }
 
       if (get_base_cmd(cmd_entry.cmd_type) == CmdType::WRITE ||
           get_base_cmd(cmd_entry.cmd_type) == CmdType::ATOMIC) {
@@ -975,6 +1074,8 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
         std::chrono::duration_cast<std::chrono::microseconds>(end - start);
 #endif
   }
+
+  if (check_cxi_quiet && cxi_siblings_drained) complete_cxi_quiet();
 
   // This does not deallocate the memory, saving malloc overhead.
   wrs_to_post.clear();
@@ -1131,6 +1232,15 @@ void Proxy::poll_cxi_completions() {
   if (ne > 0) adaptive_sleeper_.update_timer();
 }
 
+void Proxy::complete_cxi_quiet() {
+  while (cxi_outstanding_ops_ > 0) {
+    poll_cxi_completions();
+    if (cxi_outstanding_ops_ > 0) cpu_relax();
+  }
+  acked_wrs_.insert(cxi_quiet_wr_);
+  cxi_quiet_pending_ = false;
+}
+
 void Proxy::post_cxi_commands(std::vector<uint64_t> const& wrs_to_post,
                               std::vector<TransferCmd> const& cmds_to_post) {
   if (!cxi_transport_) {
@@ -1185,11 +1295,14 @@ void Proxy::post_cxi_commands(std::vector<uint64_t> const& wrs_to_post,
         break;
       }
       case CmdType::QUIET:
-        while (cxi_outstanding_ops_ > 0) {
-          poll_cxi_completions();
-          if (cxi_outstanding_ops_ > 0) cpu_relax();
+        // Do not drain here: commands of sibling rings that this batch holds
+        // after the QUIET, or that are not read yet, would not be covered.
+        // post_gpu_command() completes the QUIET after a full pass.
+        if (cxi_quiet_pending_) {
+          throw std::runtime_error("CXI QUIET posted while one is pending");
         }
-        acked_wrs_.insert(wrs_to_post[i]);
+        cxi_quiet_pending_ = true;
+        cxi_quiet_wr_ = wrs_to_post[i];
         break;
       case CmdType::BARRIER:
         send_barrier(wrs_to_post[i]);
@@ -1383,29 +1496,14 @@ void Proxy::quiet(std::vector<uint64_t> wrs, std::vector<TransferCmd> cmds) {
   acked_wrs_.insert(wrs[0]);
 }
 
-void Proxy::destroy(bool free_gpu_buffer) {
+void Proxy::destroy() {
+  // Main scratch is borrowed. Its owner frees it after all users finish.
   if (cxi_transport_) {
     for (auto& transport : cxi_transports_by_rank_) {
       if (transport) transport->destroy();
     }
     cxi_transports_by_rank_.clear();
     cxi_transport_ = nullptr;
-
-    if (free_gpu_buffer && cfg_.gpu_buffer) {
-      cudaError_t e;
-      if (cfg_.free_buffer_with_cuda_free_host) {
-        e = cudaFreeHost(cfg_.gpu_buffer);
-        if (e != cudaSuccess)
-          fprintf(stderr, "[destroy] cudaFreeHost failed: %s\n",
-                  cudaGetErrorString(e));
-      } else {
-        e = cudaFree(cfg_.gpu_buffer);
-        if (e != cudaSuccess)
-          fprintf(stderr, "[destroy] cudaFree failed: %s\n",
-                  cudaGetErrorString(e));
-      }
-      if (e == cudaSuccess) cfg_.gpu_buffer = nullptr;
-    }
 
     acked_wrs_.clear();
     wr_id_to_start_time_.clear();
@@ -1582,22 +1680,6 @@ void Proxy::destroy(bool free_gpu_buffer) {
   if (ctx_.atomic_old_values_buf) {
     free(ctx_.atomic_old_values_buf);
     ctx_.atomic_old_values_buf = nullptr;
-  }
-
-  if (free_gpu_buffer && cfg_.gpu_buffer) {
-    cudaError_t e;
-    if (cfg_.free_buffer_with_cuda_free_host) {
-      e = cudaFreeHost(cfg_.gpu_buffer);
-      if (e != cudaSuccess)
-        fprintf(stderr, "[destroy] cudaFreeHost failed: %s\n",
-                cudaGetErrorString(e));
-    } else {
-      e = cudaFree(cfg_.gpu_buffer);
-      if (e != cudaSuccess)
-        fprintf(stderr, "[destroy] cudaFree failed: %s\n",
-                cudaGetErrorString(e));
-    }
-    if (e == cudaSuccess) cfg_.gpu_buffer = nullptr;
   }
 
   if (ctx_.pd) {
@@ -1914,7 +1996,7 @@ void Proxy::barrier_check() {
           for (int r = 0; r < (int)peers_.size(); ++r) {
             auto it = leader_for_ip.find(peers_[r].ip);
             if (it == leader_for_ip.end() || r < it->second) {
-              assert(r % MAX_NUM_GPUS == 0);
+              assert(r % ranks_per_node_for_proxy(cfg_) == 0);
               leader_for_ip[peers_[r].ip] = r;
             }
           }

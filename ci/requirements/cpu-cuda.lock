@@ -1,0 +1,7 @@
+# CUDA headers/runtime for CPU-only C++ tests; no GPU or driver is needed.
+nvidia-cuda-runtime-cu12==12.8.90 \
+    --hash=sha256:adade8dcbd0edf427b7204d480d6066d33902cab2a4707dcfc48a2d0fd44ab90
+nvidia-cuda-nvcc-cu12==12.8.93 \
+    --hash=sha256:2d6dc36fb7cb5ac9c0b8825bc13d193c35487a315664007287d0126531238011
+nvidia-cuda-cccl-cu12==12.8.90 \
+    --hash=sha256:575bc5cfb0fe4a1956c539215c0f1e6718821b95a68ef6b7abf226aa87e3a5ad

@@ -18,7 +18,7 @@ class UcclProxy {
             bool is_intranode = false,
             bool gpu_buffer_is_host_allocated = false,
             int barrier_local_rank = -1, int device_index = -1,
-            int nic_local_rank = -1);
+            int nic_local_rank = -1, bool owns_gpu_buffer = true);
   ~UcclProxy();
 
   void start_sender();
@@ -26,12 +26,12 @@ class UcclProxy {
   void start_local();
   void start_dual();
   void stop();
-  int get_listen_port() const { return proxy_->get_listen_port(); }
-
-  // Set the offset of dispatch_rdma_recv_data_buffer within rdma_buffer
-  void set_dispatch_recv_data_offset(uintptr_t offset) {
-    proxy_->set_dispatch_recv_data_offset(offset);
+  // stop() throws if the proxy is not running; callers tearing down a
+  // partially constructed set of proxies must check this first.
+  bool is_running() const noexcept {
+    return running_.load(std::memory_order_acquire);
   }
+  int get_listen_port() const { return proxy_->get_listen_port(); }
 
   void* get_atomic_buffer_ptr() {
     if (!atomic_buffer_ptr_) {
@@ -41,35 +41,25 @@ class UcclProxy {
     return atomic_buffer_ptr_;
   }
 
+  uintptr_t get_atomic_buffer_addr() {
+    return reinterpret_cast<uintptr_t>(get_atomic_buffer_ptr());
+  }
+
+  size_t get_atomic_buffer_bytes() const { return kAtomicBufferSize; }
+
   void set_atomic_buffer_ptr(void* ptr) {
     // printf("Set atomic_buffer_ptr_ to %p\n", ptr);
     atomic_buffer_ptr_ = ptr;
     proxy_->set_atomic_buffer_ptr(atomic_buffer_ptr_);
   }
 
-  // Calculate and set dispatch_recv_data_offset automatically based on layout
-  // parameters
-  void calculate_and_set_dispatch_recv_data_offset(int num_tokens, int hidden,
-                                                   int num_experts) {
-    // Calculate layout parameters (same logic as ep_config.hpp and test)
-    int num_scales = hidden / 128;
-    size_t num_bytes_per_dispatch_msg =
-        4 + std::max(hidden * 2, hidden + num_scales * 4);
-    size_t dispatch_send_buffer_bytes = num_tokens * num_bytes_per_dispatch_msg;
-    size_t combine_send_buffer_bytes =
-        num_experts * num_tokens * hidden * 2;  // sizeof(bfloat16)
-    size_t send_buffer_bytes =
-        std::max(dispatch_send_buffer_bytes, combine_send_buffer_bytes);
-    size_t dispatch_recv_count_buffer_bytes = num_experts * 4;
-    size_t signaling_buffer_bytes_aligned =
-        ((dispatch_recv_count_buffer_bytes + 127) / 128) * 128;
-    uintptr_t dispatch_recv_data_offset =
-        signaling_buffer_bytes_aligned * 2 + send_buffer_bytes * 2;
-    proxy_->set_dispatch_recv_data_offset(dispatch_recv_data_offset);
-    proxy_->cfg_.num_experts = num_experts;
+  void set_atomic_buffer_addr(uintptr_t addr) {
+    set_atomic_buffer_ptr(reinterpret_cast<void*>(addr));
   }
 
   std::vector<uint64_t> get_d2h_channel_addrs() const;
+  std::vector<uint64_t> get_d2h_channel_device_addrs() const;
+  std::vector<uint64_t> get_d2h_channel_handle_addrs() const;
   int thread_idx() const noexcept { return thread_idx_; }
   void* gpu_buffer_addr() const noexcept { return gpu_buffer_addr_; }
   bool use_normal_mode() const noexcept { return proxy_->cfg_.use_normal_mode; }
@@ -103,8 +93,13 @@ class UcclProxy {
       false;  // true => cudaFreeHost, false => cudaFree
   int node_idx_;
   bool is_intranode_;
+  bool owns_gpu_buffer_;
   std::vector<d2hq::HostD2HHandle> d2h_queues;
   std::vector<std::unique_ptr<mscclpp::Fifo>> fifos;
+  // Device-resident D2HHandle objects (one per channel) so a kernel holding a
+  // UCCLGinResources can push commands straight into the rings.
+  void* d2h_device_handle_objs_{nullptr};
+  std::vector<uint64_t> d2h_device_handle_addrs_;
 };
 
 // ============================================================================
@@ -145,5 +140,7 @@ class FifoProxy {
   int rank_;
   int node_idx_;
   int local_rank_;
+  int device_index_;
+  int nic_local_rank_;
   bool is_intranode_;
 };

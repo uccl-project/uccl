@@ -2,9 +2,8 @@
 
 #include "adaptive_sleeper.h"
 #include "common.h"
-#include "cxi/cxi_endpoint.h"  // needs libfabric headers
-#include "nccl_endpoint.h"
-#include "rdma_endpoint.h"
+#include "device/staging.h"
+#include "transport/endpoint.h"
 #include "transport_type.h"
 #include "util/debug.h"
 #include "util/gpu_rt.h"
@@ -14,8 +13,10 @@
 #include "util/util.h"
 #include <infiniband/verbs.h>
 #include <atomic>
+#include <condition_variable>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <shared_mutex>
 #include <string>
 #include <thread>
@@ -27,19 +28,16 @@
 
 extern thread_local bool inside_python;
 
-// Runtime-polymorphic endpoint.
-using GenericEndpoint =
-    std::variant<std::shared_ptr<RDMAEndpoint>, std::shared_ptr<NCCLEndpoint>,
-                 std::shared_ptr<CxiEndpoint>>;
-
 // Use the RDMA-native request types as the common currency.
-// The NCCL shim functions in endpoint_wrapper.h convert as needed.
+// The transport adapters convert native request layouts as needed.
 enum ReqType { ReqRead, ReqWrite };
 
 struct UcclRequest {
   enum ReqType type;
   uint32_t peer_id;
   uint32_t engine_idx;
+  // Transport-owned completion state, released when polling completes.
+  void* context = nullptr;
 };
 
 struct Mhandle {
@@ -51,6 +49,12 @@ struct P2PMhandle {
   CompressCtx compress_ctx;
   std::vector<MrCacheHandleRef> cache_refs;
   std::shared_ptr<CxiMemoryRegion> cxi_region;
+  // True when only the compression context was prepared and no user-buffer MR
+  // was registered (mr_array/cache_refs are empty).
+  bool compress_only = false;
+  // The prepared compression context describes exactly this registered range.
+  void const* registered_addr = nullptr;
+  size_t registered_len = 0;
 };
 
 struct MR {
@@ -71,11 +75,19 @@ struct Conn {
   std::string ip_addr_;
   uint16_t remote_port_ = 0;
   std::string remote_gpu_bdf_;  // PCI Bus ID of the remote GPU
+  // Ordinal of that GPU in this process, or -1 when it is not visible here.
+  int remote_gpu_ordinal_ = -1;
   bool is_local_ = false;
   uint64_t rdma_loopback_conn_id_ = UINT64_MAX;
 
   ShmRingHandle remote_inbox_;
   bool shm_attached_ = false;
+
+  // Accepted by a passive accept thread and not yet returned by accept() or
+  // accept_local(). Guarded by Endpoint::conn_mu_.
+  bool accept_pending_ = false;
+  // GPU index the peer reported, kept for accept() to return.
+  int accepted_gpu_idx_ = -1;
 };
 
 // Custom hash function for std::vector<uint8_t>
@@ -228,7 +240,7 @@ struct alignas(64) UnifiedTask {
 
 // Tracks an in-flight IPC async copy (used by Endpoint).
 struct IpcInflightOp {
-  std::vector<gpuEvent_t> events;  // flattened events (all iovs × all streams)
+  std::vector<gpuEvent_t> events;  // completion after the last copy per stream
   void* raw_ptr;                   // non-null for scalar ops
   TransferStatus* status;
   int gpu_idx;  // used for scalar ops
@@ -243,7 +255,6 @@ struct IpcInflightOp {
 
 class Endpoint {
   static constexpr int kMaxNumGPUs = 8;
-  static constexpr size_t kIpcAlignment = 1ul << 20;
   static constexpr size_t kIpcSizePerEngine = 1ul << 20;
   static constexpr int kMaxInflightOps =
       256;  // Max 256 concurrent Ops across all channels
@@ -273,8 +284,11 @@ class Endpoint {
   /* Remove a remote endpoint previously added via add_remote_endpoint. */
   bool remove_remote_endpoint(uint64_t conn_id);
 
-  /* Start a background thread for accepting, and one should not call accept()
-   * afterwards. */
+  /* Accept network and local IPC peers on background threads. accept() and
+   * accept_local() may still be called afterwards: they return the peers those
+   * threads accepted, oldest first within each path and each exactly once.
+   * Do not call this while accept() or accept_local() is blocked in another
+   * thread. */
   bool start_passive_accept();
 
   ~Endpoint();
@@ -300,6 +314,11 @@ class Endpoint {
   /* Register the data with a specific interface. */
   bool reg(void const* data, size_t size, uint64_t& mr_id,
            FloatType float_type = FloatType::kFloat32);
+
+  /* Prepare only the compression context for `data` (RDMA only); no user MR is
+   * registered. The returned mr_id refers to a compress_only P2PMhandle. */
+  bool reg_compress_only(void const* data, size_t size, uint64_t& mr_id,
+                         FloatType float_type = FloatType::kFloat32);
 
   bool regv(std::vector<void const*> const& data_v,
             std::vector<size_t> const& size_v, std::vector<uint64_t>& mr_id_v);
@@ -352,12 +371,18 @@ class Endpoint {
                   std::vector<size_t> len_v, std::vector<char*> out_buf_v,
                   size_t num_iovs);
 
-  /*Connect to a local process via shared memory.*/
+  /* Connect to a local process via shared memory. Same-GPU cross-process
+   * connections provide IPC metadata only; do not pair them with accept_local.
+   */
   bool connect_local(std::string const& remote_gpu_bdf, uint64_t& conn_id,
                      bool same_process = false);
 
-  /*Accept an incoming local connection via shared memory. */
-  bool accept_local(std::string& remote_gpu_bdf, uint64_t& conn_id);
+  /*Accept an incoming local connection via shared memory.
+   * timeout_ms >= 0 bounds the wait in milliseconds; timeout_ms < 0 waits
+   * forever. Returns false on timeout or when the endpoint is stopping;
+   * conn_id is set to UINT64_MAX when the call returns false. */
+  bool accept_local(std::string& remote_gpu_bdf, uint64_t& conn_id,
+                    int64_t timeout_ms = -1);
 
   /* One-sided write and read via IPC. */
   bool write_ipc(uint64_t conn_id, void const* data, size_t size,
@@ -411,6 +436,8 @@ class Endpoint {
 
   GenericEndpoint get_endpoint() const;
 
+  gpuError_t export_ipc_range(void* ptr, size_t size, GpuIpcExport* result);
+
   int send_notification(uint64_t conn_id, NotifyMsg const& notification) const;
 
   std::string const& get_gpu_bus_id() const { return gpu_bus_id_; }
@@ -438,6 +465,9 @@ class Endpoint {
   std::unordered_map<std::string, ShmRingHandle> inbox_rings_;
   std::unordered_map<std::string, bool> inbox_creators_;
   std::vector<std::vector<gpuStream_t>> ipc_streams_;
+  std::mutex ipc_streams_mu_;
+  GpuIpcExportContext ipc_export_context_;
+  std::vector<gpuStream_t>& get_ipc_streams(int dev);
   /* For net read/write and IPC tasks. */
   jring_t* send_unified_task_ring_ = nullptr;
   jring_t* recv_unified_task_ring_ = nullptr;
@@ -448,19 +478,20 @@ class Endpoint {
   /* MPSC ring: caller threads push IpcInflightOp*, poller thread drains it. */
   std::thread ipc_poller_thread_;
   /* For background passive accept thread. */
-  bool passive_accept_;
+  std::atomic<bool> passive_accept_;
   std::atomic<bool> passive_accept_stop_{false};
   std::thread passive_accept_thread_;
   std::thread passive_accept_local_thread_;
+  /* Notified when a passive accept thread marks a Conn accept_pending_. */
+  std::condition_variable_any passive_accept_cv_;
 
   /* adaptive sleeping tracker for the thread funcs */
   P2PAdaptiveSleeper send_proxy_adaptive_sleeper_;
   P2PAdaptiveSleeper recv_proxy_adaptive_sleeper_;
   P2PAdaptiveSleeper ipc_proxy_adaptive_sleeper_;
 
-#if defined(__CAMBRICON_PLATFORM_MLU__)
-#include "mlu/mlu_staging.inc"  // Cambricon Plan A staging members/methods
-#endif
+  friend class uccl::device::NetworkStaging;
+  uccl::device::NetworkStaging staging_{*this};
 
   /* Initialize the engine Internal helper function for lazy initialization. */
   void initialize_engine();
@@ -470,6 +501,14 @@ class Endpoint {
   void recv_proxy_thread_func();
   void passive_accept_thread_func();
   void passive_accept_local_thread_func();
+  /* Consume one incoming connection. With passive accept running, only its
+   * threads call these; accept()/accept_local() take what they publish. */
+  bool do_accept(std::string& ip_addr, int& remote_gpu_idx, uint64_t& conn_id);
+  bool do_accept_local(std::string& remote_gpu_bdf, uint64_t& conn_id,
+                       int64_t timeout_ms = -1);
+  void publish_passive_accept(uint64_t conn_id, int remote_gpu_idx);
+  bool take_passive_accept(bool local, std::string& peer, int& remote_gpu_idx,
+                           uint64_t& conn_id, int64_t timeout_ms = -1);
   void ipc_poller_thread_func();
 
   std::shared_ptr<UnifiedTask> create_task(uint64_t conn_id, uint64_t mr_id,
@@ -481,11 +520,11 @@ class Endpoint {
   std::shared_ptr<UnifiedTask> create_writev_task(
       uint64_t conn_id, std::vector<void*>&& data_v,
       std::vector<size_t>&& size_v, std::vector<uint64_t>&& mr_id_v,
-      std::vector<FifoItem>&& slot_item_v);
+      std::vector<FifoItem>&& slot_item_v, size_t num_iovs);
   std::shared_ptr<UnifiedTask> create_readv_task(
       uint64_t conn_id, std::vector<void*>&& data_v,
       std::vector<size_t>&& size_v, std::vector<uint64_t>&& mr_id_v,
-      std::vector<FifoItem>&& slot_item_v);
+      std::vector<FifoItem>&& slot_item_v, size_t num_iovs);
   bool run_raw_one_sided_pipeline(SendConnection* send_group,
                                   SendType send_type,
                                   std::vector<P2PMhandle*> const& mhandle_v,

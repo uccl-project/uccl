@@ -18,11 +18,17 @@ from uccl.ep import EventHandle, Config
 # 1) As part of the packaged deep_ep_wrapper (symlinked buffer inside a package): uses relative import `.utils`.
 # 2) As a standalone benchmark script from the `ep/bench` directory (no package): falls back to plain `utils`.
 try:
+    from .config_check import check_consistency, effective_env
+except ImportError:
+    from config_check import check_consistency, effective_env
+
+try:
     from .utils import (
         EventOverlap,
         check_nvlink_connections,
         initialize_uccl,
         destroy_uccl,
+        detect_group_topology,
         _fp8_e4m3_dtype,
     )
 except ImportError:
@@ -31,6 +37,7 @@ except ImportError:
         check_nvlink_connections,
         initialize_uccl,
         destroy_uccl,
+        detect_group_topology,
         _fp8_e4m3_dtype,
     )
 
@@ -112,6 +119,28 @@ class Buffer:
             raise NotImplementedError(
                 "UCCL EP does not currently support enable_shrink=True"
             )
+        # Every rank must agree on the settings that decide where peers write.
+        # Check once, before any buffer is allocated or any proxy is started.
+        Buffer._check_cross_rank_config(
+            group, num_nvl_bytes, num_rdma_bytes, low_latency_mode
+        )
+        # The high-throughput internode kernels split ranks by
+        # NUM_MAX_NVL_PEERS and assume full nodes; with fewer GPUs per node the
+        # RDMA buffer hint is 0 bytes and setup crashes later. Fail here.
+        local_world = int(os.environ.get("LOCAL_WORLD_SIZE", -1))
+        max_nvl_peers = (
+            ep.num_max_nvl_peers() if hasattr(ep, "num_max_nvl_peers") else 8
+        )
+        if (
+            not low_latency_mode
+            and 0 < local_world < group.size()
+            and local_world != max_nvl_peers
+        ):
+            raise RuntimeError(
+                f"this build's high-throughput kernels assume {max_nvl_peers} GPUs per node "
+                f"(LOCAL_WORLD_SIZE={local_world}); rebuild with NUM_MAX_NVL_PEERS={local_world} "
+                "or use the low-latency (dedup) path"
+            )
 
         if "LOCAL_RANK" in os.environ:
             device_index = int(os.environ["LOCAL_RANK"])
@@ -119,11 +148,20 @@ class Buffer:
             device_index = torch.cuda.current_device()
 
         if hasattr(ep, "get_rdma_buffer"):
+            # Intranode low-latency mode starts no proxy, so peers can reach this
+            # buffer only through CUDA IPC. A host (cudaMallocHost) fallback has
+            # no IPC handle and the first LL call would hang; keep it on the
+            # device. Internode keeps the host fallback (e.g. host-staged GB10).
+            force_device_alloc = False
+            if low_latency_mode and num_rdma_bytes > 0 and group.size() > 1:
+                if is_intranode is None:
+                    is_intranode = detect_group_topology(group)[-1]
+                force_device_alloc = bool(is_intranode)
             # Allocate outside PyTorch's CUDA allocator so RDMA/IPC sees a raw
             # cudaMalloc/cudaMallocHost-style allocation instead of a possibly
             # segmented caching-allocator mapping.
             scratch_dlpack, rdma_buffer_is_host_allocated = ep.get_rdma_buffer(
-                num_rdma_bytes, device_index
+                num_rdma_bytes, device_index, force_device_alloc=force_device_alloc
             )
             self.scratch = torch.utils.dlpack.from_dlpack(scratch_dlpack)
         else:
@@ -166,7 +204,6 @@ class Buffer:
             group,
             use_normal_mode=not low_latency_mode,
             is_intranode=is_intranode,
-            rdma_buffer_is_host_allocated=rdma_buffer_is_host_allocated,
         )
         check_nvlink_connections(group)
 
@@ -228,6 +265,62 @@ class Buffer:
         for proxy in self.proxies:
             proxy.set_atomic_buffer_ptr(self.proxies[0].get_atomic_buffer_ptr())
 
+    @staticmethod
+    def _config_signature(
+        group_size: int, num_nvl_bytes: int, num_rdma_bytes: int, low_latency_mode: bool
+    ) -> dict:
+        build = {
+            "num_max_nvl_peers": (
+                ep.num_max_nvl_peers() if hasattr(ep, "num_max_nvl_peers") else None
+            ),
+            "num_proxy_threads": ep.get_num_proxy_threads(),
+            "sm90_features": bool(ep.is_sm90_compiled()),
+        }
+        if hasattr(ep, "build_config"):
+            build.update(ep.build_config())
+
+        def as_tuple(cfg):
+            return (
+                cfg.num_sms,
+                cfg.num_max_nvl_chunked_send_tokens,
+                cfg.num_max_nvl_chunked_recv_tokens,
+                cfg.num_max_rdma_chunked_send_tokens,
+                cfg.num_max_rdma_chunked_recv_tokens,
+            )
+
+        config = {}
+        for name, get in (
+            ("dispatch", Buffer.get_dispatch_config),
+            ("combine", Buffer.get_combine_config),
+        ):
+            try:
+                config[name] = as_tuple(get(group_size))
+            except (AssertionError, ValueError) as exc:
+                config[name] = f"unavailable: {exc}"
+        return {
+            "build": build,
+            "args": {
+                "low_latency_mode": bool(low_latency_mode),
+                "num_nvl_bytes": int(num_nvl_bytes),
+                "num_rdma_bytes": int(num_rdma_bytes),
+            },
+            "config": config,
+            "env": effective_env(),
+        }
+
+    @staticmethod
+    def _check_cross_rank_config(
+        group, num_nvl_bytes: int, num_rdma_bytes: int, low_latency_mode: bool
+    ) -> str:
+        signature, error = {}, ""
+        try:
+            signature = Buffer._config_signature(
+                group.size(), num_nvl_bytes, num_rdma_bytes, low_latency_mode
+            )
+        except Exception as exc:  # still gather, so no rank is left waiting
+            error = f"{type(exc).__name__}: {exc}"
+        return check_consistency(group, signature, error)
+
     def _ll_compute_stream_ptr(self, device: torch.device):
         """
         Return the current CUDA stream pointer for low-latency runtime calls.
@@ -262,8 +355,12 @@ class Buffer:
         return ep.is_sm90_compiled()
 
     @staticmethod
-    def _is_efa() -> bool:
-        return os.path.exists(os.getenv("EFA_HOME", "/opt/amazon/efa"))
+    def _default_rdma_recv_tokens(num_ranks: int) -> int:
+        if num_ranks in (16, 32) and os.path.exists(
+            os.getenv("EFA_HOME", "/opt/amazon/efa")
+        ):
+            return 512
+        return 128
 
     @staticmethod
     def set_num_sms(new_num_sms: int) -> None:
@@ -603,6 +700,194 @@ class Buffer:
             hook,
         )
 
+    def low_latency_dispatch_dedup(
+        self,
+        x: torch.Tensor,
+        topk_idx: torch.Tensor,
+        topk_weights: torch.Tensor,
+        num_max_dispatch_tokens_per_rank: int,
+        num_experts: int,
+        use_fp8: bool = True,
+        round_scale: bool = False,
+        use_ue8m0: bool = False,
+        async_finish: bool = False,
+        return_recv_hook: bool = False,
+    ):
+        """
+        Like `low_latency_dispatch`, but each token is sent once per destination rank instead of once per
+        expert, carrying its top-k ids and weights; the receiver expands it into the same per-expert packed
+        layout. The weights are applied on the expert side by `low_latency_combine_dedup`, which sends one
+        reduced row per (token, rank). Requires top-k <= 8.
+
+        Returns the same tuple as `low_latency_dispatch`; the handle must be passed to
+        `low_latency_combine_dedup`.
+        """
+        for proxy in self.proxies:
+            proxy.notify_proxy_thread_adaptive_sleeper()
+        num_ranks = self.group.size()
+        num_local_experts = num_experts // num_ranks
+        num_recv_tokens = num_ranks * num_max_dispatch_tokens_per_rank
+        packed_recv_x = torch.empty(
+            (num_local_experts, num_recv_tokens, x.size(1)),
+            device=x.device,
+            dtype=_fp8_e4m3_dtype() if use_fp8 else torch.bfloat16,
+        )
+        packed_recv_count = torch.empty(
+            (num_local_experts,), device=x.device, dtype=torch.int32
+        )
+        packed_recv_src_info = torch.empty(
+            (num_local_experts, num_recv_tokens), device=x.device, dtype=torch.int32
+        )
+        packed_recv_layout_range = torch.empty(
+            (num_local_experts, num_ranks), device=x.device, dtype=torch.int64
+        )
+        # Per (source rank, slot): message header (src token, top-k ids, weights)
+        # [n, 16], packed position for each local top-k entry [n, 8], and
+        # per-source counts [num_ranks], in one int32 allocation. The kernels
+        # get byte offsets into it, so the host path adds no slicing ops (each
+        # torch op costs 15-30 us on a slow-clocked host).
+        dedup_aux = torch.empty(
+            (num_recv_tokens * 24 + num_ranks,), device=x.device, dtype=torch.int32
+        )
+        dedup_hdr_ptr = dedup_aux.data_ptr()
+        dedup_pos_ptr = dedup_hdr_ptr + num_recv_tokens * 16 * 4
+        dedup_count_ptr = dedup_hdr_ptr + num_recv_tokens * 24 * 4
+        packed_recv_x_scales_storage = None
+        packed_recv_x_scales = None
+        packed_recv_x_scales_ptr = 0
+        if use_fp8:
+            packed_recv_x_scales_storage = torch.empty(
+                (
+                    num_local_experts,
+                    x.size(1) // (512 if use_ue8m0 else 128),
+                    num_recv_tokens,
+                ),
+                device=x.device,
+                dtype=torch.int32 if use_ue8m0 else torch.float32,
+            )
+            packed_recv_x_scales = packed_recv_x_scales_storage.transpose(1, 2)
+            packed_recv_x_scales_ptr = packed_recv_x_scales.data_ptr()
+
+        assert topk_weights.dtype == torch.float32 and topk_weights.is_contiguous()
+        compute_stream_ptr = self._ll_compute_stream_ptr(x.device)
+        event, hook = self.runtime.low_latency_dispatch_dedup(
+            x.data_ptr(),
+            x.size(0),
+            x.size(1),
+            topk_idx.data_ptr(),
+            topk_idx.size(0),
+            topk_idx.size(1),
+            topk_weights.data_ptr(),
+            packed_recv_x.data_ptr(),
+            packed_recv_x_scales_ptr,
+            packed_recv_count.data_ptr(),
+            packed_recv_src_info.data_ptr(),
+            packed_recv_layout_range.data_ptr(),
+            dedup_hdr_ptr,
+            dedup_pos_ptr,
+            dedup_count_ptr,
+            compute_stream_ptr,
+            int(num_max_dispatch_tokens_per_rank),
+            int(num_experts),
+            bool(use_fp8),
+            bool(round_scale),
+            bool(use_ue8m0),
+            bool(async_finish),
+            bool(return_recv_hook),
+        )
+        handle = (
+            packed_recv_src_info,
+            packed_recv_layout_range,
+            num_max_dispatch_tokens_per_rank,
+            x.size(1),
+            num_experts,
+            dedup_aux,
+            (dedup_hdr_ptr, dedup_pos_ptr, dedup_count_ptr),
+        )
+        tensors_to_record = (
+            x,
+            topk_idx,
+            topk_weights,
+            packed_recv_x,
+            packed_recv_x_scales,
+            packed_recv_count,
+            packed_recv_src_info,
+            packed_recv_layout_range,
+            packed_recv_x_scales_storage,
+            dedup_aux,
+        )
+        if return_recv_hook and hook is None:
+            hook = lambda: None
+        return (
+            (packed_recv_x, packed_recv_x_scales) if use_fp8 else packed_recv_x,
+            packed_recv_count,
+            handle,
+            EventOverlap(event, tensors_to_record if async_finish else None),
+            hook,
+        )
+
+    def low_latency_combine_dedup(
+        self,
+        x: torch.Tensor,
+        topk_idx: torch.Tensor,
+        handle: tuple,
+        async_finish: bool = False,
+        return_recv_hook: bool = False,
+        out: Optional[torch.Tensor] = None,
+        compress: bool = False,
+    ):
+        """
+        Reduce-before-send combine for a `low_latency_dispatch_dedup` handle: the expert side sums
+        w_k * x_k over its local experts per received token (weights from the dispatch) and sends one
+        BF16 row; this rank adds one partial per destination rank.
+        With `compress`, rows sent over RDMA use an exact per-row window code (3-bit exponent codes
+        plus escapes); the result is bit-identical to the uncompressed combine.
+        """
+        for proxy in self.proxies:
+            proxy.notify_proxy_thread_adaptive_sleeper()
+        (
+            _src_info,
+            _layout_range,
+            num_max_dispatch_tokens_per_rank,
+            hidden,
+            num_experts,
+            dedup_aux,
+            (dedup_hdr_ptr, dedup_pos_ptr, dedup_count_ptr),
+        ) = handle
+        combined_x = (
+            out
+            if out is not None
+            else torch.empty((topk_idx.size(0), hidden), device=x.device, dtype=x.dtype)
+        )
+        compute_stream_ptr = self._ll_compute_stream_ptr(x.device)
+        event, hook = self.runtime.low_latency_combine_dedup(
+            x.data_ptr(),
+            x.size(0),
+            x.size(1),
+            x.size(2),
+            topk_idx.data_ptr(),
+            topk_idx.size(0),
+            topk_idx.size(1),
+            dedup_hdr_ptr,
+            dedup_pos_ptr,
+            dedup_count_ptr,
+            compute_stream_ptr,
+            int(num_max_dispatch_tokens_per_rank),
+            int(num_experts),
+            bool(async_finish),
+            bool(return_recv_hook),
+            combined_x.data_ptr(),
+            bool(compress),
+        )
+        tensors_to_record = (x, topk_idx, dedup_aux, combined_x)
+        if return_recv_hook and hook is None:
+            hook = lambda: None
+        return (
+            combined_x,
+            EventOverlap(event, tensors_to_record if async_finish else None),
+            hook,
+        )
+
     def get_next_low_latency_combine_buffer(self, handle: object):
         """
         Get the raw registered RDMA buffer tensor for next low-latency combine, so that the next combine kernel can skip the copying.
@@ -652,6 +937,47 @@ class Buffer:
             size: the RDMA buffer size recommended.
         """
         return ep.get_low_latency_rdma_size_hint(
+            num_max_dispatch_tokens_per_rank, hidden, num_ranks, num_experts
+        )
+
+    @staticmethod
+    def get_low_latency_ab_rdma_size_hint(
+        num_max_dispatch_tokens_per_rank: int,
+        hidden: int,
+        num_ranks: int,
+        num_experts: int,
+    ) -> int:
+        """
+        RDMA buffer size for alternating the default and the dedup LL kernels on one buffer: the dedup data
+        regions are placed after the default layout so that a peer one call ahead never writes into the
+        other mode's regions.
+        """
+        return ep.get_low_latency_ab_rdma_size_hint(
+            num_max_dispatch_tokens_per_rank, hidden, num_ranks, num_experts
+        )
+
+    @staticmethod
+    def get_low_latency_dedup_rdma_size_hint(
+        num_max_dispatch_tokens_per_rank: int,
+        hidden: int,
+        num_ranks: int,
+        num_experts: int,
+    ) -> int:
+        """
+        Minimum RDMA buffer size for the per-rank dedup LL kernels only
+        (`low_latency_dispatch_dedup` / `low_latency_combine_dedup`): the data regions are sized by ranks,
+        not experts. A buffer of this size cannot run the default LL kernels.
+
+        Arguments:
+            num_max_dispatch_tokens_per_rank: the maximum number of tokens to dispatch, all the ranks must hold the same value.
+            hidden: the hidden dimension of each token.
+            num_ranks: the number of EP group ranks.
+            num_experts: the number of all experts.
+
+        Returns:
+            size: the RDMA buffer size recommended.
+        """
+        return ep.get_low_latency_dedup_rdma_size_hint(
             num_max_dispatch_tokens_per_rank, hidden, num_ranks, num_experts
         )
 
@@ -760,6 +1086,44 @@ class Buffer:
         )
 
     @staticmethod
+    def _config_from_env(name: str) -> Optional[Config]:
+        value = os.getenv(name)
+        if not value:
+            return None
+        try:
+            parts = [int(part.strip()) for part in value.split(",")]
+        except ValueError as exc:
+            raise ValueError(
+                f"{name} must be five comma-separated integers, got {value!r}"
+            ) from exc
+        if len(parts) != 5:
+            raise ValueError(
+                f"{name} must be five comma-separated integers, got {value!r}"
+            )
+        return Config(*parts)
+
+    @staticmethod
+    def _validated_env_configs() -> Tuple[Optional[Config], Optional[Config]]:
+        dispatch_config = Buffer._config_from_env("UCCL_EP_DISPATCH_CONFIG")
+        combine_config = Buffer._config_from_env("UCCL_EP_COMBINE_CONFIG")
+
+        dispatch_sms = (
+            dispatch_config.num_sms if dispatch_config is not None else Buffer.num_sms
+        )
+        combine_sms = (
+            combine_config.num_sms if combine_config is not None else Buffer.num_sms
+        )
+        if dispatch_sms != combine_sms:
+            raise ValueError(
+                "Dispatch and combine need to use the same SM count (as they share the channel count computation): "
+                f"dispatch={dispatch_sms}, combine={combine_sms}. "
+                "Set UCCL_EP_DISPATCH_CONFIG and UCCL_EP_COMBINE_CONFIG "
+                "with matching first values."
+            )
+
+        return dispatch_config, combine_config
+
+    @staticmethod
     def get_dispatch_config(num_ranks: int) -> Config:
         """
         Get a recommended dispatch config.
@@ -771,21 +1135,29 @@ class Buffer:
             config: the recommended config.
         """
 
+        env_config, _ = Buffer._validated_env_configs()
+        if env_config is not None:
+            return env_config
+
         # TODO: automatically tune
         config_map = {
-            2: Config(Buffer.num_sms, 24, 256, 6, 128),
-            4: Config(Buffer.num_sms, 6, 256, 6, 128),
-            8: Config(Buffer.num_sms, 6, 256, 6, 128),
-            16: Config(Buffer.num_sms, 36, 288, 20, 512 if Buffer._is_efa() else 128),
-            24: Config(Buffer.num_sms, 8, 288, 32, 128),
-            32: Config(Buffer.num_sms, 32, 288, 32, 512 if Buffer._is_efa() else 128),
-            64: Config(Buffer.num_sms, 20, 288, 28, 128),
-            128: Config(Buffer.num_sms, 20, 560, 32, 128),
-            144: Config(Buffer.num_sms, 32, 720, 12, 128),
-            160: Config(Buffer.num_sms, 28, 720, 12, 128),
+            2: (24, 256, 6),
+            4: (24, 256, 6),
+            8: (6, 256, 6),
+            16: (36, 288, 20),
+            24: (8, 288, 32),
+            32: (32, 288, 32),
+            64: (20, 288, 28),
+            128: (20, 560, 32),
+            144: (32, 720, 12),
+            160: (28, 720, 12),
         }
         assert num_ranks in config_map, f"Unsupported number of EP ranks: {num_ranks}"
-        return config_map[num_ranks]
+        return Config(
+            Buffer.num_sms,
+            *config_map[num_ranks],
+            Buffer._default_rdma_recv_tokens(num_ranks),
+        )
 
     @staticmethod
     def get_combine_config(num_ranks: int) -> Config:
@@ -799,21 +1171,29 @@ class Buffer:
             config: the recommended config.
         """
 
+        _, env_config = Buffer._validated_env_configs()
+        if env_config is not None:
+            return env_config
+
         # TODO: automatically tune
         config_map = {
-            2: Config(Buffer.num_sms, 10, 256, 6, 128),
-            4: Config(Buffer.num_sms, 9, 256, 6, 128),
-            8: Config(Buffer.num_sms, 4, 256, 6, 128),
-            16: Config(Buffer.num_sms, 4, 288, 12, 512 if Buffer._is_efa() else 128),
-            24: Config(Buffer.num_sms, 1, 288, 8, 128),
-            32: Config(Buffer.num_sms, 1, 288, 8, 512 if Buffer._is_efa() else 128),
-            64: Config(Buffer.num_sms, 1, 288, 20, 128),
-            128: Config(Buffer.num_sms, 1, 560, 12, 128),
-            144: Config(Buffer.num_sms, 2, 720, 8, 128),
-            160: Config(Buffer.num_sms, 2, 720, 8, 128),
+            2: (10, 256, 6),
+            4: (9, 256, 6),
+            8: (4, 256, 6),
+            16: (4, 288, 12),
+            24: (1, 288, 8),
+            32: (1, 288, 8),
+            64: (1, 288, 20),
+            128: (1, 560, 12),
+            144: (2, 720, 8),
+            160: (2, 720, 8),
         }
         assert num_ranks in config_map, f"Unsupported number of EP ranks: {num_ranks}"
-        return config_map[num_ranks]
+        return Config(
+            Buffer.num_sms,
+            *config_map[num_ranks],
+            Buffer._default_rdma_recv_tokens(num_ranks),
+        )
 
     # noinspection PyTypeChecker
     def get_dispatch_layout(

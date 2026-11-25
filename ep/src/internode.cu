@@ -3,11 +3,18 @@
 #include "ep_launch.cuh"
 #include "ep_utils.cuh"
 #include "exception.cuh"
-#include "uccl_ibgda.cuh"
+#include "internode.cuh"
+#include "uccl_transfer_device.cuh"
 #include <functional>
 #include <optional>
-// #include "ibgda_device.cuh"
-#include "internode.cuh"
+
+// cached_notify moves NUM_MAX_NVL_PEERS ints per token with TMA, which needs
+// 16-byte multiples; builds for fewer than 4 GPUs per node use plain global
+// loads and stores instead.
+#if defined(__NVCC__) && !defined(DISABLE_SM90_FEATURES) && \
+    (NUM_MAX_NVL_PEERS * 4) % 16 == 0
+#define UCCL_EP_NOTIFY_TMA 1
+#endif
 
 namespace uccl {
 
@@ -154,14 +161,13 @@ __global__ void notify_dispatch(
     // waiting for all previous inflight wrs to complete,
     // in case of rewriting cleared rdma_buffer
     if (thread_id == WARP_SIZE) {
-      uccl::nvshmemi_ibgda_quiet(d2h_channel_addrs, num_d2h_channel_addrs,
-                                 nvl_rank);
+      uccl::quiet(d2h_channel_addrs, num_d2h_channel_addrs, nvl_rank);
     }
     __syncthreads();
 
     if (thread_id == WARP_SIZE) {
-      uccl::nvshmem_sync_with_same_gpu_idx(d2h_channel_addrs,
-                                           num_d2h_channel_addrs, nvl_rank);
+      uccl::sync_with_same_gpu_idx(d2h_channel_addrs, num_d2h_channel_addrs,
+                                   nvl_rank);
     }
     barrier_block<NUM_MAX_NVL_PEERS, true>(barrier_signal_ptrs, nvl_rank);
 
@@ -222,7 +228,7 @@ __global__ void notify_dispatch(
             rdma_recv_num_tokens_mixed.recv_buffer(rdma_rank));
         uint64_t src_ptr = reinterpret_cast<uint64_t>(
             rdma_recv_num_tokens_mixed.send_buffer(i));
-        uccl::nvshmemi_ibgda_put_nbi_warp</*use_normal_mode=*/true>(
+        uccl::put_nbi_warp</*use_normal_mode=*/true>(
             dst_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
             src_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
             (NUM_MAX_NVL_PEERS + num_rdma_experts + 1) * sizeof(int),
@@ -241,15 +247,14 @@ __global__ void notify_dispatch(
 
     // Wait previous operations to be finished
     if (thread_id == WARP_SIZE) {
-      uccl::nvshmemi_ibgda_quiet(d2h_channel_addrs, num_d2h_channel_addrs,
-                                 nvl_rank);
+      uccl::quiet(d2h_channel_addrs, num_d2h_channel_addrs, nvl_rank);
     }
     __syncthreads();
 
     // Barrier
     if (thread_id == 0) {
-      uccl::nvshmem_sync_with_same_gpu_idx(d2h_channel_addrs,
-                                           num_d2h_channel_addrs, nvl_rank);
+      uccl::sync_with_same_gpu_idx(d2h_channel_addrs, num_d2h_channel_addrs,
+                                   nvl_rank);
     }
     __syncthreads();
 
@@ -360,8 +365,8 @@ __global__ void notify_dispatch(
 
     // Finally barrier
     if (thread_id == WARP_SIZE)
-      uccl::nvshmem_sync_with_same_gpu_idx(d2h_channel_addrs,
-                                           num_d2h_channel_addrs, nvl_rank);
+      uccl::sync_with_same_gpu_idx(d2h_channel_addrs, num_d2h_channel_addrs,
+                                   nvl_rank);
     barrier_block<NUM_MAX_NVL_PEERS>(barrier_signal_ptrs, nvl_rank);
   } else {
     // Calculate meta data
@@ -752,7 +757,7 @@ __global__ void __launch_bounds__(
         // __threadfence_system();
         // NOTE(MaoZiming): this tells the remote rank how many tokens each
         // local nvl_rank and expert are expected to receive.
-        uccl::nvshmemi_ibgda_put_nbi_warp</*use_normal_mode=*/true>(
+        uccl::put_nbi_warp</*use_normal_mode=*/true>(
             reinterpret_cast<uint64_t>(
                 rdma_channel_meta.recv_buffer(rdma_rank)) -
                 reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
@@ -1111,7 +1116,7 @@ __global__ void __launch_bounds__(
           auto const src_ptr = reinterpret_cast<uint64_t>(
               rdma_channel_data.send_buffer(dst_rdma_rank) +
               dst_slot_idx * num_bytes_per_token);
-          uccl::nvshmemi_ibgda_put_nbi_warp</*use_normal_mode=*/true>(
+          uccl::put_nbi_warp</*use_normal_mode=*/true>(
               dst_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
               src_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
               num_bytes_per_msg,
@@ -1140,7 +1145,7 @@ __global__ void __launch_bounds__(
         if (lane_id == dst_rdma_rank) {
           last_issued_tail += num_tokens_to_issue;
           num_tokens_to_send -= num_tokens_to_issue;
-          uccl::nvshmemi_ibgda_amo_nonfetch_add</*use_normal_mode=*/true>(
+          uccl::atomic_nonfetch_add</*use_normal_mode=*/true>(
               reinterpret_cast<uint64_t>(rdma_channel_tail.buffer(rdma_rank)),
               reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
               num_tokens_to_issue,
@@ -1451,7 +1456,7 @@ __global__ void __launch_bounds__(
            clock64() - coordinator_stall_start > NUM_TIMEOUT_CYCLES / 100000);
       if (min_head != std::numeric_limits<int>::max() && should_advance &&
           lane_id < kNumRDMARanks) {
-        uccl::nvshmemi_ibgda_amo_nonfetch_add</*use_normal_mode=*/true>(
+        uccl::atomic_nonfetch_add</*use_normal_mode=*/true>(
             reinterpret_cast<uint64_t>(rdma_channel_head.buffer(rdma_rank)),
             reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
             min_head - last_head,
@@ -1763,14 +1768,13 @@ __global__ void cached_notify(
   // Using two SMs, which clean the RDMA/NVL buffer respectively
   if (sm_id == 0) {
     if (thread_id == WARP_SIZE)
-      uccl::nvshmemi_ibgda_quiet(d2h_channel_addrs, num_d2h_channel_addrs,
-                                 nvl_rank, 3);
+      uccl::quiet(d2h_channel_addrs, num_d2h_channel_addrs, nvl_rank, 3);
     __syncthreads();
 
     // Barrier for RDMA
     if (thread_id == WARP_SIZE)
-      uccl::nvshmem_sync_with_same_gpu_idx(d2h_channel_addrs,
-                                           num_d2h_channel_addrs, nvl_rank);
+      uccl::sync_with_same_gpu_idx(d2h_channel_addrs, num_d2h_channel_addrs,
+                                   nvl_rank);
 
     // Barrier for NVL
     barrier_block<NUM_MAX_NVL_PEERS, true>(barrier_signal_ptrs, nvl_rank);
@@ -1807,8 +1811,8 @@ __global__ void cached_notify(
 
     // Barrier again
     if (thread_id == WARP_SIZE)
-      uccl::nvshmem_sync_with_same_gpu_idx(d2h_channel_addrs,
-                                           num_d2h_channel_addrs, nvl_rank);
+      uccl::sync_with_same_gpu_idx(d2h_channel_addrs, num_d2h_channel_addrs,
+                                   nvl_rank);
 
     barrier_block<NUM_MAX_NVL_PEERS>(barrier_signal_ptrs, nvl_rank);
   } else if (sm_id == 1) {
@@ -1874,10 +1878,12 @@ __global__ void cached_notify(
         constexpr int num_bytes_per_token = sizeof(int) * NUM_MAX_NVL_PEERS;
         constexpr int num_tokens_per_batch =
             tma_batch_size / num_bytes_per_token;
+#ifdef UCCL_EP_NOTIFY_TMA
         EP_STATIC_ASSERT(num_bytes_per_token % 16 == 0,
                          "num_bytes_per_token should be divisible by 16");
+#endif
 
-#if defined(__NVCC__) && !defined(DISABLE_SM90_FEATURES)
+#ifdef UCCL_EP_NOTIFY_TMA
         // TMA stuffs
         extern __shared__ __align__(1024) uint8_t smem_tma_buffer[];
         auto tma_buffer = smem_tma_buffer + warp_id * kNumTMABytesPerWarp;
@@ -1915,7 +1921,7 @@ __global__ void cached_notify(
             auto batch_start_idx =
                 max(token_start_idx, batch_end_idx - num_tokens_per_batch);
 
-#if defined(__NVCC__) && !defined(DISABLE_SM90_FEATURES)
+#ifdef UCCL_EP_NOTIFY_TMA
             if (lane_id == 0) {
               tma_load_1d(
                   tma_buffer,
@@ -1933,17 +1939,18 @@ __global__ void cached_notify(
             for (int token_idx = batch_end_idx - 1;
                  token_idx >= batch_start_idx; --token_idx) {
               if (lane_id < NUM_MAX_NVL_PEERS) {
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__) ||   \
+    (defined(__NVCC__) && !defined(DISABLE_SM90_FEATURES) && \
+     !defined(UCCL_EP_NOTIFY_TMA))
                 auto current_head =
-                    __ldg(combined_nvl_head + token_idx * NUM_MAX_NVL_PEERS +
-                          lane_id);
+                    combined_nvl_head[token_idx * NUM_MAX_NVL_PEERS + lane_id];
                 if (current_head < 0) {
                   combined_nvl_head[token_idx * NUM_MAX_NVL_PEERS + lane_id] =
                       -last_head - 1;
                 } else {
                   last_head = current_head;
                 }
-#elif !defined(DISABLE_SM90_FEATURES)
+#elif defined(UCCL_EP_NOTIFY_TMA)
               auto current_head = reinterpret_cast<int*>(tma_buffer)
                   [(token_idx - batch_start_idx) * NUM_MAX_NVL_PEERS + lane_id];
               if (current_head < 0) {
@@ -1958,7 +1965,7 @@ __global__ void cached_notify(
               }
             }
 
-#if defined(__NVCC__) && !defined(DISABLE_SM90_FEATURES)
+#ifdef UCCL_EP_NOTIFY_TMA
             tma_store_fence();
             __syncwarp();
 
@@ -2805,7 +2812,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
             auto const src_ptr = reinterpret_cast<uint64_t>(
                 rdma_channel_data.send_buffer(dst_rdma_rank) +
                 rdma_slot_idx * num_bytes_per_token);
-            uccl::nvshmemi_ibgda_put_nbi_warp</*use_normal_mode=*/true>(
+            uccl::put_nbi_warp</*use_normal_mode=*/true>(
                 dst_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
                 src_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
                 num_bytes_per_msg,
@@ -2829,7 +2836,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
           // Write new RDMA tail
           __syncwarp();
           if (lane_id == 0) {
-            uccl::nvshmemi_ibgda_amo_nonfetch_add</*use_normal_mode=*/true>(
+            uccl::atomic_nonfetch_add</*use_normal_mode=*/true>(
                 reinterpret_cast<uint64_t>(rdma_channel_tail.buffer(rdma_rank)),
                 reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
                 num_chunked_tokens,
@@ -2871,7 +2878,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
         if (min_head != std::numeric_limits<int>::max() and
             min_head >= last_rdma_head + num_max_rdma_chunked_send_tokens and
             lane_id < kNumRDMARanks) {
-          uccl::nvshmemi_ibgda_amo_nonfetch_add</*use_normal_mode=*/true>(
+          uccl::atomic_nonfetch_add</*use_normal_mode=*/true>(
               reinterpret_cast<uint64_t>(rdma_channel_head.buffer(rdma_rank)),
               reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
               min_head - last_rdma_head,
@@ -3000,7 +3007,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
           if (min_head != std::numeric_limits<int>::max() and
               min_head >= last_rdma_head + num_max_rdma_chunked_send_tokens and
               lane_id < kNumRDMARanks) {
-            uccl::nvshmemi_ibgda_amo_nonfetch_add</*use_normal_mode=*/true>(
+            uccl::atomic_nonfetch_add</*use_normal_mode=*/true>(
                 reinterpret_cast<uint64_t>(rdma_channel_head.buffer(rdma_rank)),
                 reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
                 min_head - last_rdma_head,

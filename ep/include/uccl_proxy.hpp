@@ -15,10 +15,8 @@ class UcclProxy {
   UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr, size_t total_size,
             int rank, int node_idx, int local_rank, int num_experts = 0,
             int num_ranks = 0, int num_nodes = 0, bool use_normal_mode = false,
-            bool is_intranode = false,
-            bool gpu_buffer_is_host_allocated = false,
-            int barrier_local_rank = -1, int device_index = -1,
-            int nic_local_rank = -1);
+            bool is_intranode = false, int barrier_local_rank = -1,
+            int device_index = -1, int nic_local_rank = -1);
   ~UcclProxy();
 
   void start_sender();
@@ -139,6 +137,8 @@ class FifoProxy {
   std::unique_ptr<Proxy> proxy_;  // Underlying Proxy for RDMA operations
   std::unique_ptr<std::thread> thread_;
   std::atomic<bool> stop_flag_;
+  std::atomic<uint64_t> processed_count_{0};
+  void* atomic_buffer_ptr_ = nullptr;
 
   uintptr_t gpu_buffer_addr_;
   size_t total_size_;

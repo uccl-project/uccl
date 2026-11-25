@@ -158,7 +158,16 @@ conda install -c conda-forge "libstdcxx-ng>=12" "libgcc-ng>=12"
 source scripts/bootstrap.sh
 ```
 
-This single command installs `uv` if missing, creates a `.venv` virtualenv with Python 3.12, pins all non-CUDA dev tools (`black`, `clang-format`, `pytest`, `paramiko`, etc.) from `uv.lock` via `uv sync --group dev`, and then runs `ep/install_deps.sh` to install CUDA-specific packages (torch, etc.) with automatic hardware detection.
+This single command installs `uv` if missing, creates a `.venv` virtualenv with Python 3.12, pins all non-CUDA dev tools (`black`, `clang-format`, `pytest`, `paramiko`, etc.) from `uv.lock` via `uv sync --group dev`, installs the formatting commit hooks, and then runs `ep/install_deps.sh` to install CUDA-specific packages (torch, etc.) with automatic hardware detection.
+
+Enable formatting on commit once per clone (Python 3.10+):
+
+```bash
+bash scripts/install-hooks.sh
+```
+
+If a commit reformats files, review the changes, `git add` the intended files,
+and commit again. Run `./format.sh` to format all files covered by CI manually.
 
 For quick installation with docker, you can directly dive into: 
 * [`UCCL-Collective RDMA`](collective/rdma/README.md): Collectives for Nvidia/AMD GPUs + IB/RoCE RDMA NICs (currently support Nvidia and Broadcom NICs)

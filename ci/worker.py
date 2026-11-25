@@ -1,0 +1,327 @@
+"""One non-root worker per node; JSON lines on stdin/stdout coordinate each test."""
+
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+import re
+from pathlib import Path
+import signal
+import socket
+import subprocess
+import sys
+import traceback
+import xml.etree.ElementTree as ET
+
+from catalog import ROOT, read_catalog, target_interface
+from process import run
+from idle import GPU_LOCK_FILE, probe, skip_reason
+
+
+def emit(event, **values):
+    print(json.dumps({"event": event, **values}), flush=True)
+
+
+def receive():
+    while True:
+        line = sys.stdin.readline()
+        if not line:
+            raise EOFError("controller disconnected")
+        message = json.loads(line)
+        if "cancel" not in message:  # A peer may have failed just after we finished.
+            return message
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--target", required=True)
+    parser.add_argument("--node", type=int, default=0)
+    parser.add_argument("--host", help="SSH alias used by the controller")
+    parser.add_argument("--root", default="/var/lib/uccl-ci")
+    parser.add_argument("--local", action="store_true")
+    args = parser.parse_args()
+    os.chdir(ROOT)
+    if os.geteuid() == 0:
+        raise RuntimeError("CI must run as a non-root user")
+    catalog, targets = read_catalog()
+    target = targets[args.target]
+    ci_root = Path(args.root).resolve()
+    ci_root.mkdir(parents=True, exist_ok=True)
+    artifacts = ROOT.parent / "results" / f"node-{args.node}"
+    artifacts.mkdir(parents=True, exist_ok=True)
+    lock = open(ci_root / GPU_LOCK_FILE, "a")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        emit("ready", skip_reason="Another CI run holds this machine's lease")
+        return 0
+    guard = None
+    if not args.local or target["gpus"]:
+        guard = lambda: skip_reason(probe(target, ci_root, lease=False))
+        busy = skip_reason(probe(target, ci_root, lease=False, cleanup=True))
+        if busy:
+            emit("ready", skip_reason=busy)
+            return 0
+    filesystems = {}
+    for directory in (ci_root, ci_root / "cache", ROOT):
+        directory.mkdir(parents=True, exist_ok=True)
+        fs = subprocess.check_output(
+            ["findmnt", "-T", str(directory), "-no", "FSTYPE"], text=True
+        ).strip()
+        if fs.startswith("nfs") or fs == "cifs":
+            raise RuntimeError(f"CI requires local storage: {directory} uses {fs}")
+        filesystems[str(directory)] = fs
+    env = os.environ.copy()
+    env.pop("BASH_ENV", None)
+    env.pop("ENV", None)
+    env.update(target.get("env", {}))
+    env.update(
+        {
+            "CI_ROOT": str(ci_root),
+            "CI_REPO": str(ROOT),
+            "CI_TARGET": args.target,
+            "CI_ARTIFACTS": str(artifacts),
+            "CI_NODE": str(args.node),
+            # Some lab images share /etc/machine-id. Every process on this
+            # physical node gets one identity; different nodes must not use IPC.
+            "UHM_HOST_ID_OVERRIDE": f"uccl-ci-{args.target}-{args.node}",
+            "CI_JOBS": str(min(8, os.cpu_count() or 2)),
+            "PYTHONUNBUFFERED": "1",
+        }
+    )
+    metadata = {
+        "host": socket.gethostname(),
+        "uid": os.getuid(),
+        "filesystem": fs,
+        "filesystems": filesystems,
+        "target": args.target,
+        "node": args.node,
+        "source": str(ROOT),
+    }
+    if target["gpus"]:
+        host = args.host or target["hosts"][args.node]
+        interface = target_interface(target, host)
+        metadata.update(ssh_alias=host, interface=interface)
+        if "nominal_rdma_gbps" in target:
+            metadata["nominal_rdma_gbps"] = target["nominal_rdma_gbps"]
+        gpu_info = subprocess.check_output(
+            [
+                "nvidia-smi",
+                "--query-gpu=name,uuid,compute_cap,driver_version",
+                "--format=csv,noheader",
+            ],
+            text=True,
+        )
+        if len(gpu_info.strip().splitlines()) < target["gpus"]:
+            raise RuntimeError("Fewer GPUs than declared in config/targets.json")
+        metadata["gpus"] = gpu_info
+        env.update(
+            {
+                "CUDA_HOME": target["cuda"],
+                "CUDA_PATH": target["cuda"],
+                "SM": target["sm"],
+                # Command-line make variables override legacy Makefile := paths,
+                # and propagate into recursive makes without mixing toolkits.
+                "MAKEFLAGS": f"CUDA_HOME={target['cuda']} CUDA_PATH={target['cuda']} SM={target['sm']}",
+                "TORCH_CUDA_ARCH_LIST": str(int(target["sm"]) // 10)
+                + "."
+                + target["sm"][-1],
+                "UCCL_SOCKET_IFNAME": interface,
+                "NCCL_SOCKET_IFNAME": interface,
+                "GLOO_SOCKET_IFNAME": interface,
+            }
+        )
+        interfaces = json.loads(
+            subprocess.check_output(
+                ["ip", "-j", "-4", "addr", "show", "dev", interface]
+            )
+        )
+        address = next(
+            a["local"]
+            for i in interfaces
+            for a in i["addr_info"]
+            if a["family"] == "inet"
+        )
+    else:
+        address = "127.0.0.1"
+    lock_name = (
+        "cpu" if not target["gpus"] else ("cu128" if args.target == "l4" else "cu130")
+    )
+    lockfile = ROOT / f"ci/requirements/{lock_name}.lock"
+    fingerprint = hashlib.sha256(
+        lockfile.read_bytes() + sys.version.encode()
+    ).hexdigest()[:20]
+    env["CI_ENV_DIR"] = str(ci_root / "cache" / f"{lock_name}-{fingerprint}")
+    env["CI_LOCK"] = str(lockfile)
+    env["CI_DEPS"] = str(ci_root / "cache" / "dependencies")
+    env["PATH"] = (
+        env["CI_ENV_DIR"]
+        + "/bin:"
+        + env.get("CUDA_HOME", "/usr")
+        + "/bin:"
+        + env["PATH"]
+    )
+    env["PYTHONPATH"] = str(ROOT)
+    env["PIP_CACHE_DIR"] = str(ci_root / "cache" / "pip")
+    (artifacts / "machine.json").write_text(json.dumps(metadata, indent=2))
+    with open(artifacts / "toolchain.txt", "w") as stream:
+        for command in (
+            ["uname", "-a"],
+            ["g++", "--version"],
+            ["ldd", "--version"],
+            ["dpkg-query", "-W"],
+            *(
+                [[env["CUDA_HOME"] + "/bin/nvcc", "--version"]]
+                if target["gpus"]
+                else []
+            ),
+        ):
+            subprocess.run(
+                command, stdout=stream, stderr=subprocess.STDOUT, check=False
+            )
+    # All peers must pass admission before any dependency installation starts.
+    emit("ready", address=address, artifacts=str(artifacts), metadata=metadata)
+    request = receive()
+    busy = guard() if guard else None
+    if busy:
+        emit("initialized", skip_reason=busy)
+        return 0
+    initial = run(
+        ["bash", "ci/setup.sh", "environment"],
+        artifacts / "environment.log",
+        1800,
+        env,
+        True,
+        guard=guard,
+    )
+    if initial.get("skip_reason"):
+        emit("initialized", skip_reason=initial["skip_reason"])
+        return 0
+    if initial["exit_code"]:
+        emit("fatal", **initial)
+        return 1
+    os.environ.update(env)
+    emit("initialized")
+    selected = {t["id"]: t for t in catalog["tests"]}
+    built, broken, results = set(), {}, []
+    p2p_profile = None
+    for name in request["tests"]:
+        test = selected[name]
+        if not test["enabled"] or args.target not in test["targets"]:
+            raise RuntimeError(f"Test {name} is not enabled on {args.target}")
+        busy = guard() if guard else None
+        emit("available", id=name, skip_reason=busy)
+        if receive().get("action") != "prepare":
+            raise RuntimeError("Expected prepare instruction")
+        participating = args.node < test.get("nodes", 1)
+        setup_error = None
+        if participating:
+            for component in test.get("setup", []):
+                if component in {"p2p", "compression"} and component != p2p_profile:
+                    built.discard(component)
+                if component in broken:
+                    setup_error = broken[component]
+                    break
+                if component not in built:
+                    result = run(
+                        ["bash", "ci/setup.sh", component],
+                        artifacts / f"build-{component}.log",
+                        2400,
+                        env,
+                        True,
+                        guard=guard,
+                    )
+                    if result.get("skip_reason"):
+                        busy = result["skip_reason"]
+                        break
+                    if result["exit_code"]:
+                        broken[component] = setup_error = result
+                        break
+                    built.add(component)
+                    if component in {"p2p", "compression"}:
+                        p2p_profile = component
+        busy = busy or (guard() if guard else None)
+        emit(
+            "prepared",
+            id=name,
+            ok=setup_error is None,
+            participating=participating,
+            error=setup_error,
+            skip_reason=busy,
+        )
+        message = receive()
+        if message.get("action") != "run" or setup_error:
+            result = {
+                "exit_code": 125,
+                "error": setup_error or "peer setup failed",
+                "seconds": 0,
+            }
+        elif not participating:
+            result = {"exit_code": 0, "seconds": 0, "not_participating": True}
+        else:
+            test_env = {
+                **env,
+                **test.get("env", {}),
+                "MASTER_ADDR": request["master_addr"],
+                "MASTER_PORT": str(message["port"]),
+                "EXCHANGER_PORT": str(message["port"] + 10000),
+                "CI_NODES": str(test.get("nodes", 1)),
+                "CI_GPUS": str(max(1, test.get("gpus", 1))),
+                "CI_TEST_ID": name,
+                "CI_TEST_JUNIT": str(artifacts / f"{name}.pytest.xml"),
+            }
+            result = run(
+                [
+                    "bash",
+                    "-euo",
+                    "pipefail",
+                    "-c",
+                    "source ci/env.sh\n" + test["command"],
+                ],
+                artifacts / f"{name}.log",
+                test["timeout"],
+                test_env,
+                True,
+                name,
+                guard=guard,
+            )
+            if result["exit_code"] == 0 and not result.get("skip_reason"):
+                log_text = Path(result["log"]).read_text(errors="replace")
+                for pattern in test.get("failure_patterns", []):
+                    if re.search(pattern, log_text):
+                        result.update(
+                            exit_code=1, error=f"Fixture reported failure: {pattern}"
+                        )
+                        break
+            junit = Path(test_env["CI_TEST_JUNIT"])
+            if junit.exists() and not result.get("skip_reason"):
+                cases = ET.parse(junit).getroot().findall(".//testcase")
+                result["cases"] = len(cases)
+                result["skipped"] = sum(c.find("skipped") is not None for c in cases)
+                if result["exit_code"] == 0 and (
+                    not cases or result["skipped"] == len(cases)
+                ):
+                    result.update(
+                        exit_code=1,
+                        error="All selected pytest cases were skipped or no cases ran",
+                    )
+        result.update(id=name, tier=test["tier"], node=args.node, target=args.target)
+        results.append(result)
+        (artifacts / "results.json").write_text(json.dumps(results, indent=2))
+        emit("result", **result)
+    emit("complete")
+    return int(any(r["exit_code"] for r in results))
+
+
+if __name__ == "__main__":
+    # Raising lets process.run's finally terminate the owned child group.
+    def interrupted(signum, frame):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, interrupted)
+    try:
+        sys.exit(main())
+    except (Exception, KeyboardInterrupt) as error:
+        emit("fatal", error=str(error), traceback=traceback.format_exc())
+        sys.exit(1)

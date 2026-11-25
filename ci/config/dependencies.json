@@ -1,0 +1,18 @@
+{
+  "nixl": {
+    "repository": "ai-dynamo/nixl",
+    "commit": "234b9e3d76070dc219409c74f10c019fc8e0041d"
+  },
+  "abseil": {
+    "repository": "abseil/abseil-cpp",
+    "commit": "d7aaad83b488fd62bd51c81ecf16cd938532cc0a"
+  },
+  "nccl-tests": {
+    "repository": "NVIDIA/nccl-tests",
+    "commit": "9d26b8422ba76c098df996b96e13b8ddf3a71165"
+  },
+  "gdrcopy": {
+    "repository": "NVIDIA/gdrcopy",
+    "commit": "0f7366e73b019e7facf907381f6b0b2f5a1576e4"
+  }
+}

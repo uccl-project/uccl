@@ -84,13 +84,16 @@ class EpollServer {
 
   void handle_read(int fd);
 
-  void parse_messages(Connection& conn);
+  bool parse_messages(Connection& conn);
 
   void handle_write(int fd);
 
   void modify_epoll_out(int fd, bool enable);
 
   void remove_connection(int fd);
+
+  // Same as remove_connection(); the caller must hold conns_mtx_.
+  void remove_connection_locked(int fd);
 
  private:
   int port_;

@@ -22,6 +22,7 @@ lib_src = $(wildcard *.cc)
 lib_src := $(filter-out %_main.cc,$(lib_src))
 lib_src := $(filter-out %_test.cc,$(lib_src))
 lib_src := $(filter-out %_plugin.cc,$(lib_src))
+lib_src := $(filter-out mccl_plugin_musa.cc,$(lib_src))
 lib_obj = $(lib_src:.cc=.o)
 
 test_src = $(wildcard *_test.cc)
