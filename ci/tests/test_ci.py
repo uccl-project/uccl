@@ -198,6 +198,80 @@ class AdmissionTests(unittest.TestCase):
                 idle.gpu_jobs(dict(gpus=1, capabilities=["cuda"]), set()), []
             )
 
+    def desktop_xml(
+        self, utilization=5, memory="18 MiB", name="/usr/lib/xorg/Xorg", kind="G"
+    ):
+        return self.xml(50, utilization).replace(
+            "<pid>50</pid>",
+            f"<pid>50</pid><type>{kind}</type><process_name>{name}</process_name>"
+            f"<used_memory>{memory}</used_memory>",
+        )
+
+    def test_light_desktop_activity_is_allowed(self):
+        for name in idle.DESKTOP_PROCESSES:
+            with (
+                self.subTest(name=name),
+                patch(
+                    "idle.query",
+                    return_value=self.desktop_xml(name=name, memory="256 MiB"),
+                ),
+            ):
+                self.assertEqual(
+                    idle.gpu_jobs(dict(gpus=1, capabilities=["cuda"]), set()), []
+                )
+
+    def test_desktop_allowance_requires_known_graphics_and_low_resources(self):
+        cases = [
+            {"utilization": 6},
+            {"memory": "257 MiB"},
+            {"memory": "N/A"},
+            {"memory": ""},
+            {"name": "/tmp/Xorg"},
+            {"name": "/usr/bin/blender"},
+            {"kind": "C"},
+            {"kind": "C+G"},
+        ]
+        for case in cases:
+            with (
+                self.subTest(case=case),
+                patch("idle.query", return_value=self.desktop_xml(**case)),
+            ):
+                self.assertTrue(
+                    idle.gpu_jobs(
+                        dict(gpus=1, capabilities=["cuda"]), set(), settle=False
+                    )
+                )
+
+    def test_desktop_memory_limit_is_combined(self):
+        xml = self.desktop_xml(memory="128 MiB").replace(
+            "</processes>",
+            "<process_info><pid>51</pid><type>G</type>"
+            "<process_name>/usr/bin/gnome-shell</process_name>"
+            "<used_memory>129 MiB</used_memory></process_info></processes>",
+        )
+        with patch("idle.query", return_value=xml):
+            self.assertTrue(
+                idle.gpu_jobs(dict(gpus=1, capabilities=["cuda"]), set(), settle=False)
+            )
+
+    def test_desktop_does_not_hide_compute_or_another_gpu(self):
+        target = dict(gpus=1, capabilities=["cuda"])
+        compute = self.desktop_xml().replace(
+            "</processes>",
+            "<process_info><pid>60</pid><type>C</type></process_info></processes>",
+        )
+        with patch("idle.query", return_value=compute):
+            self.assertIn(
+                "GPU process PID 60", idle.gpu_jobs(target, set(), settle=False)
+            )
+        # A desktop on GPU 0 must not explain activity with no context on GPU 1.
+        two_gpus = self.desktop_xml().replace(
+            "</nvidia_smi_log>",
+            self.xml(utilization=1).replace("<nvidia_smi_log>", ""),
+        )
+        with patch("idle.query", return_value=two_gpus):
+            self.assertTrue(idle.gpu_jobs(dict(target, gpus=2), set(), settle=False))
+
     def test_gpu_activity_without_visible_context_is_busy(self):
         with patch("idle.query", return_value=self.xml(utilization=20)):
             self.assertTrue(

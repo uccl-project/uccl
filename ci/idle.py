@@ -14,6 +14,9 @@ import xml.etree.ElementTree as ET
 
 # Keep the on-disk name shared with already-running workers during the rename.
 GPU_LOCK_FILE = "hardware.lock"
+DESKTOP_PROCESSES = {"/usr/lib/xorg/Xorg", "/usr/bin/gnome-shell"}
+DESKTOP_MAX_UTILIZATION = 5
+DESKTOP_MAX_MEMORY_MIB = 256
 
 
 def processes(proc=Path("/proc")):
@@ -62,6 +65,25 @@ def query(command):
     )
 
 
+def desktop_utilization_limit(contexts, own):
+    """Tolerate a small desktop load only when all foreign contexts explain it."""
+    desktop = [p for p in contexts if int(p.findtext("pid")) not in own]
+    if not desktop:
+        return 0
+    memory = 0.0
+    for process in desktop:
+        if (
+            process.findtext("type") != "G"
+            or process.findtext("process_name") not in DESKTOP_PROCESSES
+        ):
+            return 0
+        used = re.fullmatch(r"(\d+(?:\.\d+)?) MiB", process.findtext("used_memory", ""))
+        if used is None:
+            return 0
+        memory += float(used[1])
+    return DESKTOP_MAX_UTILIZATION if memory <= DESKTOP_MAX_MEMORY_MIB else 0
+
+
 def gpu_jobs(target, own, settle=True):
     if not target.get("gpus"):
         # A CPU-only suite may be directed to a lab GPU node with --hosts.
@@ -74,7 +96,7 @@ def gpu_jobs(target, own, settle=True):
         else:
             return []
     caps = target.get("capabilities", [])
-    reasons, pids, usage = [], set(), []
+    reasons, pids, usage, limits = [], set(), [], []
     if "cuda" in caps:
         # XML includes graphics and compute contexts, not just utilization.
         devices = ET.fromstring(query(["nvidia-smi", "-q", "-x"])).findall("gpu")
@@ -82,6 +104,9 @@ def gpu_jobs(target, own, settle=True):
             contexts = device.find("processes")
             if contexts is None:
                 raise ValueError("NVIDIA process information unavailable")
+            limits.append(
+                desktop_utilization_limit(contexts.findall("process_info"), own)
+            )
             for process in contexts.findall("process_info"):
                 if process.findtext("type") != "G":
                     pids.add(int(process.findtext("pid")))
@@ -98,14 +123,18 @@ def gpu_jobs(target, own, settle=True):
         usage = [
             float(v["GPU use (%)"]) for k, v in devices.items() if k.startswith("card")
         ]
+        limits = [0] * len(usage)
     else:
         raise ValueError("No activity probe for this accelerator")
     if len(usage) < target["gpus"] or any(not 0 <= value <= 100 for value in usage):
         raise ValueError("GPU activity information is incomplete")
     reasons.extend(f"GPU process PID {pid}" for pid in sorted(pids - own))
     # Our currently running CI child explains utilization; foreign contexts
-    # are still checked above. Before launch, even unattributed activity skips.
-    if not pids.intersection(own) and any(value > 0 for value in usage):
+    # are still checked above. Before launch, only a bounded desktop load is
+    # allowed; unattributed activity still skips.
+    if not pids.intersection(own) and any(
+        value > limit for value, limit in zip(usage, limits)
+    ):
         if settle and not reasons:
             # Utilization samples can still include the CI kernel that just
             # exited. Recheck once; a live foreign context never gets this grace.
