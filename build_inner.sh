@@ -57,15 +57,17 @@ rename_to_abi3() {
 }
 
 # nvcc arch flags for every entry of a TORCH_CUDA_ARCH_LIST such as "9.0",
-# "8.9;12.0" or "9.0+PTX 10.0a". Each entry gets what -arch=sm_XX gives
-# (SASS and PTX), so a single-entry list builds exactly as before.
+# "8.9;12.0" or "9.0+PTX 10.0a". Keep the usual SASS and PTX for generic
+# targets. Specialized targets get SASS and optionally their matching PTX.
 cuda_gencode_flags() {
   local entry num flags=()
   for entry in ${1//[;,]/ }; do
     num="${entry%+PTX}"
     num="${num//./}"
-    flags+=("-gencode=arch=compute_${num},code=sm_${num}"
-      "-gencode=arch=compute_${num},code=compute_${num}")
+    flags+=("-gencode=arch=compute_${num},code=sm_${num}")
+    if [[ "$entry" == *+PTX || "$num" != *[af] ]]; then
+      flags+=("-gencode=arch=compute_${num},code=compute_${num}")
+    fi
   done
   echo "${flags[*]}"
 }
