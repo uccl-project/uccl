@@ -500,6 +500,9 @@ class Buffer {
     cudaDeviceProp prop{};
     CUDA_CHECK(cudaGetDeviceProperties(&prop, device_index));
     num_device_sms = prop.multiProcessorCount;
+#ifndef DISABLE_SM90_FEATURES
+    shared_mem_per_block_optin = prop.sharedMemPerBlockOptin;
+#endif
 
     if (num_nvl_bytes > 0) {
       size_t total_bytes = static_cast<size_t>(num_nvl_bytes) +
@@ -887,7 +890,7 @@ class Buffer {
         num_experts, num_scales, scale_token_stride, scale_hidden_stride,
         buffer_ptrs_gpu, rank, num_ranks, comm_stream, config.num_sms,
         config.num_max_nvl_chunked_send_tokens,
-        config.num_max_nvl_chunked_recv_tokens);
+        config.num_max_nvl_chunked_recv_tokens, shared_mem_per_block_optin);
 
     std::optional<EventHandle> event;
     if (async) {
@@ -2106,6 +2109,7 @@ class Buffer {
   int rdma_rank{0}, nvl_rank{0};
   int num_rdma_ranks{1}, num_nvl_ranks{1};
   int num_device_sms{0};
+  std::size_t shared_mem_per_block_optin{0};
   // Copy-engine dispatch: one stream per peer and fork / join events
   std::vector<cudaStream_t> ce_streams;
   std::vector<cudaEvent_t> ce_join_events;
