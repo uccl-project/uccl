@@ -1,5 +1,11 @@
 # UCCL Lite NCCL AG/RS/AR compatibility layer
 
+For the **strict single-host eight-L4 BF16 replacement**, use
+[LOCAL8.md](LOCAL8.md) and `make nccl-local8-strict`. It shares the multi-node
+ABI/control infrastructure, forbids native NCCL fallback, and runs unchanged
+MPI nccl-tests. Its correctness and performance evidence is recorded separately
+from the historical proxy and serving results below.
+
 For the **strict two-host NCCL `.so` replacement**, use [MSCCLPP.md](MSCCLPP.md).
 It reuses MSCCL++ runtime components with UCCL Lite collectives, forbids native
 NCCL fallback, and has passed the recorded FP32 AG/AR/RS 1-KiB–1-GiB qualification

@@ -9,6 +9,8 @@
 
 ## Design principles
 
+- **Provide a drop-in NCCL replacement.** Preserve NCCL's API and ABI so
+  supported workloads can use UCCL Lite without application code changes.
 - **Exploit PCIe hierarchy.** Map collective stages to PCIe and NUMA groups.
   Reduce within groups before exchanging across them, then distribute results
   locally to limit cross-socket traffic.
@@ -117,9 +119,9 @@ workload from Testbed 1's SGLang serving and DDP/FSDP training.
 <table>
   <tr><th>AllReduce</th><th>AllGather</th><th>ReduceScatter</th></tr>
   <tr>
-    <td width="33%"><img src="docs/assets/collectives-8l4-allreduce-overview.svg" alt="8xL4 GPU AllReduce: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (default)" width="100%"></td>
-    <td width="33%"><img src="docs/assets/collectives-8l4-allgather-overview.svg" alt="8xL4 GPU AllGather: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (default)" width="100%"></td>
-    <td width="33%"><img src="docs/assets/collectives-8l4-reducescatter-overview.svg" alt="8xL4 GPU ReduceScatter: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (default)" width="100%"></td>
+    <td width="33%"><a href="benchmarks/data/nccl_local8_strict_20261119/README.md"><img src="docs/assets/collectives-8l4-dropin-allreduce.svg" alt="8xL4 GPU AllReduce: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (default)" width="100%"></a></td>
+    <td width="33%"><a href="benchmarks/data/nccl_local8_strict_20261119/README.md"><img src="docs/assets/collectives-8l4-dropin-allgather.svg" alt="8xL4 GPU AllGather: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (default)" width="100%"></a></td>
+    <td width="33%"><a href="benchmarks/data/nccl_local8_strict_20261119/README.md"><img src="docs/assets/collectives-8l4-dropin-reducescatter.svg" alt="8xL4 GPU ReduceScatter: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (default)" width="100%"></a></td>
   </tr>
 </table>
 
@@ -128,9 +130,9 @@ workload from Testbed 1's SGLang serving and DDP/FSDP training.
 <table>
   <tr><th>AllReduce</th><th>AllGather</th><th>ReduceScatter</th></tr>
   <tr>
-    <td width="33%"><img src="docs/assets/collectives-8l4-shm-allreduce-overview.svg" alt="8xL4 SHM AllReduce: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (default)" width="100%"></td>
-    <td width="33%"><img src="docs/assets/collectives-8l4-shm-allgather-overview.svg" alt="8xL4 SHM AllGather: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (default)" width="100%"></td>
-    <td width="33%"><img src="docs/assets/collectives-8l4-shm-reducescatter-overview.svg" alt="8xL4 SHM ReduceScatter: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (default)" width="100%"></td>
+    <td width="33%"><a href="benchmarks/data/nccl_local8_strict_20261119/README.md"><img src="docs/assets/collectives-8l4-shm-dropin-allreduce.svg" alt="8xL4 SHM AllReduce: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (default)" width="100%"></a></td>
+    <td width="33%"><a href="benchmarks/data/nccl_local8_strict_20261119/README.md"><img src="docs/assets/collectives-8l4-shm-dropin-allgather.svg" alt="8xL4 SHM AllGather: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (default)" width="100%"></a></td>
+    <td width="33%"><a href="benchmarks/data/nccl_local8_strict_20261119/README.md"><img src="docs/assets/collectives-8l4-shm-dropin-reducescatter.svg" alt="8xL4 SHM ReduceScatter: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput, UCCL Lite, NCCL CE (tuned), NCCL SM (tuned), NCCL (default)" width="100%"></a></td>
   </tr>
 </table>
 
@@ -273,6 +275,7 @@ The `Process (CPU)` operators can be used in different collectives:
 - [Collective algorithms](docs/collectives.md) and [two-node design](docs/multinode.md)
 - [Fusion design and workloads](docs/fusion.md)
 - [NCCL drop-in and SGLang integration](integration/nccl_lite/README.md)
+- [Strict eight-L4 NCCL `.so` replacement and nccl-tests validation](integration/nccl_lite/LOCAL8.md)
 - [Full measurement files](benchmarks/README.md) and [validation limits](docs/validation.md)
 
 UCCL Lite provides specialized research kernels and benchmarks, with an

@@ -144,6 +144,10 @@ include integration/nccl_lite/policy.mk
 nccl-dropin-figures:
 	MPLCONFIGDIR=$(abspath $(BUILD)/mplconfig) python3 -B scripts/plot_nccl_dropin.py --preview
 
+.PHONY: nccl-local8-figures
+nccl-local8-figures:
+	MPLCONFIGDIR=$(abspath $(BUILD)/mplconfig) python3 -B scripts/plot_nccl_local8.py --preview
+
 # Track named policy changes even when an existing BUILD directory is reused.
 # Experimental EXTRA_NVCC_FLAGS changes still require a fresh BUILD directory.
 .PHONY: uccl_lite_nccl_policy_force
@@ -158,6 +162,54 @@ $(BUILD)/nccl_lite/build.policy: uccl_lite_nccl_policy_force
 .PHONY: nccl-mscclpp nccl-mscclpp-strict
 nccl-mscclpp: nccl-mscclpp-strict
 nccl-mscclpp-strict: $(BUILD)/nccl_lite/strict/libnccl.so.2 $(BUILD)/nccl_lite/libuccl_lite_nccl_mscclpp.so
+
+# Eight-L4 BF16 transport, sharing the strict ABI and CPU control protocol.
+# This target has no native NCCL or MSCCL++ link dependency.
+.PHONY: nccl-local8-strict uccl_lite_local8_flags_force
+nccl-local8-strict: $(BUILD)/nccl_local8/strict/libnccl.so.2
+
+LOCAL8_PACKET_BYTES ?= 1048576
+LOCAL8_PACKET_FLAGS = -DUCCL_LITE_MP_PACKET_BYTES=$(LOCAL8_PACKET_BYTES) -DUCCL_LITE_MP_AG_BLOCKS=64 -DUCCL_LITE_MP_AG_SMALL_BLOCKS=1 -DUCCL_LITE_MP_AG_SINGLE_PRODUCERS=32 -DUCCL_LITE_MP_WAIT_LANES=8 -DUCCL_LITE_MP_RS_BLOCKS=64 -DUCCL_LITE_MP_RS_SINGLE_TILE_PRODUCERS=56
+LOCAL8_HOST_FLAGS = -DUCCL_LITE_MP_PACKET_BYTES=$(LOCAL8_PACKET_BYTES) -DUCCL_LITE_MP_AG_PIPELINE_MIN_BYTES=4194304 -DUCCL_LITE_MP_PARALLEL_RS_SINGLE_TILE -DUCCL_LITE_MP_POLL_WORKERS -DUCCL_LITE_MP_GLOBAL_WORKER_ISOLATION
+LOCAL8_OBJECTS = $(BUILD)/nccl_local8/frontend.o $(BUILD)/nccl_local8/multiprocess.o $(BUILD)/nccl_local8/packet.o $(BUILD)/cpu_router/cpu_executor.o
+
+uccl_lite_local8_flags_force:
+
+$(BUILD)/nccl_local8/build.flags: uccl_lite_local8_flags_force
+	mkdir -p $(@D)
+	@printf '%s\n' '$(NVCC) $(NVCC_FLAGS) $(LOCAL8_PACKET_FLAGS)' '$(CXX) $(LOCAL8_HOST_FLAGS)' '$(CUDA_HOME) $(NCCL_HOME)' > $@.tmp
+	@cmp -s $@.tmp $@ || mv $@.tmp $@
+	@rm -f $@.tmp
+
+$(BUILD)/nccl_local8/packet.o: src/collectives/multiprocess_packet_ag.cu $(BUILD)/nccl_local8/build.flags
+	$(NVCC) $(NVCC_FLAGS) $(LOCAL8_PACKET_FLAGS) -std=c++17 -Xcompiler=-fPIC -Iinclude -c $< -o $@
+
+$(BUILD)/nccl_local8/frontend.o: integration/nccl_lite/mscclpp_strict.cc $(BUILD)/nccl_local8/build.flags
+	$(CXX) -O3 -std=c++17 -fPIC -pthread -MMD -MP -DUCCL_LITE_NCCL_LOCAL8 -Iinclude -I$(CUDA_HOME)/include -I$(NCCL_HOME)/include -c $< -o $@
+
+$(BUILD)/nccl_local8/multiprocess.o: src/collectives/multiprocess_collectives.cc $(BUILD)/nccl_local8/build.flags
+	$(CXX) -O3 -std=c++17 -fPIC -pthread -MMD -MP $(LOCAL8_HOST_FLAGS) -Iinclude -I$(CUDA_HOME)/include -c $< -o $@
+
+$(BUILD)/nccl_local8/libuccl_lite_nccl_local8.so: $(LOCAL8_OBJECTS) integration/nccl_lite/mscclpp_exports.version
+	$(CXX) -shared -pthread $(LOCAL8_OBJECTS) -Wl,--version-script=integration/nccl_lite/mscclpp_exports.version -Wl,-soname,libnccl.so.2 -Wl,-z,defs -L$(CUDA_HOME)/lib64 -lcudart -Wl,-rpath,$(CUDA_HOME)/lib64 -o $@
+
+$(BUILD)/nccl_local8/strict/libnccl.so.2: $(BUILD)/nccl_local8/libuccl_lite_nccl_local8.so
+	mkdir -p $(@D)
+	ln -sfn ../libuccl_lite_nccl_local8.so $@
+
+-include $(wildcard $(BUILD)/nccl_local8/*.d)
+
+$(BUILD)/nccl_local8/strict_abi_check: tests/nccl_mscclpp/strict_abi.cu
+	mkdir -p $(@D)
+	$(NVCC) $(NVCC_FLAGS) -std=c++17 -DUCCL_LITE_ABI_LOCAL8 -DUCCL_LITE_ABI_EXTENDED -DUCCL_LITE_ABI_BOUNDARY512 -DUCCL_LITE_ABI_SERIAL_PACKET -DUCCL_LITE_ABI_MEDIUM64 -DUCCL_LITE_ABI_MEDIUM128 $(MPI_INC) -I$(NCCL_HOME)/include $< -o $@ $(MPI_LIB) -L$(NCCL_HOME)/lib -lnccl -Xlinker -rpath=$(abspath $(NCCL_HOME)/lib)
+
+$(BUILD)/nccl_local8/reference_timing_check: tests/nccl_mscclpp/local8_reference.cu
+	mkdir -p $(@D)
+	$(NVCC) $(NVCC_FLAGS) -std=c++17 $(MPI_INC) -I$(NCCL_HOME)/include $< -o $@ $(MPI_LIB) -L$(NCCL_HOME)/lib -lnccl -Xlinker -rpath=$(abspath $(NCCL_HOME)/lib)
+
+$(BUILD)/nccl_local8/queue_check: tests/nccl_mscclpp/local8_queue.cu
+	mkdir -p $(@D)
+	$(NVCC) $(NVCC_FLAGS) -std=c++17 $(MPI_INC) -I$(NCCL_HOME)/include $< -o $@ $(MPI_LIB) -L$(NCCL_HOME)/lib -lnccl -Xlinker -rpath=$(abspath $(NCCL_HOME)/lib)
 
 $(BUILD)/nccl_lite/libuccl_lite_nccl_strict.so: integration/nccl_lite/mscclpp_strict.cc $(BUILD)/nccl_lite/mscclpp_backend.o include/uccl_lite/collectives.h integration/nccl_lite/host_control.h integration/nccl_lite/mscclpp_exports.version
 	$(CXX) -O3 -std=c++17 -fPIC -shared -pthread -Iinclude -I$(CUDA_HOME)/include -I$(NCCL_HOME)/include $< $(BUILD)/nccl_lite/mscclpp_backend.o -Wl,--version-script=integration/nccl_lite/mscclpp_exports.version -Wl,-soname,libnccl.so.2 -L$(MSCCLPP_IB_BUILD)/lib -lmscclpp -Wl,-rpath,$(MSCCLPP_IB_BUILD)/lib -L$(CUDA_HOME)/lib64 -lcudart -Wl,-rpath,$(CUDA_HOME)/lib64 $(UCCL_LITE_NCCL_POLICY_LIBS) $(NCCL_STRICT_EXTRA_LIBS) -o $@

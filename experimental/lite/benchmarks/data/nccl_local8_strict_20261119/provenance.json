@@ -1,0 +1,27 @@
+{
+  "library_sha256": "a613c4f85541aaf39c5e08b4db2d12ee817b29942cbd0cb8dde423df0cb854c7",
+  "profile_sha256": "a95044b9b27037b903c6a6e15bb7050a35f523b687773b905f06cd14f8a41e82",
+  "host_identity": "7bd46ff6b5a399b84e4c4662a8151f8a101e192ffbbac7275b0740ec1390ef3c",
+  "nccl_sha256": "1c8618b866734cbdd5401715d6178be763ece283b7f808ecf86dedab211162c1",
+  "nccl_tests_revision": "afd59abab774a6a4b492eb344bd0c845a0b7bb4d",
+  "nccl_tests_binaries": {
+    "all_gather_perf": "70a9b175c7ada4ca8fb1cf4de3c4d3258f42fc04df088aa73a9b9e0b08b34774",
+    "reduce_scatter_perf": "b2ca806e654647a1a8d6fcc008f19feee957c8d8b05c0c169ac3486866675824",
+    "all_reduce_perf": "ce27146217ad036c83edeb3ea9ed47ecf10d18c4c3bce8446352e158599a2970"
+  },
+  "reference_binaries": {
+    "ar": "3d1b584e218df5c3cec99a7a7b65423f7b36a031f20407a8924527c7e963ad44",
+    "ag": "3d1b584e218df5c3cec99a7a7b65423f7b36a031f20407a8924527c7e963ad44",
+    "rs": "f6e80074af2c70e625932743f6af343b4a161e50cc7fc63d5b9517a02a94a45d"
+  },
+  "warmup": 5,
+  "iterations": 10,
+  "repeats": 3,
+  "jobs_per_layout": 2,
+  "paired_timed_calls": 11340,
+  "paired_warmup_calls": 5670,
+  "per_size_best_variant": false,
+  "timing": "Fresh per-call comparison against the exact original eight-L4 README binaries.\n\nBoth sides use input-ready maximum-rank CUDA events and full output checks.\nThe original is one process/eight GPUs; the NCCL ABI client is eight processes.\nThe original has AR in place and AG/RS out of place; both candidate layouts are\ncompared to those same original paths. No best-per-size or trimmed samples.\n",
+  "scope": "Eight L4, BF16 AG/AR/RS, eager, one GPU/process, powers of two 1 KiB\u20131 GiB, both layouts; zero measured slowdown against original UCCL, not native NCCL parity",
+  "mpi_version": "mpirun (Open MPI) 4.1.2"
+}

@@ -4,10 +4,21 @@
 #include <cstdio>
 #include <stdexcept>
 #include <vector>
+#include <cuda_bf16.h>
 #include <cuda_runtime.h>
 #include <mpi.h>
 #include <nccl.h>
 #include <unistd.h>
+
+#ifdef UCCL_LITE_ABI_LOCAL8
+using Element = __nv_bfloat16;
+constexpr auto kType = ncclBfloat16;
+constexpr int kLocalRanks = 8;
+#else
+using Element = float;
+constexpr auto kType = ncclFloat;
+constexpr int kLocalRanks = 4;
+#endif
 
 void check(cudaError_t result) {
   if (result != cudaSuccess)
@@ -20,16 +31,15 @@ void check(ncclResult_t result) {
 float value(size_t index, int rank, int generation) {
   return float(int(index % 17) - 8) * (rank + 1) + generation;
 }
-void call(int op, float const* input, float* output, size_t count,
+void call(int op, Element const* input, Element* output, size_t count,
           ncclComm_t comm, cudaStream_t stream) {
   if (op == 1)
-    check(ncclAllGather(input, output, count, ncclFloat, comm, stream));
+    check(ncclAllGather(input, output, count, kType, comm, stream));
   else if (op == 2)
-    check(ncclReduceScatter(input, output, count, ncclFloat, ncclSum, comm,
-                            stream));
-  else
     check(
-        ncclAllReduce(input, output, count, ncclFloat, ncclSum, comm, stream));
+        ncclReduceScatter(input, output, count, kType, ncclSum, comm, stream));
+  else
+    check(ncclAllReduce(input, output, count, kType, ncclSum, comm, stream));
 }
 int main(int argc, char** argv) {
   MPI_Init(&argc, &argv);
@@ -38,24 +48,24 @@ int main(int argc, char** argv) {
   MPI_Comm_size(MPI_COMM_WORLD, &world);
   try {
     if (world != 8)
-      throw std::runtime_error("requires eight ranks on two hosts");
-    check(cudaSetDevice(rank % 4));
+      throw std::runtime_error("requires eight ranks on the profiled topology");
+    check(cudaSetDevice(rank % kLocalRanks));
     cudaStream_t streams[2];
     for (auto& s : streams)
       check(cudaStreamCreateWithFlags(&s, cudaStreamNonBlocking));
 #ifdef UCCL_LITE_ABI_MEDIUM128
-    size_t maxElements = (128 << 20) / 4;
+    size_t maxElements = (128 << 20) / sizeof(Element);
 #elif defined(UCCL_LITE_ABI_MEDIUM64)
-    size_t maxElements = (64 << 20) / 4;
+    size_t maxElements = (64 << 20) / sizeof(Element);
 #elif defined(UCCL_LITE_ABI_EXTENDED)
-    size_t maxElements = (32 << 20) / 4;
+    size_t maxElements = (32 << 20) / sizeof(Element);
 #else
-    size_t maxElements = (16 << 20) / 4;
+    size_t maxElements = (16 << 20) / sizeof(Element);
 #endif
     size_t guard = 33 + rank;
-    float *a, *b;
-    check(cudaMalloc(&a, (maxElements + 128) * sizeof(float)));
-    check(cudaMalloc(&b, (maxElements + 128) * sizeof(float)));
+    Element *a, *b;
+    check(cudaMalloc(&a, (maxElements + 128) * sizeof(Element)));
+    check(cudaMalloc(&b, (maxElements + 128) * sizeof(Element)));
     int calls = 0;
     for (int lifetime = 0; lifetime < 2; ++lifetime) {
       ncclUniqueId id;
@@ -92,19 +102,19 @@ int main(int argc, char** argv) {
 #endif
                              8388608UL}) {
           for (int op = 1; op <= 3; ++op) {
-            size_t count = bytes / (op == 3 ? 4 : 32);
+            size_t count = bytes / (sizeof(Element) * (op == 3 ? 1 : 8));
             size_t ni = count * (op == 2 ? 8 : 1);
             size_t no = count * (op == 1 ? 8 : 1);
             bool inplace = (rank + generation) % 2;
             size_t sourceOffset = inplace && op == 1 ? rank * count : 0;
             size_t targetOffset = inplace && op == 2 ? rank * count : 0;
-            std::vector<float> input(maxElements + 128, -12345.f);
-            std::vector<float> output(input.size(), -12345.f);
+            std::vector<Element> input(maxElements + 128, -12345.f);
+            std::vector<Element> output(input.size(), -12345.f);
             for (size_t i = 0; i < ni; ++i)
               input[guard + sourceOffset + i] = value(i, rank, generation);
             auto stream = streams[calls % 2];
-            float* inputAllocation = a;
-            float* otherAllocation = b;
+            Element* inputAllocation = a;
+            Element* otherAllocation = b;
 #ifdef UCCL_LITE_ABI_EXTENDED
             // Graphs cached by extent must not keep the first client address.
             if (generation & 1) {
@@ -113,13 +123,13 @@ int main(int argc, char** argv) {
             }
 #endif
             check(cudaMemcpyAsync(inputAllocation, input.data(),
-                                  input.size() * sizeof(float),
+                                  input.size() * sizeof(Element),
                                   cudaMemcpyHostToDevice, stream));
             if (!inplace)
               check(cudaMemcpyAsync(otherAllocation, output.data(),
-                                    output.size() * sizeof(float),
+                                    output.size() * sizeof(Element),
                                     cudaMemcpyHostToDevice, stream));
-            float* outputBase = inplace ? inputAllocation : otherAllocation;
+            Element* outputBase = inplace ? inputAllocation : otherAllocation;
             if (rank == 0)
               std::fprintf(stderr,
                            "strict ABI begin lifetime=%d generation=%d "
@@ -145,11 +155,12 @@ int main(int argc, char** argv) {
             call(op, inputAllocation + guard + sourceOffset,
                  outputBase + guard + targetOffset, count, comm, stream);
             check(cudaMemcpyAsync(output.data(), outputBase,
-                                  output.size() * sizeof(float),
+                                  output.size() * sizeof(Element),
                                   cudaMemcpyDeviceToHost, stream));
             check(cudaStreamSynchronize(stream));
             for (size_t i = 0; i < output.size(); ++i) {
-              float expected = inplace ? input[i] : -12345.f;
+              float expected =
+                  inplace ? float(input[i]) : float(Element(-12345.f));
               if (i >= guard + targetOffset && i < guard + targetOffset + no) {
                 size_t index = i - guard - targetOffset;
                 if (op == 1)
@@ -161,7 +172,7 @@ int main(int argc, char** argv) {
                                       peer, generation);
                 }
               }
-              if (output[i] != expected)
+              if (float(output[i]) != float(Element(expected)))
                 throw std::runtime_error("full-buffer/guard mismatch");
             }
             ++calls;
@@ -170,9 +181,9 @@ int main(int argc, char** argv) {
 #ifdef UCCL_LITE_ABI_EXTENDED
         // The graph cache must tolerate allocation recycling, not just two
         // long-lived addresses. Every preceding call is complete above.
-        float** recycled = (generation & 1) ? &b : &a;
+        Element** recycled = (generation & 1) ? &b : &a;
         check(cudaFree(*recycled));
-        check(cudaMalloc(recycled, (maxElements + 128) * sizeof(float)));
+        check(cudaMalloc(recycled, (maxElements + 128) * sizeof(Element)));
 #endif
       }
       check(cudaGraphLaunch(emptyExec, streams[1]));
@@ -181,26 +192,26 @@ int main(int argc, char** argv) {
       check(cudaGraphDestroy(empty));
       // Unsupported requests must return errors, never execute NCCL.
       check(ncclGroupStart());
-      if (ncclAllReduce(a + guard, b + guard, 256, ncclFloat, ncclSum, comm,
-                        streams[0]) != ncclInvalidUsage)
+      if (ncclAllReduce(a + guard, b + guard, 1024 / sizeof(Element), kType,
+                        ncclSum, comm, streams[0]) != ncclInvalidUsage)
         throw std::runtime_error("grouped call did not reject");
       check(ncclGroupEnd());
-      if (ncclAllReduce(a + guard, b + guard, 256, ncclFloat, ncclProd, comm,
-                        streams[0]) != ncclInvalidUsage)
+      if (ncclAllReduce(a + guard, b + guard, 1024 / sizeof(Element), kType,
+                        ncclProd, comm, streams[0]) != ncclInvalidUsage)
         throw std::runtime_error("unsupported reduction did not reject");
-      if (ncclAllReduce(a + guard, b + guard, 1, ncclFloat, ncclSum, comm,
+      if (ncclAllReduce(a + guard, b + guard, 1, kType, ncclSum, comm,
                         streams[0]) != ncclInvalidUsage)
         throw std::runtime_error("unsupported extent did not reject");
       cudaGraph_t graph;
       check(cudaStreamBeginCapture(streams[0], cudaStreamCaptureModeGlobal));
-      if (ncclAllReduce(a + guard, b + guard, 256, ncclFloat, ncclSum, comm,
-                        streams[0]) != ncclInvalidUsage)
+      if (ncclAllReduce(a + guard, b + guard, 1024 / sizeof(Element), kType,
+                        ncclSum, comm, streams[0]) != ncclInvalidUsage)
         throw std::runtime_error("capture did not reject");
       check(cudaStreamEndCapture(streams[0], &graph));
       check(cudaGraphDestroy(graph));
       check(ncclCommFinalize(comm));
-      if (ncclAllReduce(a + guard, b + guard, 256, ncclFloat, ncclSum, comm,
-                        streams[0]) != ncclInvalidArgument)
+      if (ncclAllReduce(a + guard, b + guard, 1024 / sizeof(Element), kType,
+                        ncclSum, comm, streams[0]) != ncclInvalidArgument)
         throw std::runtime_error(
             "finalized handle did not return ncclInvalidArgument");
       check(ncclCommDestroy(comm));

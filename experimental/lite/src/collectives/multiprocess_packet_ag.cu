@@ -4,6 +4,24 @@
 #include <cuda_runtime.h>
 #include <cstdlib>
 
+// Build-time launch geometry for explicit strict-local candidate experiments.
+// Legacy integrations keep their original 32-block configuration.
+#ifndef UCCL_LITE_MP_AG_BLOCKS
+#define UCCL_LITE_MP_AG_BLOCKS 32
+#endif
+#ifndef UCCL_LITE_MP_WAIT_LANES
+#define UCCL_LITE_MP_WAIT_LANES 1
+#endif
+#ifndef UCCL_LITE_MP_AG_SINGLE_PRODUCERS
+#define UCCL_LITE_MP_AG_SINGLE_PRODUCERS 8
+#endif
+#ifndef UCCL_LITE_MP_AG_SMALL_BLOCKS
+#define UCCL_LITE_MP_AG_SMALL_BLOCKS 32
+#endif
+#ifndef UCCL_LITE_MP_RS_BLOCKS
+#define UCCL_LITE_MP_RS_BLOCKS 32
+#endif
+
 namespace uccl_lite::multiprocess {
 namespace {
 namespace cg = cooperative_groups;
@@ -245,8 +263,9 @@ __global__ void allGatherPacket(PacketShared* shared, uint16_t* agInput,
     int slot = int(tile & 1);
     uint64_t previous = tile >= 2 ? base + tile - 1 : slot ? prior1 : prior0;
     uint64_t generation = base + tile + 1;
-    if (lane == 0 && previous)
-      for (int peer = 0; peer < kPacketRanks; ++peer)
+    if (lane < UCCL_LITE_MP_WAIT_LANES && previous)
+      for (int peer = int(lane); peer < kPacketRanks;
+           peer += UCCL_LITE_MP_WAIT_LANES)
         while (acquire(&shared->consumed[slot][peer]) < previous)
           __nanosleep(64);
     grid.sync();
@@ -268,8 +287,9 @@ __global__ void allGatherPacket(PacketShared* shared, uint16_t* agInput,
     }
     grid.sync();
     if (lane == 0) publish(&shared->uploaded[slot][rank], generation);
-    if (lane == 0)
-      for (int peer = 0; peer < kPacketRanks; ++peer)
+    if (lane < UCCL_LITE_MP_WAIT_LANES)
+      for (int peer = int(lane); peer < kPacketRanks;
+           peer += UCCL_LITE_MP_WAIT_LANES)
         while (acquire(&shared->uploaded[slot][peer]) < generation)
           __nanosleep(64);
     grid.sync();
@@ -363,7 +383,11 @@ __global__ void allGatherPacketPipelined(
     PacketShared* shared, uint16_t* agInput, CrewState* crews,
     uint16_t const* input, uint16_t* output, size_t count, int rank,
     uint64_t base, uint64_t prior0, uint64_t prior1, uint32_t initialPhase) {
-  constexpr int producerBlocks = 8;
+  int producerBlocks =
+      count <= kAgPacketElements ? UCCL_LITE_MP_AG_SINGLE_PRODUCERS : 8;
+#if UCCL_LITE_MP_WAIT_LANES > 1
+  bool perSource = count <= kAgPacketElements;
+#endif
   int consumerBlocks = int(gridDim.x) - producerBlocks;
   bool producer = blockIdx.x < producerBlocks;
   int block = producer ? int(blockIdx.x) : int(blockIdx.x) - producerBlocks;
@@ -379,6 +403,41 @@ __global__ void allGatherPacketPipelined(
     uint64_t generation = base + tile + 1;
     size_t begin = tile * kAgPacketElements;
     size_t length = min(kAgPacketElements, count - begin);
+#if UCCL_LITE_MP_WAIT_LANES > 1
+    // Consumers follow individual sources. A slow upload no longer prevents
+    // every other source from making progress into the final output.
+    if (!producer && perSource) {
+      int peer = block % kPacketRanks;
+      if (threadIdx.x == 0) {
+        if (block == peer) {
+          if (peer != rank)
+            while (acquire(&shared->uploaded[slot][peer]) < generation)
+              __nanosleep(64);
+          publishGpu(&state->sourceReady[peer], generation);
+        } else {
+          while (acquireGpu(&state->sourceReady[peer]) < generation)
+            __nanosleep(64);
+        }
+      }
+    } else if (block == 0) {
+      if (threadIdx.x < UCCL_LITE_MP_WAIT_LANES)
+        for (int peer = int(threadIdx.x); peer < kPacketRanks;
+             peer += UCCL_LITE_MP_WAIT_LANES) {
+          if (producer) {
+            if (previous)
+              while (acquire(&shared->consumed[slot][peer]) < previous)
+                __nanosleep(64);
+          } else {
+            while (acquire(&shared->uploaded[slot][peer]) < generation)
+              __nanosleep(64);
+          }
+        }
+      __syncthreads();
+      if (threadIdx.x == 0) publishGpu(&state->ready, generation);
+    } else if (threadIdx.x == 0) {
+      while (acquireGpu(&state->ready) < generation) __nanosleep(64);
+    }
+#else
     if (block == 0 && threadIdx.x == 0) {
       if (producer) {
         if (previous)
@@ -394,6 +453,7 @@ __global__ void allGatherPacketPipelined(
     } else if (threadIdx.x == 0) {
       while (acquireGpu(&state->ready) < generation) __nanosleep(64);
     }
+#endif
     __syncthreads();
     bool vector = (count & 7) == 0 && (length & 7) == 0 &&
                   (reinterpret_cast<uintptr_t>(input) & 15) == 0 &&
@@ -413,28 +473,52 @@ __global__ void allGatherPacketPipelined(
       if (block == 0 && threadIdx.x == 0)
         publish(&shared->uploaded[slot][rank], generation);
     } else {
-      if (vector) {
-        size_t vectorsPerPeer = length / 8;
-        for (size_t flat = lane; flat < size_t(kPacketRanks) * vectorsPerPeer;
-             flat += stride) {
-          int peer = int(flat / vectorsPerPeer);
-          size_t i = flat % vectorsPerPeer;
-          uint16_t const* source =
-              peer == rank ? input + begin
-                           : agInput + (size_t(slot) * kPacketRanks + peer) *
-                                           kAgPacketElements;
-          uint16_t* target = output + size_t(peer) * count + begin;
-          reinterpret_cast<uint4*>(target)[i] =
-              reinterpret_cast<uint4 const*>(source)[i];
+#if UCCL_LITE_MP_WAIT_LANES > 1
+      if (perSource) {
+        int peer = block % kPacketRanks;
+        size_t groupLane =
+            size_t(block / kPacketRanks) * blockDim.x + threadIdx.x;
+        size_t groupStride = size_t(consumerBlocks / kPacketRanks) * blockDim.x;
+        uint16_t const* source =
+            peer == rank ? input + begin
+                         : agInput + (size_t(slot) * kPacketRanks + peer) *
+                                         kAgPacketElements;
+        uint16_t* target = output + size_t(peer) * count + begin;
+        if (vector) {
+          for (size_t i = groupLane; i < length / 8; i += groupStride)
+            reinterpret_cast<uint4*>(target)[i] =
+                reinterpret_cast<uint4 const*>(source)[i];
+        } else {
+          for (size_t i = groupLane; i < length; i += groupStride)
+            target[i] = source[i];
         }
-      } else {
-        for (int peer = 0; peer < kPacketRanks; ++peer) {
-          uint16_t const* source =
-              peer == rank ? input + begin
-                           : agInput + (size_t(slot) * kPacketRanks + peer) *
-                                           kAgPacketElements;
-          uint16_t* target = output + size_t(peer) * count + begin;
-          for (size_t i = lane; i < length; i += stride) target[i] = source[i];
+      } else
+#endif
+      {
+        if (vector) {
+          size_t vectorsPerPeer = length / 8;
+          for (size_t flat = lane; flat < size_t(kPacketRanks) * vectorsPerPeer;
+               flat += stride) {
+            int peer = int(flat / vectorsPerPeer);
+            size_t i = flat % vectorsPerPeer;
+            uint16_t const* source =
+                peer == rank ? input + begin
+                             : agInput + (size_t(slot) * kPacketRanks + peer) *
+                                             kAgPacketElements;
+            uint16_t* target = output + size_t(peer) * count + begin;
+            reinterpret_cast<uint4*>(target)[i] =
+                reinterpret_cast<uint4 const*>(source)[i];
+          }
+        } else {
+          for (int peer = 0; peer < kPacketRanks; ++peer) {
+            uint16_t const* source =
+                peer == rank ? input + begin
+                             : agInput + (size_t(slot) * kPacketRanks + peer) *
+                                             kAgPacketElements;
+            uint16_t* target = output + size_t(peer) * count + begin;
+            for (size_t i = lane; i < length; i += stride)
+              target[i] = source[i];
+          }
         }
       }
       crewBarrier(state, phase, consumerBlocks);
@@ -676,6 +760,10 @@ __global__ void reduceScatterCpuPacket(PacketShared* shared, CrewState* crews,
                                        uint32_t previousCpuMask,
                                        bool splitCredits, bool retainOwn) {
   int producerBlocks = shardCount >= (1UL << 20) ? 8 : int(gridDim.x) / 2;
+#ifdef UCCL_LITE_MP_RS_SINGLE_TILE_PRODUCERS
+  if (shardCount >= (1UL << 16) && shardCount <= kRsStripeElements)
+    producerBlocks = UCCL_LITE_MP_RS_SINGLE_TILE_PRODUCERS;
+#endif
   int consumerBlocks = int(gridDim.x) - producerBlocks;
   bool producer = blockIdx.x < producerBlocks;
   int block = producer ? int(blockIdx.x) : int(blockIdx.x) - producerBlocks;
@@ -858,6 +946,22 @@ __global__ void allReduceCpuPacket(PacketShared* shared, CrewState* crews,
     uint64_t generation = base + tile + 1;
     size_t begin = tile * stripeElements;
     if (producer) {
+#if UCCL_LITE_MP_WAIT_LANES > 1
+      if (block == 0) {
+        bool priorCpu =
+            splitCredits && (tile >= 2 || (previousCpuMask & (1U << slot)));
+        if (previous && threadIdx.x < UCCL_LITE_MP_WAIT_LANES)
+          for (int peer = int(threadIdx.x); peer < kPacketRanks;
+               peer += UCCL_LITE_MP_WAIT_LANES)
+            while (acquire(priorCpu ? &shared->inputReadDone[slot][peer]
+                                    : &shared->consumed[slot][peer]) < previous)
+              __nanosleep(64);
+        __syncthreads();
+        if (threadIdx.x == 0) publishGpu(&state->ready, generation);
+      } else if (threadIdx.x == 0) {
+        while (acquireGpu(&state->ready) < generation) __nanosleep(64);
+      }
+#else
       if (block == 0 && threadIdx.x == 0) {
         bool priorCpu =
             splitCredits && (tile >= 2 || (previousCpuMask & (1U << slot)));
@@ -870,6 +974,7 @@ __global__ void allReduceCpuPacket(PacketShared* shared, CrewState* crews,
       } else if (block != 0 || threadIdx.x != 0) {
         while (acquireGpu(&state->ready) < generation) __nanosleep(64);
       }
+#endif
     } else if (threadIdx.x == 0) {
       int sourceRank = block % kPacketRanks;
       while (acquire(&shared->routed[slot][sourceRank]) < generation)
@@ -965,8 +1070,10 @@ cudaError_t launchAgPacket(PacketShared* mapped, uint16_t* agInput,
   void* args[] = {&mapped,         &agInput,       &source,
                   &destination,    &count,         &rank,
                   &baseGeneration, &previousSlot0, &previousSlot1};
+  int blocks =
+      count <= 1024 ? UCCL_LITE_MP_AG_SMALL_BLOCKS : UCCL_LITE_MP_AG_BLOCKS;
   return cudaLaunchCooperativeKernel(reinterpret_cast<void*>(allGatherPacket),
-                                     dim3(32), dim3(256), args, 0, stream);
+                                     dim3(blocks), dim3(256), args, 0, stream);
 }
 
 cudaError_t launchAgGemm128x4096Packet(
@@ -996,8 +1103,8 @@ cudaError_t launchAgPacketPipelined(
                   &destination,   &count,         &rank,        &baseGeneration,
                   &previousSlot0, &previousSlot1, &initialPhase};
   return cudaLaunchCooperativeKernel(
-      reinterpret_cast<void*>(allGatherPacketPipelined), dim3(32), dim3(256),
-      args, 0, stream);
+      reinterpret_cast<void*>(allGatherPacketPipelined),
+      dim3(UCCL_LITE_MP_AG_BLOCKS), dim3(256), args, 0, stream);
 }
 
 cudaError_t launchRsPacket(PacketShared* mapped, void const* input,
@@ -1083,8 +1190,9 @@ cudaError_t launchRsPacketCpu(PacketShared* mapped, CrewState* crews,
                   &initialPhase,   &previousCpuMask, &splitCredits,
                   &retainOwn};
   return cudaLaunchCooperativeKernel(
-      reinterpret_cast<void*>(reduceScatterCpuPacket), dim3(32), dim3(256),
-      args, 0, stream);
+      reinterpret_cast<void*>(reduceScatterCpuPacket),
+      dim3(shardCount <= kRsStripeElements ? UCCL_LITE_MP_RS_BLOCKS : 32),
+      dim3(256), args, 0, stream);
 }
 
 cudaError_t launchRsPacketDestReady(

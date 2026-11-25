@@ -32,6 +32,10 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
+#ifndef UCCL_LITE_MP_AG_PIPELINE_MIN_BYTES
+#define UCCL_LITE_MP_AG_PIPELINE_MIN_BYTES (512UL << 10)
+#endif
+
 namespace {
 constexpr int kMaxRanks = 32;
 constexpr uint64_t kMagic = 0x5543434c4d503031ULL;
@@ -153,6 +157,12 @@ struct Handle {
   std::condition_variable rsAvailable;
   std::deque<RsPacketJob> rsJobs;
   bool rsStop = false;
+#ifdef UCCL_LITE_MP_POLL_WORKERS
+  std::atomic<size_t> rsQueued{0};
+  std::atomic<bool> rsStopPublished{false};
+  std::atomic<uint64_t> arLanePublishedSerial{0};
+  std::atomic<bool> arLaneStopPublished{false};
+#endif
   std::thread rsThread;
   std::atomic<pid_t> rsWorkerTid{0};
   std::atomic<pid_t> arLaneTid{0};
@@ -187,6 +197,9 @@ struct Handle {
       {
         std::lock_guard<std::mutex> guard(rsMutex);
         rsStop = true;
+#ifdef UCCL_LITE_MP_POLL_WORKERS
+        rsStopPublished.store(true, std::memory_order_release);
+#endif
       }
       rsAvailable.notify_one();
       rsThread.join();
@@ -196,6 +209,9 @@ struct Handle {
       {
         std::lock_guard<std::mutex> guard(arLaneMutex);
         arLaneStop = true;
+#ifdef UCCL_LITE_MP_POLL_WORKERS
+        arLaneStopPublished.store(true, std::memory_order_release);
+#endif
       }
       arLaneAvailable.notify_one();
       arLaneThread.join();
@@ -310,26 +326,42 @@ void isolatePacketWorker(Handle* h, int workerCpu) {
   cpu_set_t allowed;
   if (sched_getaffinity(0, sizeof(allowed), &allowed) != 0)
     throw std::runtime_error("scheduler affinity query failed");
-  std::ifstream siblings("/sys/devices/system/cpu/cpu" +
-                         std::to_string(workerCpu) +
-                         "/topology/thread_siblings_list");
-  std::string list;
-  if (!std::getline(siblings, list))
-    throw std::runtime_error("worker CPU sibling list unavailable");
-  size_t cursor = 0;
-  while (cursor < list.size()) {
-    size_t comma = list.find(',', cursor);
-    std::string group = list.substr(cursor, comma - cursor);
-    size_t dash = group.find('-');
-    int first = std::stoi(group.substr(0, dash));
-    int last =
-        dash == std::string::npos ? first : std::stoi(group.substr(dash + 1));
-    if (first < 0 || last < first || last >= CPU_SETSIZE)
-      throw std::invalid_argument("invalid worker CPU sibling list");
-    for (int cpu = first; cpu <= last; ++cpu) CPU_CLR(cpu, &allowed);
-    if (comma == std::string::npos) break;
-    cursor = comma + 1;
-  }
+  auto excludeCore = [&](int cpuId) {
+    std::ifstream siblings("/sys/devices/system/cpu/cpu" +
+                           std::to_string(cpuId) +
+                           "/topology/thread_siblings_list");
+    std::string list;
+    if (!std::getline(siblings, list))
+      throw std::runtime_error("worker CPU sibling list unavailable");
+    size_t cursor = 0;
+    while (cursor < list.size()) {
+      size_t comma = list.find(',', cursor);
+      std::string group = list.substr(cursor, comma - cursor);
+      size_t dash = group.find('-');
+      int first = std::stoi(group.substr(0, dash));
+      int last =
+          dash == std::string::npos ? first : std::stoi(group.substr(dash + 1));
+      if (first < 0 || last < first || last >= CPU_SETSIZE)
+        throw std::invalid_argument("invalid worker CPU sibling list");
+      for (int cpu = first; cpu <= last; ++cpu) CPU_CLR(cpu, &allowed);
+      if (comma == std::string::npos) break;
+      cursor = comma + 1;
+    }
+  };
+#ifdef UCCL_LITE_MP_GLOBAL_WORKER_ISOLATION
+  // Every rank's application/CUDA threads must avoid every reserved core.
+  // Excluding only this rank's worker leaves other ranks free to preempt its
+  // worker or helper for an entire scheduler time slice.
+  if (h->parallelAllReduce) {
+    for (int device = 0; device < h->ranks; ++device) {
+      int worker = mappedCpu("UCCL_LITE_MP_PACKET_WORKER_CPUS", device);
+      int helper = mappedCpu("UCCL_LITE_MP_PACKET_HELPER_CPUS", device);
+      if (worker >= 0) excludeCore(worker);
+      if (helper >= 0) excludeCore(helper);
+    }
+  } else
+#endif
+    excludeCore(workerCpu);
   bool any = false;
   for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu) any |= CPU_ISSET(cpu, &allowed);
   if (!any) throw std::runtime_error("no CPUs remain for scheduler");
@@ -383,13 +415,30 @@ void runParallelArLane(Handle* h, int cpu) {
       throw std::runtime_error("AR lane CPU affinity failed");
     h->arLaneTid.store(pid_t(syscall(SYS_gettid)), std::memory_order_release);
     uint64_t serial = 0;
+#ifdef UCCL_LITE_MP_POLL_WORKERS
+    bool polling = false;
+#endif
     while (true) {
       uint64_t base;
       size_t tiles;
       {
         std::unique_lock<std::mutex> lock(h->arLaneMutex);
-        h->arLaneAvailable.wait(
-            lock, [&] { return h->arLaneStop || h->arLaneJobSerial > serial; });
+#ifdef UCCL_LITE_MP_POLL_WORKERS
+        if (polling) {
+          lock.unlock();
+          while (h->arLanePublishedSerial.load(std::memory_order_acquire) <=
+                     serial &&
+                 !h->arLaneStopPublished.load(std::memory_order_acquire))
+            _mm_pause();
+          lock.lock();
+        } else
+#endif
+          h->arLaneAvailable.wait(lock, [&] {
+            return h->arLaneStop || h->arLaneJobSerial > serial;
+          });
+#ifdef UCCL_LITE_MP_POLL_WORKERS
+        polling = true;
+#endif
         if (h->arLaneStop) return;
         serial = h->arLaneJobSerial;
         base = h->arLaneJobBase;
@@ -439,15 +488,33 @@ void runRsPacketWorker(Handle* h) {
     h->rsWorkerTid.store(pid_t(syscall(SYS_gettid)), std::memory_order_release);
     std::vector<uint16_t> scratch(
         h->packetScratch ? uccl_lite::multiprocess::kRsStripeElements : 0);
+#ifdef UCCL_LITE_MP_POLL_WORKERS
+    bool polling = false;
+#endif
     while (true) {
       RsPacketJob job;
       {
         std::unique_lock<std::mutex> lock(h->rsMutex);
-        h->rsAvailable.wait(lock,
-                            [&] { return h->rsStop || !h->rsJobs.empty(); });
+#ifdef UCCL_LITE_MP_POLL_WORKERS
+        if (polling) {
+          lock.unlock();
+          while (!h->rsQueued.load(std::memory_order_acquire) &&
+                 !h->rsStopPublished.load(std::memory_order_acquire))
+            _mm_pause();
+          lock.lock();
+        } else
+#endif
+          h->rsAvailable.wait(lock,
+                              [&] { return h->rsStop || !h->rsJobs.empty(); });
+#ifdef UCCL_LITE_MP_POLL_WORKERS
+        polling = true;
+#endif
         if (h->rsJobs.empty() && h->rsStop) return;
         job = h->rsJobs.front();
         h->rsJobs.pop_front();
+#ifdef UCCL_LITE_MP_POLL_WORKERS
+        h->rsQueued.fetch_sub(1, std::memory_order_relaxed);
+#endif
       }
       size_t maximumShard =
           job.operation == 2
@@ -468,15 +535,23 @@ void runRsPacketWorker(Handle* h) {
             job.count >= (hierarchicalJob ? (8UL << 20) : (1UL << 19))) ||
            (h->hierarchicalReduceScatter && job.operation == 2 &&
             job.count >= (1UL << 20))) &&
-          job.count % (size_t(h->ranks) *
-                       uccl_lite::multiprocess::kRsStripeElements) ==
-              0;
+          job.count % (size_t(h->ranks) * stripeElements) == 0;
+#ifdef UCCL_LITE_MP_PARALLEL_RS_SINGLE_TILE
+      if (h->parallelAllReduce && job.operation == 2 &&
+          job.count >= (1UL << 16) &&
+          job.count <= uccl_lite::multiprocess::kRsStripeElements)
+        parallelJob = true;
+#endif
       if (parallelJob) {
         {
           std::lock_guard<std::mutex> guard(h->arLaneMutex);
           h->arLaneJobBase = job.baseGeneration;
           h->arLaneJobTiles = tiles;
           ++h->arLaneJobSerial;
+#ifdef UCCL_LITE_MP_POLL_WORKERS
+          h->arLanePublishedSerial.store(h->arLaneJobSerial,
+                                         std::memory_order_release);
+#endif
         }
         h->arLaneAvailable.notify_one();
       }
@@ -1382,7 +1457,7 @@ static int enqueueImpl(void* handle, int operation, void const* input,
                 ? uccl_lite::multiprocess::kRsStripeElements / 2
                 : uccl_lite::multiprocess::kRsStripeElements;
         bool pipelineAg = operation == 1 && h->pipelinedAllGather &&
-                          outputBytes >= (512UL << 10);
+                          outputBytes >= UCCL_LITE_MP_AG_PIPELINE_MIN_BYTES;
         if (operation == 1) {
           if (agGemm)
             check(uccl_lite::multiprocess::launchAgGemm128x4096Packet(
@@ -1408,6 +1483,9 @@ static int enqueueImpl(void* handle, int operation, void const* input,
                  {h->lastCpuResultGeneration[0], h->lastCpuResultGeneration[1]},
                  {h->lastCpuResultAllReaders[0], h->lastCpuResultAllReaders[1]},
                  {h->lastPartialGeneration[0], h->lastPartialGeneration[1]}});
+#ifdef UCCL_LITE_MP_POLL_WORKERS
+            h->rsQueued.fetch_add(1, std::memory_order_release);
+#endif
           }
           h->rsAvailable.notify_one();
           if (h->destReadyReduceScatter)
@@ -1431,6 +1509,9 @@ static int enqueueImpl(void* handle, int operation, void const* input,
                  {h->lastCpuResultGeneration[0], h->lastCpuResultGeneration[1]},
                  {h->lastCpuResultAllReaders[0], h->lastCpuResultAllReaders[1]},
                  {h->lastPartialGeneration[0], h->lastPartialGeneration[1]}});
+#ifdef UCCL_LITE_MP_POLL_WORKERS
+            h->rsQueued.fetch_add(1, std::memory_order_release);
+#endif
           }
           h->rsAvailable.notify_one();
           check(uccl_lite::multiprocess::launchArPacketCpu(

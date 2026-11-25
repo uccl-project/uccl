@@ -1,13 +1,12 @@
 {
-  "source": "benchmarks/data/uccl_reference_gap_20261118/reference_protocol/qualified_release/nccl_tests_vs_old.csv",
-  "source_sha256": "e02239c9e380a135a85dcb2a80045d250c1fb563eea454bd3abc077e2fdc3bb9",
-  "plot_script_sha256": "5a9539a98b9c8f45b7e39bc043d96f8815e8381abe0eaab457cdf1a28e274973",
-  "new_harness": "unchanged nccl-tests, maximum-rank batch timing",
-  "old_harness": "original UCCL standalone, per-call full retirement",
-  "new_warmups": 20,
-  "new_timed_iterations": 30,
-  "repetitions": 3,
-  "old_warmups_iterations": {
+  "sources": {
+    "benchmarks/data/uccl_reference_gap_20261118/reference_protocol/qualified_release/paired_comparison.csv": "121aed9163f09428d06fcdc226b44d6b00d9f0714553f940bda631a12aa09ba7",
+    "benchmarks/data/nccl_tuned_2x4l4_20261116/figure_inputs.csv": "684fb8821ad03b9d7f996c6d6259796ff1ddbb78043a6626e21783b4aead27dc",
+    "benchmarks/data/ag_combined_latest_2x4l4_20261117/readme_figure_inputs.csv": "4903a4010d82cc0b68bdb42b73e6a1576a42fef579c1ee81edb20a140dea9461"
+  },
+  "plot_script_sha256": "68c260b0b562a8d128db5af334f1c2d3783dafae59b5afdcb5c3a038d1399828",
+  "uccl_harness": "aligned maximum-rank per-call mean, full send retirement",
+  "uccl_warmups_iterations": {
     "ag": [
       20,
       30
@@ -21,16 +20,14 @@
       10
     ]
   },
-  "new_layouts": [
-    "out-of-place",
-    "in-place"
-  ],
-  "old_layout": "original recorded reference layout",
-  "new_placement": "8 MPI ranks, 1 GPU/rank, 2 hosts \u00d7 4 L4",
-  "old_placement": "AG 4 MPI ranks \u00d7 2 GPUs; AR/RS 8 \u00d7 1 GPU",
-  "throughput": "complete-buffer bytes / latency_us / 1000, decimal GB/s",
+  "repetitions": 3,
+  "uccl_layout": "out-of-place",
+  "uccl_placement": "8 MPI ranks, 1 GPU/rank, 2 hosts \u00d7 4 L4",
+  "nccl_controls": "unchanged historical controls, separate measurement windows",
+  "nccl_placement": "AG 4 MPI ranks \u00d7 2 GPUs; AR/RS 8 \u00d7 1 GPU",
+  "throughput": "AR: 1.75*N/t; AG/RS: 0.875*N/t; decimal GB/s",
   "size_definition": "AG complete output; RS complete input; AR buffer",
   "best_per_size_envelope": false,
   "native_nccl_fallback": false,
-  "points": 198
+  "points": 264
 }

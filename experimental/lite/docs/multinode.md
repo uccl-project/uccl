@@ -1,5 +1,21 @@
 # Two-node collectives
 
+## Current NCCL drop-in results
+
+The [main README](../README.md#multi-node-collectives) compares the qualified
+drop-in UCCL Lite against the recorded NCCL controls. Its UCCL curves use
+out-of-place `candidate_us` from the [aligned per-call measurements](../benchmarks/data/uccl_reference_gap_20261118/reference_protocol/qualified_release/paired_comparison.csv),
+not nccl-tests batch timing: FP32, eight ranks with one L4 each, median of three
+maximum-rank per-call means, full GPU completion and send retirement.
+AG uses 20 warmups/30 calls, AR 20/10, and RS 10/10. One fixed library supplies
+all sizes, with no native NCCL fallback or best-per-size envelope.
+NCCL values retain their original sources and separate measurement windows;
+AG controls use four processes with two GPUs each, while AR/RS use eight.
+The orange archived control is not uniformly an unconfigured NCCL run.
+Bus bandwidth uses `7N/(4t)` for AR and `7N/(8t)` for AG/RS, where N is the
+complete AR buffer, AG output, or RS input. Regenerate with
+`make nccl-dropin-figures`. The standalone experiments below are historical.
+
 The [November 15 hierarchy experiment](multinode-hierarchy.md) evaluates an
 explicit remote-first ReduceScatter and describes a NUMA packet hierarchy for
 the optional CPU router. It does not change automatic backend selection.
@@ -25,7 +41,7 @@ configuration per curve is frozen before three fresh
 validation sweeps. There is no per-size best-of envelope. Every call is fully
 checked on both four-L4 hosts. AG retains four MPI processes with two GPUs per
 process; AR/RS retain eight processes with one GPU each. CE transport is verified
-in initialization logs. UCCL Lite is not rerun: the figures preserve its recorded
+in initialization logs. UCCL Lite was not rerun for that study: its figures preserve its recorded
 points and label the original orange controls **NCCL (prior)**. Historical
 measurement details below still refer to their respective records; the added
 NCCL curves are separate measurement windows, not fresh paired UCCL runs.
@@ -50,7 +66,7 @@ The report retains the slower P2P one-shot comparison, raw measurements,
 repeated in-place and packet-tail checks, and existing-path regressions.
 Historical full-range figures below remain tied to their original sources.
 
-## Current AllReduce: full-range hybrid sweep
+## Historical AllReduce: full-range hybrid sweep
 
 ![Current two-node FP32 AllReduce: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput](assets/collectives-2x4l4-allreduce-nccl-tuned.svg)
 
@@ -65,7 +81,7 @@ Host pieces remain fixed at 256 KiB, with the established GPU ReduceScatter
 size policy. The cutoff is fixed, not a measured best-variant-per-size envelope.
 Raw samples, ranges, hashes and reproduction commands remain in the record.
 
-## Current AllGather: NUMA host router
+## Historical AllGather: NUMA host router
 
 ![Two-node FP32 AllGather: CPU-router latency and throughput with prior and tuned NCCL](assets/collectives-2x4l4-allgather-nccl-tuned.svg)
 
@@ -83,7 +99,7 @@ and previously recorded tuned NCCL curves. These historical values do not
 validate the refreshed source. Regenerate the combined figure with
 `python3 benchmarks/data/ag_latency_2x4l4_20261116/plot.py`.
 
-## Current ReduceScatter: direct medium-message ring
+## Historical ReduceScatter: direct medium-message ring
 
 ![Current two-node FP32 ReduceScatter latency and bus throughput](assets/collectives-2x4l4-reducescatter-nccl-tuned.svg)
 

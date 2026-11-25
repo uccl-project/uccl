@@ -1,0 +1,3 @@
+# Retain the checked identities, raw-sample checksums and qualification data.
+!*.json
+!*.csv
