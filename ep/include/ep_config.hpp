@@ -179,7 +179,11 @@ struct LowLatencyLayout {
   LowLatencyLayout(void* rdma_buffer, int num_max_dispatch_tokens_per_rank,
                    int hidden, int num_ranks, int num_experts,
                    void* atomic_buffer_ptr = nullptr) {
-    int const num_scales = hidden / 128;
+    // BF16 is the largest supported wire row, including MXFP8 and FP4.
+    // Reserve its size so all formats and ranks share the same offsets.
+    auto const experts = static_cast<size_t>(num_experts);
+    auto const max_tokens =
+        static_cast<size_t>(num_max_dispatch_tokens_per_rank);
 
     // Dispatch and combine layout:
     //  - 2 symmetric odd/even send buffer
@@ -189,11 +193,10 @@ struct LowLatencyLayout {
     // Message sizes
     // NOTES: you should add a control `int4` for combine messages if you want
     // to do data transformation
-    EP_HOST_ASSERT(num_scales * sizeof(float) <= static_cast<size_t>(hidden));
-    size_t num_bytes_per_dispatch_msg =
-        sizeof(int4) + std::max(hidden * sizeof(nv_bfloat16),
-                                hidden + num_scales * sizeof(float));
-    size_t num_bytes_per_combine_msg = hidden * sizeof(nv_bfloat16);
+    size_t const num_bytes_per_combine_msg =
+        static_cast<size_t>(hidden) * sizeof(nv_bfloat16);
+    size_t const num_bytes_per_dispatch_msg =
+        sizeof(int4) + num_bytes_per_combine_msg;
 
     // Send buffer
 #ifdef PER_EXPERT_BATCHING
@@ -209,18 +212,16 @@ struct LowLatencyLayout {
     // Flow: (optional FP8 cast) -> temp buffer -> copy to per-expert batch
     // buffer -> batched RDMA send
     // TODO: Support per-GPU destination batching in this path.
-    size_t dispatch_send_buffer_bytes = (num_experts + 1) *
-                                        num_max_dispatch_tokens_per_rank *
-                                        num_bytes_per_dispatch_msg;
+    size_t dispatch_send_buffer_bytes =
+        (experts + 1) * max_tokens * num_bytes_per_dispatch_msg;
 #else
     // Send buffer
     // Uses only per-token temporary send buffer.
     size_t dispatch_send_buffer_bytes =
         num_max_dispatch_tokens_per_rank * num_bytes_per_dispatch_msg;
 #endif
-    size_t combine_send_buffer_bytes = num_experts *
-                                       num_max_dispatch_tokens_per_rank *
-                                       num_bytes_per_combine_msg;
+    size_t combine_send_buffer_bytes =
+        experts * max_tokens * num_bytes_per_combine_msg;
     size_t send_buffer_bytes =
         std::max(dispatch_send_buffer_bytes, combine_send_buffer_bytes);
     EP_HOST_ASSERT(send_buffer_bytes % sizeof(int4) == 0);
@@ -228,12 +229,10 @@ struct LowLatencyLayout {
 
     // Symmetric receive buffers
     // TODO: optimize memory usages
-    size_t dispatch_recv_data_buffer_bytes = num_experts *
-                                             num_max_dispatch_tokens_per_rank *
-                                             num_bytes_per_dispatch_msg;
-    size_t combine_recv_buffer_bytes = num_experts *
-                                       num_max_dispatch_tokens_per_rank *
-                                       num_bytes_per_combine_msg;
+    size_t dispatch_recv_data_buffer_bytes =
+        experts * max_tokens * num_bytes_per_dispatch_msg;
+    size_t combine_recv_buffer_bytes =
+        experts * max_tokens * num_bytes_per_combine_msg;
     size_t recv_buffer_bytes =
         std::max(dispatch_recv_data_buffer_bytes, combine_recv_buffer_bytes);
     EP_HOST_ASSERT(recv_buffer_bytes % sizeof(int4) == 0);

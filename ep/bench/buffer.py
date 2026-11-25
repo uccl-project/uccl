@@ -399,6 +399,8 @@ class Buffer:
         use_ue8m0: bool = False,
         async_finish: bool = False,
         return_recv_hook: bool = False,
+        use_fp4: Optional[str] = None,
+        use_mxfp8: bool = False,
     ) -> Tuple[
         Tuple[torch.Tensor, torch.Tensor], torch.Tensor, Tuple, EventOverlap, Callable
     ]:
@@ -429,10 +431,25 @@ class Buffer:
             return_recv_hook: return a receiving hook if set. If set, the kernel will just do the RDMA request issues,
                 but **without actually receiving the data**. You must call the received hook to make sure the data's arrival.
                 If you do not set this flag, the kernel will ensure the data's arrival.
+            use_fp4: `None`, `"nvfp4"` or `"mxfp4"`: quantize tokens to block-scaled E2M1 inside the dispatch kernel
+                (requires `use_fp8=False` and `hidden % 512 == 0`). See `recv_x` below for the returned layout.
+            use_mxfp8: use E4M3 with one row-major UE8M0 byte per 32 elements.
+                Requires CUDA, `use_fp8=True` and `hidden % 512 == 0`. The legacy
+                `round_scale`, `use_ue8m0` and `use_fp4` options must stay disabled.
 
         Returns:
             recv_x: a tensor or tuple with received tokens for each expert.
-                With `use_fp8=True`: the first element is a `torch.Tensor` shaped as
+                With `use_fp4="nvfp4"`: a tuple `(data, block_scales, token_scales)`; `data` is `torch.uint8`
+                `[num_local_experts, num_max_dispatch_tokens_per_rank * num_ranks, hidden // 2]` (two E2M1 values per
+                byte, the even element in the low nibble), `block_scales` is `torch.uint8` E4M3 bits shaped
+                `[..., hidden // 16]` (row-major), `token_scales` is `torch.float` `[num_local_experts, num_recv_tokens]`,
+                and `x ~= e2m1 * e4m3(block_scale) * token_scale`.
+                With `use_fp4="mxfp4"`: a tuple `(data, block_scales)` with `block_scales` UE8M0 bytes
+                `[..., hidden // 32]` (row-major), and `x ~= e2m1 * 2 ** (block_scale - 127)`.
+                With `use_mxfp8=True`: the first element is the E4M3 tensor. The
+                second is row-major `torch.uint8` with shape
+                `[num_local_experts, num_recv_tokens, hidden // 32]`.
+                With legacy `use_fp8=True`: the first element is a `torch.Tensor` shaped as
                 `[num_local_experts, num_max_dispatch_tokens_per_rank * num_ranks, hidden]` with `torch.float8_e4m3fn`.
                 The second tensor is the corresponding scales for the first element with shape
                 `[num_local_experts, num_max_dispatch_tokens_per_rank * num_ranks, hidden // 128]` with `torch.float`,
@@ -449,6 +466,17 @@ class Buffer:
             event: the event after executing the kernel (valid only if `async_finish` is set).
             hook: the receiving hook function (valid only if `return_recv_hook` is set).
         """
+        if use_mxfp8 and (
+            not use_fp8
+            or use_ue8m0
+            or round_scale
+            or use_fp4 is not None
+            or x.size(1) % 512 != 0
+            or torch.version.hip is not None
+        ):
+            raise ValueError(
+                "MXFP8 requires CUDA, hidden divisible by 512 and only use_fp8 enabled"
+            )
         for proxy in self.proxies:
             proxy.notify_proxy_thread_adaptive_sleeper()
             proxy.calculate_and_set_dispatch_recv_data_offset(
@@ -459,10 +487,20 @@ class Buffer:
         num_ranks = self.group.size()
         num_local_experts = num_experts // num_ranks
         num_recv_tokens = num_ranks * num_max_dispatch_tokens_per_rank
+        fp4_mode = {None: 0, "nvfp4": 1, "mxfp4": 2}[use_fp4]
+        assert not (fp4_mode and use_fp8), "use_fp4 requires use_fp8=False"
         packed_recv_x = torch.empty(
-            (num_local_experts, num_recv_tokens, x.size(1)),
+            (
+                num_local_experts,
+                num_recv_tokens,
+                x.size(1) // 2 if fp4_mode else x.size(1),
+            ),
             device=x.device,
-            dtype=_fp8_e4m3_dtype() if use_fp8 else torch.bfloat16,
+            dtype=(
+                torch.uint8
+                if fp4_mode
+                else (_fp8_e4m3_dtype() if use_fp8 else torch.bfloat16)
+            ),
         )
         packed_recv_count = torch.empty(
             (num_local_experts,), device=x.device, dtype=torch.int32
@@ -476,7 +514,14 @@ class Buffer:
         packed_recv_x_scales_storage = None
         packed_recv_x_scales = None
         packed_recv_x_scales_ptr = 0
-        if use_fp8:
+        if use_mxfp8:
+            packed_recv_x_scales = torch.empty(
+                (num_local_experts, num_recv_tokens, x.size(1) // 32),
+                device=x.device,
+                dtype=torch.uint8,
+            )
+            packed_recv_x_scales_ptr = packed_recv_x_scales.data_ptr()
+        elif use_fp8:
             if use_ue8m0:
                 packed_recv_x_scales_storage = torch.empty(
                     (num_local_experts, x.size(1) // 512, num_recv_tokens),
@@ -491,6 +536,24 @@ class Buffer:
                 )
             packed_recv_x_scales = packed_recv_x_scales_storage.transpose(1, 2)
             packed_recv_x_scales_ptr = packed_recv_x_scales.data_ptr()
+        packed_recv_x_gs = None
+        if fp4_mode:
+            packed_recv_x_scales = torch.empty(
+                (
+                    num_local_experts,
+                    num_recv_tokens,
+                    x.size(1) // (16 if fp4_mode == 1 else 32),
+                ),
+                device=x.device,
+                dtype=torch.uint8,
+            )
+            packed_recv_x_scales_ptr = packed_recv_x_scales.data_ptr()
+            if fp4_mode == 1:
+                packed_recv_x_gs = torch.empty(
+                    (num_local_experts, num_recv_tokens),
+                    device=x.device,
+                    dtype=torch.float32,
+                )
 
         compute_stream_ptr = self._ll_compute_stream_ptr(x.device)
         event, hook = self.runtime.low_latency_dispatch(
@@ -523,6 +586,9 @@ class Buffer:
             bool(use_ue8m0),
             bool(async_finish),
             bool(return_recv_hook),
+            int(fp4_mode),
+            0 if packed_recv_x_gs is None else packed_recv_x_gs.data_ptr(),
+            **({"use_mxfp8": True} if use_mxfp8 else {}),
         )
         handle = (
             packed_recv_src_info,
@@ -541,13 +607,20 @@ class Buffer:
             packed_recv_layout_range,
             packed_recv_x_scales_storage,
             cumulative_local_expert_recv_stats,
+            packed_recv_x_gs,
         )
         # The zero-token early-return path returns hook=None; substitute a
         # no-op so callers can unconditionally invoke hook().
         if return_recv_hook and hook is None:
             hook = lambda: None
+        if fp4_mode == 1:
+            recv_x = (packed_recv_x, packed_recv_x_scales, packed_recv_x_gs)
+        elif fp4_mode == 2 or use_fp8:
+            recv_x = (packed_recv_x, packed_recv_x_scales)
+        else:
+            recv_x = packed_recv_x
         return (
-            (packed_recv_x, packed_recv_x_scales) if use_fp8 else packed_recv_x,
+            recv_x,
             packed_recv_count,
             handle,
             EventOverlap(event, tensors_to_record if async_finish else None),
@@ -582,6 +655,7 @@ class Buffer:
         # Blackwell-path overlap kwargs (src_signals protocol).
         src_signals: Optional[torch.Tensor] = None,
         src_signal_expect_value: int = 0,
+        use_fp4: Optional[str] = None,
     ) -> Tuple[torch.Tensor, EventOverlap, Callable]:
         """
         A low-latency implementation for combining tokens (reduce **with weights**) with IBGDA.
@@ -616,6 +690,11 @@ class Buffer:
                 (`packed_recv_count`, `comp_signal`, `block_m`, `threshold`, `num_sms` for Hopper;
                 `src_signals`, `src_signal_expect_value` for Blackwell) are parsed but only validated
                 once overlap kernel support lands in a follow-up PR.
+            use_fp4: `None`, `"nvfp4"` or `"mxfp4"`. If set, each expert output row is quantized inline to
+                FP4 (E2M1) before it is sent and dequantized in the weighted reduce, so the wire carries
+                `hidden / 2` bytes of data plus block scales (NVFP4: E4M3 per 16 elements and one FP32
+                per-token scale; MXFP4: UE8M0 per 32 elements). Input and output stay `torch.bfloat16`.
+                Lossy; excludes `use_logfmt` and `zero_copy`; needs `hidden % 512 == 0`.
 
         Returns:
             combined_x: the reduced token tensor, with shape `[num_combined_tokens, hidden]` and type `torch.bfloat16`.
@@ -629,6 +708,10 @@ class Buffer:
                 "with DeepEP and SGLang SBO callers; enabling the overlap kernel path requires "
                 "changes to internode_ll::combine() that will land in a follow-up PR."
             )
+        fp4_mode = {None: 0, "nvfp4": 1, "mxfp4": 2}[use_fp4]
+        assert fp4_mode == 0 or not (
+            use_logfmt or zero_copy
+        ), "use_fp4 excludes use_logfmt and zero_copy"
         for proxy in self.proxies:
             proxy.notify_proxy_thread_adaptive_sleeper()
 
@@ -682,6 +765,7 @@ class Buffer:
             bool(async_finish),
             bool(return_recv_hook),
             combined_x.data_ptr(),
+            fp4_mode=int(fp4_mode),
         )
         tensors_to_record = (
             x_for_combine,
