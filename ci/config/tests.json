@@ -1080,6 +1080,22 @@
       ]
     },
     {
+      "id": "p2p.cxi.payload",
+      "sources": [
+        "p2p/tests/test_cxi_payload.py"
+      ],
+      "enabled": false,
+      "tier": "integration",
+      "reason": "Requires two nodes with CXI (Slingshot) NICs; no CI target has one. Run it by hand as the file docstring shows.",
+      "targets": [],
+      "requires": [
+        "cuda",
+        "cxi"
+      ],
+      "nodes": 2,
+      "gpus": 1
+    },
+    {
       "id": "p2p.rdma_native.readv_invalid_length",
       "sources": [
         "p2p/tests/test_cross_node_rdma_native.py"

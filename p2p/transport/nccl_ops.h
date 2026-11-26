@@ -93,6 +93,8 @@ struct EndpointOps<NCCLEndpoint> {
 
   static void uccl_drive_recv(std::shared_ptr<NCCLEndpoint> const& s) {}
 
+  static void uccl_drive_recv_idle(std::shared_ptr<NCCLEndpoint> const& s) {}
+
   static bool uccl_check_ureq_once(std::shared_ptr<NCCLEndpoint> const& s,
                                    UcclRequest* ureq) {
     return uccl_poll_ureq_once(s, ureq);

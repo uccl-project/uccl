@@ -122,6 +122,7 @@ inline bool uccl_check_wr_fast(SendConnection* group, int64_t id) {
 }
 inline void uccl_drive_send(Transport* transport) { ++transport->tick; }
 inline void uccl_drive_recv(Transport* transport) { ++transport->recv_drives; }
+inline void uccl_drive_recv_idle(Transport* transport) { uccl_drive_recv(transport); }
 inline void uccl_deregmr(Transport* transport, P2PMhandle* handle) {
   ++transport->releases[handle->label];
 }
