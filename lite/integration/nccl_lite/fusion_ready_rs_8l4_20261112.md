@@ -124,13 +124,13 @@ uncertain.
 ## Reproduce
 
 ```bash
-make -C experimental/lite/integration/nccl_lite check-ready-rs \
+make -C lite/integration/nccl_lite check-ready-rs \
   CUDA_HOME=/usr/local/cuda-12.9 \
-  NCCL_HOME=$PWD/experimental/lite/build/nccl-2.28.9 \
+  NCCL_HOME=$PWD/lite/build/nccl-2.28.9 \
   REAL_NCCL=/path/to/sglang-pytorch/nvidia/nccl/lib/libnccl.so.2
 UCCL_LITE_REAL_NCCL=/path/to/sglang-pytorch/nvidia/nccl/lib/libnccl.so.2 \
-  ./experimental/lite/integration/nccl_lite/run_sglang_ready_rs_8l4.sh \
-  ./experimental/lite/integration/nccl_lite/launch_glm45_air.sh --mem-fraction-static 0.93
+  ./lite/integration/nccl_lite/run_sglang_ready_rs_8l4.sh \
+  ./lite/integration/nccl_lite/launch_glm45_air.sh --mem-fraction-static 0.93
 ```
 
 `run_sglang_ready_combine_8l4.sh` enables the producer without the separate

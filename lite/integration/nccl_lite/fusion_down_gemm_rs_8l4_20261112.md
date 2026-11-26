@@ -86,8 +86,8 @@ UCCL_LITE_REAL_NCCL=/path/to/sglang-pytorch/nvidia/nccl/lib/libnccl.so.2 \
   UCCL_LITE_SGLANG_READY_COMBINE_VERIFY=1 \
   UCCL_LITE_SGLANG_RS_SUM2_VERIFY=1 \
   UCCL_LITE_SGLANG_VERIFY_CALLS=2 \
-  ./experimental/lite/integration/nccl_lite/run_sglang_down_rs_8l4.sh \
-  ./experimental/lite/integration/nccl_lite/launch_glm45_air.sh --mem-fraction-static 0.93
+  ./lite/integration/nccl_lite/run_sglang_down_rs_8l4.sh \
+  ./lite/integration/nccl_lite/launch_glm45_air.sh --mem-fraction-static 0.93
 ```
 
 The three verification flags add GPU work and synchronization. Leave them

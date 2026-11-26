@@ -11,8 +11,8 @@ From the repository root, with CUDA 12.9 and NCCL headers available:
 
 ```bash
 CUDA_HOME=/usr/local/cuda-12.9 \
-NCCL_HOME="$PWD/experimental/lite/build/nccl-2.28.9" \
-python -m pip wheel --no-deps ./experimental/lite/integration/nccl_lite -w ./experimental/lite/integration/nccl_lite/build/wheels
+NCCL_HOME="$PWD/lite/build/nccl-2.28.9" \
+python -m pip wheel --no-deps ./lite/integration/nccl_lite -w ./lite/integration/nccl_lite/build/wheels
 ```
 
 Building the wheel invokes the existing Makefile and bundles the resulting
@@ -27,7 +27,7 @@ manylinux portability claim.
 Install into the same Python environment that runs SGLang or PyTorch:
 
 ```bash
-python -m pip install ./experimental/lite/integration/nccl_lite/wheels/uccl_lite_nccl-0.1.1-py3-none-linux_x86_64.whl
+python -m pip install ./lite/integration/nccl_lite/wheels/uccl_lite_nccl-0.1.1-py3-none-linux_x86_64.whl
 uccl-lite-nccl --real-nccl /absolute/path/to/libnccl.so.2 \
   -- python -m sglang.launch_server YOUR_SGLANG_ARGS
 ```

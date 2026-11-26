@@ -118,7 +118,7 @@ records and experiment scripts. Numeric records preserve the original bytes
 (noise records are losslessly gzip-compressed); the new figures use the shared
 [figure style](../../scripts/figure_style.py).
 
-From `experimental/lite`, with Python and Matplotlib installed:
+From `lite`, with Python and Matplotlib installed:
 
 ```bash
 make vllm-pcie-figures

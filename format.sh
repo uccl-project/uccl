@@ -5,12 +5,12 @@ set -e
 
 # Directories to format (excluding thirdparty/, scripts/, docs/, etc.)
 
-DIRECTORIES=("collective" "ep" "p2p" "include" "experimental")
+DIRECTORIES=("collective" "ep" "p2p" "include" "experimental" "lite")
 
 EXTENSIONS=("cpp" "cxx" "cc" "h" "hpp" "cu" "cuh")
 EXCLUDE=(
     "collective/afxdp/lib"
-    "experimental/lite/lite-collective/thirdparty"
+    "lite/lite-collective/thirdparty"
 )
 
 REQUIRED_VERSION="14"

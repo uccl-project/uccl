@@ -249,10 +249,10 @@ the order of windows in an invocation.
 Run these commands from the repository root:
 
 ```bash
-make -C experimental/lite/integration/nccl_lite
-make -C experimental/lite/integration/nccl_lite check
-make -C experimental/lite/integration/nccl_lite check-torch
-make -C experimental/lite/integration/nccl_lite check-shared-packet
+make -C lite/integration/nccl_lite
+make -C lite/integration/nccl_lite check
+make -C lite/integration/nccl_lite check-torch
+make -C lite/integration/nccl_lite check-shared-packet
 ```
 
 Set `CUDA_HOME` and `NCCL_HOME` to the CUDA and NCCL header installations if
@@ -265,7 +265,7 @@ part of the measured configuration.
 `check` runs an eight-process C++ AG/RS/AR correctness test. `check-torch` verifies
 that `LD_PRELOAD` intercepts PyTorch's NCCL ProcessGroup calls, including the
 `ncclCommInitRankConfig` path. Both require eight idle GPUs. Generated files
-stay under `experimental/lite/integration/nccl_lite/build/`.
+stay under `lite/integration/nccl_lite/build/`.
 Run `check` and `check-torch` through `run_packet_8l4.sh` to exercise packet
 mode; the plain commands above exercise the compatibility layer's default
 path. For the reported size curve, run `bench_torch.py` through the wrapper
@@ -291,7 +291,7 @@ replacement.
 Set both variables before launching the server and its worker processes:
 
 ```bash
-export LD_PRELOAD="$PWD/experimental/lite/integration/nccl_lite/build/libuccl_lite_nccl_compat.so"
+export LD_PRELOAD="$PWD/lite/integration/nccl_lite/build/libuccl_lite_nccl_compat.so"
 export SGLANG_NCCL_SO_PATH="$LD_PRELOAD"
 export UCCL_LITE_NCCL_ENABLE=1
 export UCCL_LITE_NCCL_MAX_BYTES=33554432

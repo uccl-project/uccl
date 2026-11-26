@@ -171,21 +171,21 @@ packet-versus-NCCL gain must not be added to these percentages.
 ## Run
 
 ```bash
-UCCL_LITE_AG_GEMM_BACKEND=cublas make -C experimental/lite/integration/nccl_lite check-ag-gemm \
+UCCL_LITE_AG_GEMM_BACKEND=cublas make -C lite/integration/nccl_lite check-ag-gemm \
   CUDA_HOME=/usr/local/cuda-12.9 \
-  NCCL_HOME=$PWD/experimental/lite/build/nccl-2.28.9 \
+  NCCL_HOME=$PWD/lite/build/nccl-2.28.9 \
   REAL_NCCL=/path/to/sglang-pytorch/nvidia/nccl/lib/libnccl.so.2
-make -C experimental/lite/integration/nccl_lite check-sum2 \
+make -C lite/integration/nccl_lite check-sum2 \
   CUDA_HOME=/usr/local/cuda-12.9 \
-  NCCL_HOME=$PWD/experimental/lite/build/nccl-2.28.9 \
+  NCCL_HOME=$PWD/lite/build/nccl-2.28.9 \
   REAL_NCCL=/path/to/sglang-pytorch/nvidia/nccl/lib/libnccl.so.2
 UCCL_LITE_REAL_NCCL=/path/to/sglang-pytorch/nvidia/nccl/lib/libnccl.so.2 \
-  ./experimental/lite/integration/nccl_lite/run_sglang_fusion_8l4.sh \
-  ./experimental/lite/integration/nccl_lite/launch_glm45_air.sh --mem-fraction-static 0.93
+  ./lite/integration/nccl_lite/run_sglang_fusion_8l4.sh \
+  ./lite/integration/nccl_lite/launch_glm45_air.sh --mem-fraction-static 0.93
 # For the combined AG+gate and row-ready RS path:
 UCCL_LITE_REAL_NCCL=/path/to/sglang-pytorch/nvidia/nccl/lib/libnccl.so.2 \
-  ./experimental/lite/integration/nccl_lite/run_sglang_ag_ready_rs_8l4.sh \
-  ./experimental/lite/integration/nccl_lite/launch_glm45_air.sh --mem-fraction-static 0.93
+  ./lite/integration/nccl_lite/run_sglang_ag_ready_rs_8l4.sh \
+  ./lite/integration/nccl_lite/launch_glm45_air.sh --mem-fraction-static 0.93
 ```
 
 `run_sglang_fusion_8l4.sh` defaults to the cuBLAS AG backend; set

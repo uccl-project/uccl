@@ -1,6 +1,6 @@
 # Building and running UCCL Lite
 
-Run all commands from `experimental/lite/`. The Makefile builds independent
+Run all commands from `lite/`. The Makefile builds independent
 benchmarks and writes only to `build/`; it does not install libraries or modify
 the rest of UCCL. Use `make help` for the target list.
 

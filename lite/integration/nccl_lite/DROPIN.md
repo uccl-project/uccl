@@ -61,7 +61,7 @@ the historical figures.
 
 ## Build and launch
 
-From `experimental/lite`, with the desired real NCCL headers/library:
+From `lite`, with the desired real NCCL headers/library:
 
 ```bash
 make -C integration/nccl_lite dropin NCCL_HOME=../../build/nccl-2.28.9

@@ -38,7 +38,7 @@ FP32 SUM AR/RS and FP32 AG, exact profiled extents, eager execution. All other
 strict ABI limitations still apply. Shape admission is explicit candidate
 selection, never automatic based on GPU count. It is not a deployment profile.
 
-Reproduce the check from `experimental/lite` (use a new output directory):
+Reproduce the check from `lite` (use a new output directory):
 
 ```bash
 make nccl-local-strict

@@ -6,7 +6,7 @@ inherited drop-in profile: it establishes ABI and fallback behavior, not
 accelerated UCCL performance. The existing calibrated eight-L4 profile must
 not be used as evidence for four L4s or two four-L4 hosts.
 
-From `experimental/lite`:
+From `lite`:
 
 ```bash
 make nccl-dropin-check NCCL_TESTS_BIN=$HOME/third_party/nccl-tests/build \

@@ -208,7 +208,7 @@ calibration; old profiles are not promoted to validation of the refactor.
 
 ## Build and reproduce on a new checkout
 
-Run from `experimental/lite`. Install/provide CUDA, NCCL and CUTLASS as in
+Run from `lite`. Install/provide CUDA, NCCL and CUTLASS as in
 [build.md](build.md); do not use another checkout's old binaries.
 
 ```bash

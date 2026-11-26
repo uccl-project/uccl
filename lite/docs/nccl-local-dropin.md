@@ -22,7 +22,7 @@ reductions, nonempty groups, user graph capture, registration and other
 collectives are refused explicitly. Internal CUDA graph reuse does not imply
 support for capture by the caller.
 
-Build from `experimental/lite`:
+Build from `lite`:
 
 ```bash
 make nccl-local-strict BUILD=build/local_candidate -j4

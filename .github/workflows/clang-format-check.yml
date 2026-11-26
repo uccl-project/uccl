@@ -30,9 +30,9 @@ jobs:
       run: |
         set -e
 
-        DIRECTORIES=("collective" "ep" "experimental" "p2p" "include")
+        DIRECTORIES=("collective" "ep" "experimental" "lite" "p2p" "include")
         EXTENSIONS=("cpp" "cxx" "cc" "h" "hpp" "cu" "cuh")
-        EXCLUDE=("collective/afxdp/lib" "experimental/lite/lite-collective/thirdparty")
+        EXCLUDE=("collective/afxdp/lib" "lite/lite-collective/thirdparty")
 
         EXCLUDE_ARGS=()
         for EXC in "${EXCLUDE[@]}"; do
