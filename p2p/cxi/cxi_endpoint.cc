@@ -6,6 +6,8 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <future>
 #include <limits>
 #include <sstream>
@@ -15,15 +17,22 @@
 namespace {
 
 constexpr uint32_t kCxiEndpointInfoMagic = 0x43584950;  // "CXIP"
-constexpr uint32_t kCxiEndpointInfoVersion = 1;
+// Version 2: one endpoint name per lane, and the FIFO metadata carries one MR
+// key per lane.
+constexpr uint32_t kCxiEndpointInfoVersion = 2;
 
+// Followed by num_lanes entries of {uint16_t size; uint8_t name[size]}.
 struct CxiEndpointInfoHeader {
   uint32_t magic = kCxiEndpointInfoMagic;
   uint32_t version = kCxiEndpointInfoVersion;
   int32_t gpu_index = -1;
   uint16_t oob_port = 0;
-  uint16_t ep_name_size = 0;
+  uint16_t num_lanes = 0;
 };
+
+// RMA pieces start at multiples of this. Pieces that start at unaligned
+// offsets were measured 4 to 5 times slower.
+constexpr size_t kCxiPieceAlign = 4096;
 
 void check_fi(char const* what, int ret) {
   if (ret != 0) {
@@ -47,12 +56,49 @@ fi_threading threading_hint() {
       " (expected one of: safe, endpoint, completion, domain, fid, unspec)");
 }
 
+// Reads <device_dir>/numa_node. Returns -1 if it is missing or unknown.
+int sysfs_numa_node(std::filesystem::path const& device_dir) {
+  std::ifstream file(device_dir / "numa_node");
+  int node = -1;
+  if (!(file >> node) || node < 0) return -1;
+  return node;
+}
+
+std::filesystem::path cxi_device_dir(std::string const& domain_name) {
+  return std::filesystem::path("/sys/class/cxi") / domain_name / "device";
+}
+
+int cxi_device_index_on_gpu_numa_node(int gpu_index) {
+  auto const gpus = uccl::get_gpu_cards();
+  if (static_cast<size_t>(gpu_index) >= gpus.size()) return -1;
+  int const node = sysfs_numa_node(gpus[gpu_index]);
+  if (node < 0) return -1;
+
+  int found = -1;
+  std::error_code ec;
+  for (auto const& entry :
+       std::filesystem::directory_iterator("/sys/class/cxi", ec)) {
+    std::string const name = entry.path().filename().string();
+    if (name.rfind("cxi", 0) != 0) continue;
+
+    char* end = nullptr;
+    long const index = std::strtol(name.c_str() + 3, &end, 10);
+    if (end == name.c_str() + 3 || *end != '\0') continue;
+    if (sysfs_numa_node(cxi_device_dir(name)) != node) continue;
+    if (found >= 0) return -1;  // More than one NIC on this NUMA node.
+    found = static_cast<int>(index);
+  }
+  return found;
+}
+
 int cxi_device_index_for_gpu(int gpu_index) {
   char const* value = std::getenv("UCCL_CXI_DEVICE_INDEX");
   if (value && value[0] != '\0') return std::atoi(value);
   if (gpu_index < 0 || static_cast<uint32_t>(gpu_index) == INVALID_GPU) {
     return -1;
   }
+  int const local = cxi_device_index_on_gpu_numa_node(gpu_index);
+  if (local >= 0) return local;
   return gpu_index % 4;
 }
 
@@ -75,6 +121,19 @@ size_t cxi_size_env(char const* name, size_t fallback) {
   unsigned long parsed = std::strtoul(value, &end, 10);
   if (end == value || parsed == 0) return fallback;
   return static_cast<size_t>(parsed);
+}
+
+int cxi_num_lanes() {
+  char const* value = std::getenv("UCCL_CXI_NUM_LANES");
+  if (!value || value[0] == '\0') return kCxiMaxLanes;
+  char* end = nullptr;
+  long const lanes = std::strtol(value, &end, 10);
+  if (end == value || *end != '\0' || lanes < 1 || lanes > kCxiMaxLanes) {
+    throw std::runtime_error(std::string("Invalid UCCL_CXI_NUM_LANES=") +
+                             value + " (expected 1 to " +
+                             std::to_string(kCxiMaxLanes) + ")");
+  }
+  return static_cast<int>(lanes);
 }
 
 bool is_cuda_pointer(void* ptr, int& cuda_device) {
@@ -142,6 +201,16 @@ std::string drain_cq_errors(fid_cq* cq) {
   return os.str();
 }
 
+void close_mrs(std::vector<fid_mr*>& mrs) {
+  for (fid_mr* mr : mrs) {
+    int ret = fi_close(&mr->fid);
+    if (ret != 0) {
+      UCCL_LOG(ERROR) << "fi_close(mr) failed: " << fi_strerror(-ret);
+    }
+  }
+  mrs.clear();
+}
+
 }  // namespace
 
 CxiEndpoint::CxiEndpoint(int gpu_index, uint64_t port) : gpu_index_(gpu_index) {
@@ -179,7 +248,8 @@ CxiEndpoint::~CxiEndpoint() {
   // Close in dependency order: the endpoint is bound to the AV and CQ, so they
   // stay busy until it is closed, and a busy domain makes fi_close(fabric)
   // corrupt libfabric's fabric list.
-  if (ep_) fi_close(&ep_->fid);
+  for (fid_ep* ep : eps_) fi_close(&ep->fid);
+  eps_.clear();
   if (av_) fi_close(&av_->fid);
   if (cq_) fi_close(&cq_->fid);
   if (domain_) fi_close(&domain_->fid);
@@ -196,8 +266,19 @@ bool CxiEndpoint::initialize_rdma_ctx_for_gpu(
   init_fabric(gpu_index);
   fabric_initialized_ = true;
   UCCL_LOG(INFO) << "CxiEndpoint initialized for GPU " << gpu_index
-                 << " on domain " << cxi_domain_name_for_gpu(gpu_index);
+                 << " on domain "
+                 << (info_->domain_attr->name ? info_->domain_attr->name : "?")
+                 << ", NIC NUMA node " << nic_numa_node(gpu_index);
   return true;
+}
+
+// Before the domain is open (lazy engine setup), use the NIC that init_fabric
+// will open for this GPU.
+int CxiEndpoint::nic_numa_node(int gpu_index) const {
+  bool const open = info_ && info_->domain_attr && info_->domain_attr->name;
+  std::string const name =
+      open ? info_->domain_attr->name : cxi_domain_name_for_gpu(gpu_index);
+  return name.empty() ? -1 : sysfs_numa_node(cxi_device_dir(name));
 }
 
 void CxiEndpoint::init_fabric(int gpu_index) {
@@ -244,28 +325,58 @@ void CxiEndpoint::init_fabric(int gpu_index) {
 
     check_fi("fi_fabric", fi_fabric(info_->fabric_attr, &fabric_, nullptr));
     check_fi("fi_domain", fi_domain(fabric_, info_, &domain_, nullptr));
-    check_fi("fi_endpoint", fi_endpoint(domain_, info_, &ep_, nullptr));
+
+    // MR match events need the target to poll its CQ, so the idle receive
+    // proxy keeps polling when they are on.
+    char const* match = std::getenv("FI_CXI_MR_MATCH_EVENTS");
+    mr_match_events_ =
+        match && match[0] != '\0' && std::strcmp(match, "0") != 0;
+    if (mr_match_events_) {
+      UCCL_LOG(INFO, UCCL_INIT)
+          << "CXI MR match events are on; the receive proxy keeps polling the "
+             "CQ when idle";
+    }
 
     fi_cq_attr cq_attr{};
     cq_attr.format = FI_CQ_FORMAT_CONTEXT;
     cq_attr.size = cxi_size_env("UCCL_CXI_CQ_SIZE", 8192);
     check_fi("fi_cq_open", fi_cq_open(domain_, &cq_attr, &cq_, nullptr));
-    check_fi("fi_ep_bind(cq)",
-             fi_ep_bind(ep_, &cq_->fid, FI_TRANSMIT | FI_RECV));
 
     fi_av_attr av_attr{};
     av_attr.type = FI_AV_TABLE;
     check_fi("fi_av_open", fi_av_open(domain_, &av_attr, &av_, nullptr));
-    check_fi("fi_ep_bind(av)", fi_ep_bind(ep_, &av_->fid, 0));
+
+    // All lanes share the one CQ and AV. Only lane 0 posts; the other lanes
+    // are RMA targets for the peer.
+    int const num_lanes = cxi_num_lanes();
+    for (int lane = 0; lane < num_lanes; ++lane) {
+      fid_ep* ep = nullptr;
+      check_fi("fi_endpoint", fi_endpoint(domain_, info_, &ep, nullptr));
+      eps_.push_back(ep);
+      check_fi("fi_ep_bind(cq)",
+               fi_ep_bind(ep, &cq_->fid, FI_TRANSMIT | FI_RECV));
+      check_fi("fi_ep_bind(av)", fi_ep_bind(ep, &av_->fid, 0));
 
 #ifdef FI_OPT_CUDA_API_PERMITTED
-    bool cuda_api_permitted = false;
-    check_fi("fi_setopt(FI_OPT_CUDA_API_PERMITTED)",
-             fi_setopt(&ep_->fid, FI_OPT_ENDPOINT, FI_OPT_CUDA_API_PERMITTED,
-                       &cuda_api_permitted, sizeof(cuda_api_permitted)));
+      bool cuda_api_permitted = false;
+      check_fi("fi_setopt(FI_OPT_CUDA_API_PERMITTED)",
+               fi_setopt(&ep->fid, FI_OPT_ENDPOINT, FI_OPT_CUDA_API_PERMITTED,
+                         &cuda_api_permitted, sizeof(cuda_api_permitted)));
 #endif
 
-    check_fi("fi_enable", fi_enable(ep_));
+      check_fi("fi_enable", fi_enable(ep));
+    }
+    // A post larger than max_msg_size fails with -FI_EMSGSIZE (CXI: 4 GiB
+    // - 1 B), so no piece is larger than that, rounded down to a multiple of
+    // kCxiPieceAlign.
+    max_piece_bytes_ =
+        info_->ep_attr->max_msg_size / kCxiPieceAlign * kCxiPieceAlign;
+    if (max_piece_bytes_ == 0) {
+      throw std::runtime_error("CXI max_msg_size is below 4 KiB");
+    }
+    UCCL_LOG(INFO) << "CXI lanes: " << num_lanes << ", max piece bytes "
+                   << max_piece_bytes_ << ", mr_key_size "
+                   << info_->domain_attr->mr_key_size;
   } catch (...) {
     fi_freeinfo(hints);
     throw;
@@ -293,36 +404,38 @@ std::string CxiEndpoint::get_oob_conn_key(uint64_t peer_id) const {
 }
 
 CxiEndpoint::EndpointInfo CxiEndpoint::local_endpoint_info() const {
-  if (!fabric_initialized_ || !ep_) {
+  if (!fabric_initialized_ || eps_.empty()) {
     throw std::runtime_error("CXI endpoint not initialized");
   }
 
   EndpointInfo info;
   info.oob_port = oob_server_ ? oob_server_->get_port() : 0;
   info.gpu_index = gpu_index_;
-  info.ep_name.resize(512);
-  size_t len = info.ep_name.size();
-  check_fi("fi_getname", fi_getname(&ep_->fid, info.ep_name.data(), &len));
-  info.ep_name.resize(len);
+  for (fid_ep* ep : eps_) {
+    std::vector<uint8_t> name(512);
+    size_t len = name.size();
+    check_fi("fi_getname", fi_getname(&ep->fid, name.data(), &len));
+    name.resize(len);
+    info.ep_names.push_back(std::move(name));
+  }
   return info;
 }
 
 std::string CxiEndpoint::serialize_endpoint_info(
     EndpointInfo const& info) const {
-  if (info.ep_name.size() > std::numeric_limits<uint16_t>::max()) {
-    throw std::runtime_error("CXI endpoint name too large");
-  }
-
   CxiEndpointInfoHeader header;
   header.gpu_index = info.gpu_index;
   header.oob_port = info.oob_port;
-  header.ep_name_size = static_cast<uint16_t>(info.ep_name.size());
+  header.num_lanes = static_cast<uint16_t>(info.ep_names.size());
 
-  std::string bytes(sizeof(header) + info.ep_name.size(), '\0');
-  std::memcpy(bytes.data(), &header, sizeof(header));
-  if (!info.ep_name.empty()) {
-    std::memcpy(bytes.data() + sizeof(header), info.ep_name.data(),
-                info.ep_name.size());
+  std::string bytes(reinterpret_cast<char const*>(&header), sizeof(header));
+  for (auto const& name : info.ep_names) {
+    if (name.size() > std::numeric_limits<uint16_t>::max()) {
+      throw std::runtime_error("CXI endpoint name too large");
+    }
+    uint16_t const size = static_cast<uint16_t>(name.size());
+    bytes.append(reinterpret_cast<char const*>(&size), sizeof(size));
+    bytes.append(reinterpret_cast<char const*>(name.data()), name.size());
   }
   return bytes;
 }
@@ -335,35 +448,63 @@ CxiEndpoint::EndpointInfo CxiEndpoint::deserialize_endpoint_info(
 
   CxiEndpointInfoHeader header{};
   std::memcpy(&header, bytes.data(), sizeof(header));
-  if (header.magic != kCxiEndpointInfoMagic ||
-      header.version != kCxiEndpointInfoVersion) {
+  // The bytes must be CXI endpoint metadata, both sides must use the same
+  // format (version 2 has one endpoint name per lane), and the peer's lane
+  // count must fit the per-lane MR keys in the FIFO metadata (at most
+  // kCxiMaxLanes).
+  if (header.magic != kCxiEndpointInfoMagic) {
     throw std::runtime_error("Invalid CXI endpoint metadata");
   }
-  if (bytes.size() != sizeof(header) + header.ep_name_size) {
-    throw std::runtime_error("CXI endpoint metadata length mismatch");
+  if (header.version != kCxiEndpointInfoVersion) {
+    throw std::runtime_error("CXI endpoint metadata version " +
+                             std::to_string(header.version) + ", expected " +
+                             std::to_string(kCxiEndpointInfoVersion) +
+                             ": both sides must run the same UCCL p2p version");
+  }
+  if (header.num_lanes < 1 || header.num_lanes > kCxiMaxLanes) {
+    throw std::runtime_error(
+        "CXI peer has " + std::to_string(header.num_lanes) +
+        " lanes, expected 1 to " + std::to_string(kCxiMaxLanes));
   }
 
   EndpointInfo info;
   info.oob_port = header.oob_port;
   info.gpu_index = header.gpu_index;
-  info.ep_name.resize(header.ep_name_size);
-  if (header.ep_name_size > 0) {
-    std::memcpy(info.ep_name.data(), bytes.data() + sizeof(header),
-                header.ep_name_size);
+  size_t pos = sizeof(header);
+  for (uint16_t lane = 0; lane < header.num_lanes; ++lane) {
+    uint16_t size = 0;
+    if (bytes.size() < pos + sizeof(size)) {
+      throw std::runtime_error("CXI endpoint metadata length mismatch");
+    }
+    std::memcpy(&size, bytes.data() + pos, sizeof(size));
+    pos += sizeof(size);
+    if (size == 0 || bytes.size() < pos + size) {
+      throw std::runtime_error("CXI endpoint metadata length mismatch");
+    }
+    auto const* name = reinterpret_cast<uint8_t const*>(bytes.data() + pos);
+    info.ep_names.emplace_back(name, name + size);
+    pos += size;
+  }
+  if (pos != bytes.size()) {
+    throw std::runtime_error("CXI endpoint metadata length mismatch");
   }
   return info;
 }
 
-fi_addr_t CxiEndpoint::insert_peer(EndpointInfo const& info) {
+std::vector<fi_addr_t> CxiEndpoint::insert_peer(EndpointInfo const& info) {
   if (!av_) throw std::runtime_error("CXI AV missing");
-  if (info.ep_name.empty()) {
+  if (info.ep_names.empty()) {
     throw std::runtime_error("CXI peer endpoint name is empty");
   }
 
-  fi_addr_t addr = FI_ADDR_UNSPEC;
-  int ret = fi_av_insert(av_, info.ep_name.data(), 1, &addr, 0, nullptr);
-  if (ret != 1) check_fi("fi_av_insert", ret < 0 ? ret : -FI_EINVAL);
-  return addr;
+  std::vector<fi_addr_t> addrs;
+  for (auto const& name : info.ep_names) {
+    fi_addr_t addr = FI_ADDR_UNSPEC;
+    int ret = fi_av_insert(av_, name.data(), 1, &addr, 0, nullptr);
+    if (ret != 1) check_fi("fi_av_insert", ret < 0 ? ret : -FI_EINVAL);
+    addrs.push_back(addr);
+  }
+  return addrs;
 }
 
 ConnID CxiEndpoint::uccl_connect(int remote_gpuidx, std::string remote_ip,
@@ -391,7 +532,13 @@ ConnID CxiEndpoint::uccl_connect(int remote_gpuidx, std::string remote_ip,
   std::future<EndpointInfo> future = promise->get_future();
   bool sent = oob_client_->send_meta(
       conn_key, payload, [this, promise](std::string const& response) {
-        promise->set_value(deserialize_endpoint_info(response));
+        // Pass a bad reply (for example a version mismatch) to the caller,
+        // so that the connect fails at once with that error.
+        try {
+          promise->set_value(deserialize_endpoint_info(response));
+        } catch (...) {
+          promise->set_exception(std::current_exception());
+        }
       });
   if (!sent) {
     UCCL_LOG(ERROR) << "Failed to send CXI endpoint metadata";
@@ -406,11 +553,19 @@ ConnID CxiEndpoint::uccl_connect(int remote_gpuidx, std::string remote_ip,
     return ConnID{nullptr, -1, -1, UINT64_MAX};
   }
 
-  EndpointInfo remote_info = future.get();
-  fi_addr_t addr = insert_peer(remote_info);
+  EndpointInfo remote_info;
+  try {
+    remote_info = future.get();
+  } catch (std::exception const& e) {
+    UCCL_LOG(ERROR) << "CXI endpoint handshake failed: " << e.what();
+    erase_oob_conn_key();
+    return ConnID{nullptr, -1, -1, UINT64_MAX};
+  }
+  std::vector<fi_addr_t> addrs = insert_peer(remote_info);
   {
     std::unique_lock<std::shared_mutex> lock(peer_mutex_);
-    peers_[peer_id] = Peer{addr, remote_ip, remote_port, remote_gpuidx};
+    peers_[peer_id] =
+        Peer{std::move(addrs), remote_ip, remote_port, remote_gpuidx};
   }
 
   ConnID conn_id;
@@ -474,13 +629,14 @@ void CxiEndpoint::process_meta(std::string const& input, std::string& output,
   }
 
   EndpointInfo peer_info = deserialize_endpoint_info(input);
-  fi_addr_t addr = insert_peer(peer_info);
+  std::vector<fi_addr_t> addrs = insert_peer(peer_info);
   uint64_t peer_id = next_recv_peer_id_.fetch_add(1, std::memory_order_relaxed);
 
   {
     std::unique_lock<std::shared_mutex> lock(peer_mutex_);
-    peers_[peer_id] = Peer{addr, client_ip, static_cast<uint16_t>(client_port),
-                           peer_info.gpu_index};
+    peers_[peer_id] =
+        Peer{std::move(addrs), client_ip, static_cast<uint16_t>(client_port),
+             peer_info.gpu_index};
   }
 
   {
@@ -522,65 +678,68 @@ int CxiEndpoint::uccl_regmr(void* data, size_t len,
   out->len = len;
 
   int cuda_device = -1;
-  if (is_cuda_pointer(data, cuda_device)) {
-    iovec iov{};
-    iov.iov_base = data;
-    iov.iov_len = len;
+  bool const is_cuda = is_cuda_pointer(data, cuda_device);
+  uint64_t const access =
+      FI_SEND | FI_RECV | FI_READ | FI_WRITE | FI_REMOTE_WRITE | FI_REMOTE_READ;
 
-    fi_mr_attr mr_attr{};
-    mr_attr.mr_iov = &iov;
-    mr_attr.iov_count = 1;
-    mr_attr.access = FI_SEND | FI_RECV | FI_READ | FI_WRITE | FI_REMOTE_WRITE |
-                     FI_REMOTE_READ;
-    mr_attr.iface = FI_HMEM_CUDA;
-    mr_attr.device.cuda = cuda_device;
+  // With FI_MR_ENDPOINT, an MR binds to one endpoint, so register the buffer
+  // once per lane. Each lane adds one MR (registration time and one NIC
+  // target entry per buffer); UCCL_CXI_NUM_LANES=1 keeps one MR per buffer.
+  for (fid_ep* ep : eps_) {
+    fid_mr* mr = nullptr;
+    if (is_cuda) {
+      iovec iov{};
+      iov.iov_base = data;
+      iov.iov_len = len;
 
-    int ret = fi_mr_regattr(domain_, &mr_attr, 0, &out->mr);
-    if (ret != 0) {
-      UCCL_LOG(ERROR) << "fi_mr_regattr(cuda) failed: " << fi_strerror(-ret);
-      return -1;
+      fi_mr_attr mr_attr{};
+      mr_attr.mr_iov = &iov;
+      mr_attr.iov_count = 1;
+      mr_attr.access = access;
+      mr_attr.iface = FI_HMEM_CUDA;
+      mr_attr.device.cuda = cuda_device;
+
+      int ret = fi_mr_regattr(domain_, &mr_attr, 0, &mr);
+      if (ret != 0) {
+        UCCL_LOG(ERROR) << "fi_mr_regattr(cuda) failed: " << fi_strerror(-ret);
+        close_mrs(out->mrs);
+        return -1;
+      }
+    } else {
+      int ret = fi_mr_reg(domain_, data, len, access, 0, 0, 0, &mr, nullptr);
+      if (ret != 0) {
+        UCCL_LOG(ERROR) << "fi_mr_reg(host) failed: " << fi_strerror(-ret);
+        close_mrs(out->mrs);
+        return -1;
+      }
     }
-  } else {
-    int ret = fi_mr_reg(domain_, data, len,
-                        FI_SEND | FI_RECV | FI_READ | FI_WRITE |
-                            FI_REMOTE_WRITE | FI_REMOTE_READ,
-                        0, 0, 0, &out->mr, nullptr);
-    if (ret != 0) {
-      UCCL_LOG(ERROR) << "fi_mr_reg(host) failed: " << fi_strerror(-ret);
-      return -1;
+    out->mrs.push_back(mr);
+
+    if (info_->domain_attr->mr_mode & FI_MR_ENDPOINT) {
+      int ret = fi_mr_bind(mr, &ep->fid, 0);
+      if (ret != 0) {
+        UCCL_LOG(ERROR) << "fi_mr_bind(ep) failed: " << fi_strerror(-ret);
+        close_mrs(out->mrs);
+        return -1;
+      }
+      ret = fi_mr_enable(mr);
+      if (ret != 0) {
+        UCCL_LOG(ERROR) << "fi_mr_enable failed: " << fi_strerror(-ret);
+        close_mrs(out->mrs);
+        return -1;
+      }
     }
+    out->keys.push_back(fi_mr_key(mr));
   }
 
-  if (info_->domain_attr->mr_mode & FI_MR_ENDPOINT) {
-    int ret = fi_mr_bind(out->mr, &ep_->fid, 0);
-    if (ret != 0) {
-      UCCL_LOG(ERROR) << "fi_mr_bind(ep) failed: " << fi_strerror(-ret);
-      fi_close(&out->mr->fid);
-      return -1;
-    }
-    ret = fi_mr_enable(out->mr);
-    if (ret != 0) {
-      UCCL_LOG(ERROR) << "fi_mr_enable failed: " << fi_strerror(-ret);
-      fi_close(&out->mr->fid);
-      return -1;
-    }
-  }
-
-  out->key = fi_mr_key(out->mr);
   region = out;
   return 0;
 }
 
 void CxiEndpoint::uccl_deregmr(std::shared_ptr<CxiMemoryRegion> const& region) {
-  if (!region || !region->mr) return;
-  fid_mr* mr = region->mr;
-  int ret = fi_close(&mr->fid);
-  if (ret != 0) {
-    UCCL_LOG(ERROR) << "fi_close(mr) failed: " << fi_strerror(-ret);
-    return;
-  }
-  region->mr = nullptr;
-  region->key = 0;
+  if (!region) return;
+  close_mrs(region->mrs);
+  region->keys.clear();
 }
 
 int CxiEndpoint::uccl_read_async(
@@ -599,7 +758,7 @@ int CxiEndpoint::post_rma(bool is_read, ConnID const& conn,
                           std::shared_ptr<CxiMemoryRegion> const& local_mr,
                           void* local, size_t size, FifoItem const& fifo_item,
                           UcclRequest* ureq) {
-  if (!local_mr || !local_mr->mr || !local || !ureq) return -1;
+  if (!local_mr || local_mr->mrs.empty() || !local || !ureq) return -1;
 
   CxiFifoMetadata metadata;
   if (!decode_cxi_fifo_metadata(fifo_item, metadata)) {
@@ -631,48 +790,112 @@ int CxiEndpoint::post_rma(bool is_read, ConnID const& conn,
     peer = it->second;
   }
 
+  size_t const peer_lanes = peer.addrs.size();
+  if (peer_lanes == 0) {
+    UCCL_LOG(ERROR) << "CXI peer_id " << conn.peer_id << " has no lanes";
+    return -1;
+  }
+
   auto op = std::make_unique<OpContext>();
   op->id = static_cast<uint32_t>(
       next_request_id_.fetch_add(1, std::memory_order_relaxed));
-  set_fi_context_owner(op->ctx, op.get());
   uint64_t const remote_offset = fifo_item.addr - metadata.base;
 
-  ssize_t rc;
+  // The bandwidth cap is per target endpoint, so a message above 512 KiB is
+  // split as on the verbs path (ChunkSplitStrategy: at most 16 pieces of
+  // equal size). Each piece is rounded up to kCxiPieceAlign, so only the last
+  // piece is shorter, and is at most max_piece_bytes_. The pieces go to the
+  // peer lanes in turn, starting at the lane chosen by request id; a message
+  // that is not split is one piece on that lane.
+  size_t piece = size;
+  size_t const count = ChunkSplitStrategy::get_message_chunk_count(size);
+  if (peer_lanes > 1 && count > 1) {
+    piece = (size + count - 1) / count;
+    piece = (piece + kCxiPieceAlign - 1) / kCxiPieceAlign * kCxiPieceAlign;
+  }
+  piece = std::min(piece, max_piece_bytes_);
+  size_t const num_pieces = piece >= size ? 1 : (size + piece - 1) / piece;
+  op->ctxs.resize(num_pieces);
+  op->lanes.resize(num_pieces);
+  op->remaining = static_cast<int>(num_pieces);
+  for (size_t i = 0; i < num_pieces; ++i) {
+    set_fi_context_owner(op->ctxs[i], op.get());
+    op->lanes[i] = static_cast<int>((op->id + i) % peer_lanes);
+  }
+
+  void* const desc = fi_mr_desc(local_mr->mrs[0]);
+  auto post_piece = [&](size_t i) -> ssize_t {
+    size_t const offset = i * piece;
+    size_t const len = std::min(piece, size - offset);
+    int const lane = op->lanes[i];
+    char* const buf = static_cast<char*>(local) + offset;
+    if (is_read) {
+      return fi_read(eps_[0], buf, len, desc, peer.addrs[lane],
+                     remote_offset + offset, metadata.keys[lane], &op->ctxs[i]);
+    }
+    return fi_write(eps_[0], buf, len, desc, peer.addrs[lane],
+                    remote_offset + offset, metadata.keys[lane], &op->ctxs[i]);
+  };
+
+  ssize_t rc = 0;
+  size_t failed_piece = 0;
   std::string post_error_cq_errors;
   {
     std::lock_guard<std::mutex> fabric_lock(fabric_mutex_);
-    if (is_read) {
-      rc = fi_read(ep_, local, size, fi_mr_desc(local_mr->mr), peer.addr,
-                   remote_offset, metadata.key, &op->ctx);
-    } else {
-      rc = fi_write(ep_, local, size, fi_mr_desc(local_mr->mr), peer.addr,
-                    remote_offset, metadata.key, &op->ctx);
-    }
-
-    // FI_EAGAIN means the provider is momentarily out of posting resources;
-    // drive the CQ, yield, and let the caller retry. Any other non-zero rc
-    // (notably FI_EIO) is a hard failure: fall through and fail closed.
-    if (rc == -FI_EAGAIN) {
-      poll_cq_locked();
-      std::this_thread::yield();
-      return UCCL_POST_TRANSIENT;
+    for (size_t i = 0; i < num_pieces; ++i) {
+      rc = post_piece(i);
+      // After the first piece, do not return UCCL_POST_TRANSIENT: the caller
+      // would post the whole request again and free this context while
+      // earlier pieces are in flight. Drive the CQ and retry the piece.
+      while (rc == -FI_EAGAIN && i > 0) {
+        poll_cq_locked();
+        rc = post_piece(i);
+      }
+      // FI_EAGAIN means the provider is momentarily out of posting resources;
+      // drive the CQ, yield, and let the caller retry. Any other non-zero rc
+      // (notably FI_EIO) is a hard failure: fall through and fail closed.
+      if (rc == -FI_EAGAIN) {
+        poll_cq_locked();
+        std::this_thread::yield();
+        return UCCL_POST_TRANSIENT;
+      }
+      if (rc != 0) {
+        failed_piece = i;
+        break;
+      }
     }
     // Drain only on the fatal path (FI_EIO aborts below): draining consumes
     // CQ error entries that may belong to other inflight ops, which would
     // otherwise never be marked failed by poll_cq_locked().
     if (rc == -FI_EIO) {
       post_error_cq_errors = drain_cq_errors(cq_);
+    } else if (rc != 0 && failed_piece > 0) {
+      // The pieces already posted point to this context: wait until they
+      // complete before the context is freed.
+      {
+        std::lock_guard<std::mutex> lock(op_mutex_);
+        op->remaining -= static_cast<int>(num_pieces - failed_piece);
+      }
+      for (;;) {
+        poll_cq_locked();
+        std::lock_guard<std::mutex> lock(op_mutex_);
+        if (op->remaining <= 0) break;
+      }
     }
   }
   if (rc != 0) {
+    size_t const offset = failed_piece * piece;
+    int const lane = op->lanes[failed_piece];
     std::ostringstream os;
     os << (is_read ? "fi_read" : "fi_write") << " failed: " << fi_strerror(-rc)
        << " rc=" << rc << " peer_id=" << conn.peer_id
-       << " peer_gpu=" << peer.gpu_index << " size=" << size << " local=0x"
-       << std::hex << local_addr << " local_base=0x" << local_base
-       << " local_len=0x" << local_mr->len << " remote=0x" << fifo_item.addr
-       << " remote_base=0x" << metadata.base << " remote_len=0x" << metadata.len
-       << " remote_offset=0x" << remote_offset << " key=0x" << metadata.key
+       << " peer_gpu=" << peer.gpu_index << " size=" << size
+       << " piece=" << failed_piece << "/" << num_pieces << " lane=" << lane
+       << " local=0x" << std::hex << local_addr << " local_base=0x"
+       << local_base << " local_len=0x" << local_mr->len << " remote=0x"
+       << fifo_item.addr << " remote_base=0x" << metadata.base
+       << " remote_len=0x" << metadata.len << " remote_offset=0x"
+       << remote_offset + offset << " key=0x" << metadata.keys[lane]
        << std::dec;
     if (!post_error_cq_errors.empty()) {
       os << " pending_cq_errors=[" << post_error_cq_errors << "]";
@@ -716,7 +939,7 @@ void CxiEndpoint::poll_cq_locked() {
       for (ssize_t i = 0; i < rc; ++i) {
         auto* ctx = static_cast<OpContext*>(
             get_fi_context_owner(entries[i].op_context));
-        if (ctx) ctx->done = true;
+        if (ctx && --ctx->remaining <= 0) ctx->done = true;
       }
       continue;
     }
@@ -733,6 +956,13 @@ void CxiEndpoint::poll_cq_locked() {
         auto* ctx =
             static_cast<OpContext*>(get_fi_context_owner(err.op_context));
         if (ctx) {
+          auto const piece =
+              static_cast<fi_context2*>(err.op_context) - ctx->ctxs.data();
+          if (piece >= 0 && static_cast<size_t>(piece) < ctx->lanes.size()) {
+            error_message += " (lane " + std::to_string(ctx->lanes[piece]) +
+                             ", piece " + std::to_string(piece) + ")";
+          }
+          --ctx->remaining;
           ctx->done = true;
           ctx->failed = true;
           ctx->err = err.err;
@@ -785,8 +1015,11 @@ int CxiEndpoint::send_notification(uint64_t peer_id,
 void encode_cxi_fifo_metadata(CxiMemoryRegion const& region, FifoItem& item) {
   CxiFifoMetadata metadata;
   metadata.base = reinterpret_cast<uint64_t>(region.addr);
-  metadata.key = region.key;
   metadata.len = region.len;
+  for (size_t i = 0;
+       i < region.keys.size() && i < static_cast<size_t>(kCxiMaxLanes); ++i) {
+    metadata.keys[i] = region.keys[i];
+  }
   std::memset(item.padding, 0, sizeof(item.padding));
   std::memcpy(item.padding, &metadata, sizeof(metadata));
 }

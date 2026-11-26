@@ -27,6 +27,12 @@ struct NCCLEndpoint {
 };
 struct CxiEndpoint {
   int calls = 0;
+  int numa = -1;
+  mutable int numa_gpu = -1;
+  int nic_numa_node(int gpu) const {
+    numa_gpu = gpu;
+    return numa;
+  }
   int send_notification(uint64_t peer, NotifyMsg const& message) {
     assert(peer == 17 && message.value == 23);
     ++calls;
@@ -39,6 +45,10 @@ using GenericEndpoint = std::variant<std::shared_ptr<RDMAEndpoint>>;
 using GenericEndpoint = std::variant<std::shared_ptr<RDMAEndpoint>,
     std::shared_ptr<NCCLEndpoint>, std::shared_ptr<CxiEndpoint>>;
 #endif
+struct NullLog {
+  template <typename T> NullLog& operator<<(T const&) { return *this; }
+};
+#define UCCL_LOG(level) NullLog{}
 int get_numa_node_from_iface() { return 9; }
 struct RdmaDeviceManager {
   static RdmaDeviceManager& instance() {
@@ -61,6 +71,9 @@ int main() {
   auto cxi = std::make_shared<CxiEndpoint>();
   assert(uccl_get_numa_node(GenericEndpoint{nccl}, 3) == 9);
   assert(uccl_get_numa_node(GenericEndpoint{cxi}, 3) == 9);
+  cxi->numa = 1;
+  assert(uccl_get_numa_node(GenericEndpoint{cxi}, 3) == 1);
+  assert(cxi->numa_gpu == 3);
   assert(uccl_send_notification(GenericEndpoint{nccl}, 17, NotifyMsg{23}) == 42);
   assert(uccl_send_notification(GenericEndpoint{cxi}, 17, NotifyMsg{23}) == -7);
   assert(nccl->calls == 1 && cxi->calls == 1);
