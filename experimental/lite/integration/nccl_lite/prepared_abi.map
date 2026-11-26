@@ -1,0 +1,4 @@
+UCCL_LITE_NCCL_PREPARED_1 {
+  global: nccl*; pnccl*; ucclLiteNccl*;
+  local: *;
+};

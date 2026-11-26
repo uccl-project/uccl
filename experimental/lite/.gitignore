@@ -1,6 +1,8 @@
 /build/
 __pycache__/
 *.pyc
+!/integration/nccl_lite/prepared_api.map
+!/integration/nccl_lite/prepared_abi.map
 !/benchmarks/data/*.csv
 !/benchmarks/data/*_provenance.json
 !/benchmarks/data/reduction-placement/*.csv

@@ -1,0 +1,4 @@
+UCCL_LITE_PREPARED_1 {
+  global: ucclLite*;
+  local: *;
+};
