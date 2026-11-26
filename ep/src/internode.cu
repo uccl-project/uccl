@@ -1161,6 +1161,7 @@ __global__ void __launch_bounds__(
           );
         }
         __syncwarp();
+        start_time = clock64();
       }
     }
   } else if (warp_role == WarpRole::kRDMAAndNVLForwarder) {
