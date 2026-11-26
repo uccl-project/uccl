@@ -26,6 +26,104 @@ from report import report_logs, report_results
 from run import Worker, collect_results, write_summary
 
 
+class CpuSetupTests(unittest.TestCase):
+    def setup_runner(self, sources, *, curl_exit=0, apt_exit=0, repeats=1):
+        # Run the real setup script with only OS/package-manager calls doubled.
+        # All APT configuration writes stay inside this temporary fixture.
+        harness = r"""
+grep() {
+  local args=() arg
+  for arg in "$@"; do
+    case "$arg" in /etc/apt/*) arg="$APT_FIXTURE$arg";; esac
+    args+=("$arg")
+  done
+  command grep "${args[@]}"
+}
+curl() { echo curl >> "$APT_TRACE"; return "$CURL_EXIT"; }
+fake_apt() {
+  printf 'apt-get %s\n' "$*" >> "$APT_TRACE"
+  if [[ " $* " == *" update "* ]]; then return "$APT_EXIT"; fi
+}
+sudo() {
+  case "$1" in
+    tee) command tee -a "$APT_FIXTURE/etc/apt/apt-mirrors.txt";;
+    apt-get) shift; fake_apt "$@";;
+    env)
+      [[ "$2" == DEBIAN_FRONTEND=noninteractive && "$3" == apt-get ]] || return 97
+      shift 3; fake_apt "$@";;
+    *) return 97;;
+  esac
+}
+source "$1"
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            apt = root / "etc/apt"
+            (apt / "sources.list.d").mkdir(parents=True)
+            if sources is not None:
+                (apt / "sources.list.d/ubuntu.sources").write_text(sources)
+            mirrors = apt / "apt-mirrors.txt"
+            mirrors.write_text("https://archive.ubuntu.com/ubuntu/\n")
+            trace = root / "trace"
+            env = dict(
+                os.environ,
+                APT_FIXTURE=str(root),
+                APT_TRACE=str(trace),
+                CURL_EXIT=str(curl_exit),
+                APT_EXIT=str(apt_exit),
+            )
+            script = Path(__file__).resolve().parents[1] / "setup_cpu.sh"
+            for _ in range(repeats):
+                result = subprocess.run(
+                    ["bash", "-c", harness, "setup-test", str(script)],
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                if result.returncode:
+                    break
+            return result, trace.read_text(), mirrors.read_text()
+
+    def test_preferred_mirror_is_probed_and_added_once(self):
+        result, trace, mirrors = self.setup_runner(
+            "URIs: mirror+file:/etc/apt/apt-mirrors.txt\n", repeats=2
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(trace.count("curl\n"), 1)
+        self.assertEqual(mirrors.count("priority:0"), 1)
+        self.assertIn("https://archive.ubuntu.com/ubuntu/", mirrors)
+        self.assertEqual(trace.count("Acquire::Retries=3"), 4)
+        self.assertEqual(trace.count("install -y build-essential"), 2)
+
+    def test_unreachable_preferred_mirror_keeps_runner_defaults(self):
+        result, trace, mirrors = self.setup_runner(
+            "URIs: mirror+file:/etc/apt/apt-mirrors.txt\n", curl_exit=28
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "::warning::Preferred Ubuntu mirror is unreachable", result.stdout
+        )
+        self.assertNotIn("priority:0", mirrors)
+        self.assertIn("install -y", trace)
+
+    def test_changed_or_missing_sources_warn_and_still_install(self):
+        for sources in ["URIs: https://archive.ubuntu.com/ubuntu/\n", None]:
+            with self.subTest(sources=sources):
+                result, trace, mirrors = self.setup_runner(sources)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("::warning::Runner APT sources", result.stdout)
+                self.assertNotIn("curl", trace)
+                self.assertEqual(mirrors, "https://archive.ubuntu.com/ubuntu/\n")
+                self.assertIn("update --error-on=any", trace)
+                self.assertIn("install -y", trace)
+
+    def test_apt_errors_still_fail_setup(self):
+        result, trace, _ = self.setup_runner(None, apt_exit=17)
+        self.assertEqual(result.returncode, 17)
+        self.assertNotIn("install -y", trace)
+
+
 class AdmissionTests(unittest.TestCase):
     def process(self, pid, uid=1000, ppid=1, name="python3", **kwargs):
         return dict(
@@ -99,6 +197,80 @@ class AdmissionTests(unittest.TestCase):
             self.assertEqual(
                 idle.gpu_jobs(dict(gpus=1, capabilities=["cuda"]), set()), []
             )
+
+    def desktop_xml(
+        self, utilization=5, memory="18 MiB", name="/usr/lib/xorg/Xorg", kind="G"
+    ):
+        return self.xml(50, utilization).replace(
+            "<pid>50</pid>",
+            f"<pid>50</pid><type>{kind}</type><process_name>{name}</process_name>"
+            f"<used_memory>{memory}</used_memory>",
+        )
+
+    def test_light_desktop_activity_is_allowed(self):
+        for name in idle.DESKTOP_PROCESSES:
+            with (
+                self.subTest(name=name),
+                patch(
+                    "idle.query",
+                    return_value=self.desktop_xml(name=name, memory="256 MiB"),
+                ),
+            ):
+                self.assertEqual(
+                    idle.gpu_jobs(dict(gpus=1, capabilities=["cuda"]), set()), []
+                )
+
+    def test_desktop_allowance_requires_known_graphics_and_low_resources(self):
+        cases = [
+            {"utilization": 6},
+            {"memory": "257 MiB"},
+            {"memory": "N/A"},
+            {"memory": ""},
+            {"name": "/tmp/Xorg"},
+            {"name": "/usr/bin/blender"},
+            {"kind": "C"},
+            {"kind": "C+G"},
+        ]
+        for case in cases:
+            with (
+                self.subTest(case=case),
+                patch("idle.query", return_value=self.desktop_xml(**case)),
+            ):
+                self.assertTrue(
+                    idle.gpu_jobs(
+                        dict(gpus=1, capabilities=["cuda"]), set(), settle=False
+                    )
+                )
+
+    def test_desktop_memory_limit_is_combined(self):
+        xml = self.desktop_xml(memory="128 MiB").replace(
+            "</processes>",
+            "<process_info><pid>51</pid><type>G</type>"
+            "<process_name>/usr/bin/gnome-shell</process_name>"
+            "<used_memory>129 MiB</used_memory></process_info></processes>",
+        )
+        with patch("idle.query", return_value=xml):
+            self.assertTrue(
+                idle.gpu_jobs(dict(gpus=1, capabilities=["cuda"]), set(), settle=False)
+            )
+
+    def test_desktop_does_not_hide_compute_or_another_gpu(self):
+        target = dict(gpus=1, capabilities=["cuda"])
+        compute = self.desktop_xml().replace(
+            "</processes>",
+            "<process_info><pid>60</pid><type>C</type></process_info></processes>",
+        )
+        with patch("idle.query", return_value=compute):
+            self.assertIn(
+                "GPU process PID 60", idle.gpu_jobs(target, set(), settle=False)
+            )
+        # A desktop on GPU 0 must not explain activity with no context on GPU 1.
+        two_gpus = self.desktop_xml().replace(
+            "</nvidia_smi_log>",
+            self.xml(utilization=1).replace("<nvidia_smi_log>", ""),
+        )
+        with patch("idle.query", return_value=two_gpus):
+            self.assertTrue(idle.gpu_jobs(dict(target, gpus=2), set(), settle=False))
 
     def test_gpu_activity_without_visible_context_is_busy(self):
         with patch("idle.query", return_value=self.xml(utilization=20)):

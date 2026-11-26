@@ -18,6 +18,11 @@ from uccl.ep import EventHandle, Config
 # 1) As part of the packaged deep_ep_wrapper (symlinked buffer inside a package): uses relative import `.utils`.
 # 2) As a standalone benchmark script from the `ep/bench` directory (no package): falls back to plain `utils`.
 try:
+    from .config_check import check_consistency, effective_env
+except ImportError:
+    from config_check import check_consistency, effective_env
+
+try:
     from .utils import (
         EventOverlap,
         check_nvlink_connections,
@@ -114,6 +119,11 @@ class Buffer:
             raise NotImplementedError(
                 "UCCL EP does not currently support enable_shrink=True"
             )
+        # Every rank must agree on the settings that decide where peers write.
+        # Check once, before any buffer is allocated or any proxy is started.
+        Buffer._check_cross_rank_config(
+            group, num_nvl_bytes, num_rdma_bytes, low_latency_mode
+        )
         # The high-throughput internode kernels split ranks by
         # NUM_MAX_NVL_PEERS and assume full nodes; with fewer GPUs per node the
         # RDMA buffer hint is 0 bytes and setup crashes later. Fail here.
@@ -194,7 +204,6 @@ class Buffer:
             group,
             use_normal_mode=not low_latency_mode,
             is_intranode=is_intranode,
-            rdma_buffer_is_host_allocated=rdma_buffer_is_host_allocated,
         )
         check_nvlink_connections(group)
 
@@ -256,6 +265,62 @@ class Buffer:
         for proxy in self.proxies:
             proxy.set_atomic_buffer_ptr(self.proxies[0].get_atomic_buffer_ptr())
 
+    @staticmethod
+    def _config_signature(
+        group_size: int, num_nvl_bytes: int, num_rdma_bytes: int, low_latency_mode: bool
+    ) -> dict:
+        build = {
+            "num_max_nvl_peers": (
+                ep.num_max_nvl_peers() if hasattr(ep, "num_max_nvl_peers") else None
+            ),
+            "num_proxy_threads": ep.get_num_proxy_threads(),
+            "sm90_features": bool(ep.is_sm90_compiled()),
+        }
+        if hasattr(ep, "build_config"):
+            build.update(ep.build_config())
+
+        def as_tuple(cfg):
+            return (
+                cfg.num_sms,
+                cfg.num_max_nvl_chunked_send_tokens,
+                cfg.num_max_nvl_chunked_recv_tokens,
+                cfg.num_max_rdma_chunked_send_tokens,
+                cfg.num_max_rdma_chunked_recv_tokens,
+            )
+
+        config = {}
+        for name, get in (
+            ("dispatch", Buffer.get_dispatch_config),
+            ("combine", Buffer.get_combine_config),
+        ):
+            try:
+                config[name] = as_tuple(get(group_size))
+            except (AssertionError, ValueError) as exc:
+                config[name] = f"unavailable: {exc}"
+        return {
+            "build": build,
+            "args": {
+                "low_latency_mode": bool(low_latency_mode),
+                "num_nvl_bytes": int(num_nvl_bytes),
+                "num_rdma_bytes": int(num_rdma_bytes),
+            },
+            "config": config,
+            "env": effective_env(),
+        }
+
+    @staticmethod
+    def _check_cross_rank_config(
+        group, num_nvl_bytes: int, num_rdma_bytes: int, low_latency_mode: bool
+    ) -> str:
+        signature, error = {}, ""
+        try:
+            signature = Buffer._config_signature(
+                group.size(), num_nvl_bytes, num_rdma_bytes, low_latency_mode
+            )
+        except Exception as exc:  # still gather, so no rank is left waiting
+            error = f"{type(exc).__name__}: {exc}"
+        return check_consistency(group, signature, error)
+
     def _ll_compute_stream_ptr(self, device: torch.device):
         """
         Return the current CUDA stream pointer for low-latency runtime calls.
@@ -290,8 +355,12 @@ class Buffer:
         return ep.is_sm90_compiled()
 
     @staticmethod
-    def _is_efa() -> bool:
-        return os.path.exists(os.getenv("EFA_HOME", "/opt/amazon/efa"))
+    def _default_rdma_recv_tokens(num_ranks: int) -> int:
+        if num_ranks in (16, 32) and os.path.exists(
+            os.getenv("EFA_HOME", "/opt/amazon/efa")
+        ):
+            return 512
+        return 128
 
     @staticmethod
     def set_num_sms(new_num_sms: int) -> None:
@@ -1002,6 +1071,21 @@ class Buffer:
         return table[dtype]
 
     @staticmethod
+    def _get_x_scales_metadata(
+        x_scales: Optional[torch.Tensor],
+    ) -> Tuple[int, int, int]:
+        """Return the scale count and element strides expected by UCCL kernels."""
+        if x_scales is None:
+            return 0, 0, 0
+        if x_scales.dim() == 1:
+            return 1, int(x_scales.stride(0)), 0
+        return (
+            x_scales.size(1),
+            int(x_scales.stride(0)),
+            int(x_scales.stride(1)),
+        )
+
+    @staticmethod
     def _config_from_env(name: str) -> Optional[Config]:
         value = os.getenv(name)
         if not value:
@@ -1057,19 +1141,23 @@ class Buffer:
 
         # TODO: automatically tune
         config_map = {
-            2: Config(Buffer.num_sms, 24, 256, 6, 128),
-            4: Config(Buffer.num_sms, 24, 256, 6, 128),
-            8: Config(Buffer.num_sms, 6, 256, 6, 128),
-            16: Config(Buffer.num_sms, 36, 288, 20, 512 if Buffer._is_efa() else 128),
-            24: Config(Buffer.num_sms, 8, 288, 32, 128),
-            32: Config(Buffer.num_sms, 32, 288, 32, 512 if Buffer._is_efa() else 128),
-            64: Config(Buffer.num_sms, 20, 288, 28, 128),
-            128: Config(Buffer.num_sms, 20, 560, 32, 128),
-            144: Config(Buffer.num_sms, 32, 720, 12, 128),
-            160: Config(Buffer.num_sms, 28, 720, 12, 128),
+            2: (24, 256, 6),
+            4: (24, 256, 6),
+            8: (6, 256, 6),
+            16: (36, 288, 20),
+            24: (8, 288, 32),
+            32: (32, 288, 32),
+            64: (20, 288, 28),
+            128: (20, 560, 32),
+            144: (32, 720, 12),
+            160: (28, 720, 12),
         }
         assert num_ranks in config_map, f"Unsupported number of EP ranks: {num_ranks}"
-        return config_map[num_ranks]
+        return Config(
+            Buffer.num_sms,
+            *config_map[num_ranks],
+            Buffer._default_rdma_recv_tokens(num_ranks),
+        )
 
     @staticmethod
     def get_combine_config(num_ranks: int) -> Config:
@@ -1089,19 +1177,23 @@ class Buffer:
 
         # TODO: automatically tune
         config_map = {
-            2: Config(Buffer.num_sms, 10, 256, 6, 128),
-            4: Config(Buffer.num_sms, 9, 256, 6, 128),
-            8: Config(Buffer.num_sms, 4, 256, 6, 128),
-            16: Config(Buffer.num_sms, 4, 288, 12, 512 if Buffer._is_efa() else 128),
-            24: Config(Buffer.num_sms, 1, 288, 8, 128),
-            32: Config(Buffer.num_sms, 1, 288, 8, 512 if Buffer._is_efa() else 128),
-            64: Config(Buffer.num_sms, 1, 288, 20, 128),
-            128: Config(Buffer.num_sms, 1, 560, 12, 128),
-            144: Config(Buffer.num_sms, 2, 720, 8, 128),
-            160: Config(Buffer.num_sms, 2, 720, 8, 128),
+            2: (10, 256, 6),
+            4: (9, 256, 6),
+            8: (4, 256, 6),
+            16: (4, 288, 12),
+            24: (1, 288, 8),
+            32: (1, 288, 8),
+            64: (1, 288, 20),
+            128: (1, 560, 12),
+            144: (2, 720, 8),
+            160: (2, 720, 8),
         }
         assert num_ranks in config_map, f"Unsupported number of EP ranks: {num_ranks}"
-        return config_map[num_ranks]
+        return Config(
+            Buffer.num_sms,
+            *config_map[num_ranks],
+            Buffer._default_rdma_recv_tokens(num_ranks),
+        )
 
     # noinspection PyTypeChecker
     def get_dispatch_layout(
@@ -1307,13 +1399,9 @@ class Buffer:
                 send_head,
             ) = handle
             num_topk = 0
-            num_scales = (
-                0
-                if x_scales is None
-                else (1 if x_scales.dim() == 1 else x_scales.size(1))
+            num_scales, scale_token_stride, scale_hidden_stride = (
+                self._get_x_scales_metadata(x_scales)
             )
-            scale_token_stride = 0 if x_scales is None else int(x_scales.stride(0))
-            scale_hidden_stride = 0 if x_scales is None else int(x_scales.stride(1))
             alloc_recv_tokens = max(num_recv_tokens, 1)
             alloc_ctx = (
                 torch.cuda.stream(self.get_comm_stream())
@@ -1426,13 +1514,9 @@ class Buffer:
                     self._ll_compute_stream_ptr(x.device),
                 )
             )
-            num_scales = (
-                0
-                if x_scales is None
-                else (1 if x_scales.dim() == 1 else x_scales.size(1))
+            num_scales, scale_token_stride, scale_hidden_stride = (
+                self._get_x_scales_metadata(x_scales)
             )
-            scale_token_stride = 0 if x_scales is None else int(x_scales.stride(0))
-            scale_hidden_stride = 0 if x_scales is None else int(x_scales.stride(1))
             alloc_recv_tokens = max(num_recv_tokens, 1)
             alloc_ctx = (
                 torch.cuda.stream(self.get_comm_stream())
@@ -1738,11 +1822,9 @@ class Buffer:
         assert config is not None
 
         x, x_scales = x if isinstance(x, tuple) else (x, None)
-        num_scales = (
-            0 if x_scales is None else (1 if x_scales.dim() == 1 else x_scales.size(1))
+        num_scales, scale_token_stride, scale_hidden_stride = (
+            self._get_x_scales_metadata(x_scales)
         )
-        scale_token_stride = 0 if x_scales is None else int(x_scales.stride(0))
-        scale_hidden_stride = 0 if x_scales is None else int(x_scales.stride(1))
         num_topk = 0 if topk_idx is None else int(topk_idx.size(1))
         num_rdma_ranks = self.runtime.get_num_rdma_ranks()
         num_channels = int(getattr(config, "num_sms", Buffer.num_sms)) // 2

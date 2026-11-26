@@ -2,11 +2,34 @@
   "schema": 1,
   "tests": [
     {
+      "id": "util.shm_ring",
+      "sources": [
+        "include/util/shm_ring_test.cc"
+      ],
+      "tier": "cpu",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "include/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "make -C p2p test_shm_ring PYTHON=/nonexistent/ci-python && ./p2p/test_shm_ring"
+    },
+    {
       "id": "ci.selftest",
       "enabled": true,
       "tier": "cpu",
       "sources": [
-        "ci/tests/test_ci.py"
+        "ci/tests/test_ci.py",
+        "ci/tests/test_run_report.py",
+        "ci/tests/test_github_comments.js"
       ],
       "paths": [
         "ci/**",
@@ -21,7 +44,7 @@
         "cpu"
       ],
       "timeout": 60,
-      "command": "python3 -m unittest discover -s ci/tests -v"
+      "command": "python3 -m unittest discover -s ci/tests -v && node --test ci/tests/test_github_comments.js"
     },
     {
       "id": "p2p.cpu.backend_build",
@@ -255,6 +278,49 @@
       "command": "python3 -m pytest -q p2p/tests/test_python_signals.py --junitxml=\"$CI_TEST_JUNIT\""
     },
     {
+      "id": "p2p.cpu.ipc_shutdown",
+      "sources": [
+        "p2p/tests/scenario_ipc_shutdown.py"
+      ],
+      "tier": "cpu",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "p2p/**",
+        "include/util/jring*"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "python3 p2p/tests/scenario_ipc_shutdown.py"
+    },
+    {
+      "id": "p2p.cpu.rdma_request_lifetime",
+      "sources": [
+        "p2p/tests/scenario_rdma_request_lifetime.py"
+      ],
+      "tier": "cpu",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "python3 p2p/tests/scenario_rdma_request_lifetime.py"
+    },
+    {
       "id": "p2p.cpu.transport_factory",
       "sources": [
         "p2p/tests/test_transport_factory.py"
@@ -358,6 +424,27 @@
       "gpus": 0,
       "timeout": 180,
       "command": "python3 -m pytest -q ep/deep_ep_wrapper/tests/test_event_handle.py -k records_on_current_stream --junitxml=\"$CI_TEST_JUNIT\""
+    },
+    {
+      "id": "ep.cpu.config_check",
+      "sources": [
+        "ep/tests/test_config_check.py"
+      ],
+      "tier": "cpu",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "ep/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "python3 -m pytest -q ep/tests/test_config_check.py -k 'not GlooTest' --junitxml=\"$CI_TEST_JUNIT\""
     },
     {
       "id": "mccl.cpu.mccl_abi",
@@ -568,6 +655,52 @@
       "gpus": 0,
       "timeout": 180,
       "command": "g++ -std=c++17 -O2 -pthread -Ip2p -Ip2p/util -Iinclude p2p/tests/test_epoll_server.cc p2p/util/epoll_server.cc -o \"$CI_ARTIFACTS/epoll_server\" && \"$CI_ARTIFACTS/epoll_server\""
+    },
+    {
+      "id": "p2p.cpu.cooperative_proxy",
+      "sources": [
+        "p2p/tests/test_proxy_scheduler.cc",
+        "p2p/tests/test_cooperative_proxy_adapter.py",
+        "p2p/tests/test_proxy_fairness_benchmark.py"
+      ],
+      "tier": "cpu",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "make -C p2p/tests test"
+    },
+    {
+      "id": "p2p.cpu.cooperative_proxy_sanitize",
+      "sources": [
+        "p2p/tests/test_proxy_scheduler.cc",
+        "p2p/tests/test_cooperative_proxy_adapter.py",
+        "p2p/tests/test_proxy_fairness_benchmark.py"
+      ],
+      "tier": "cpu",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "make -C p2p/tests sanitize"
     },
     {
       "id": "p2p.engine_read",
@@ -963,6 +1096,33 @@
       "gpus": 1
     },
     {
+      "id": "p2p.rdma_native.readv_invalid_length",
+      "sources": [
+        "p2p/tests/test_cross_node_rdma_native.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gh200"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cuda",
+        "rdma",
+        "gpu-rdma"
+      ],
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 180,
+      "command": "if [[ $CI_NODE == 0 ]]; then role=acceptor; peer=(); else role=initiator; peer=(--peer-ip \"$MASTER_ADDR\"); fi\npython3 p2p/tests/test_cross_node_rdma_native.py --role \"$role\" --mode readv-invalid-length --rendezvous-port \"$MASTER_PORT\" \"${peer[@]}\"",
+      "setup": [
+        "p2p"
+      ]
+    },
+    {
       "id": "p2p.engine_write_compress",
       "sources": [
         "p2p/tests/test_engine_write_compress.py"
@@ -1044,6 +1204,28 @@
       "setup": [
         "ep"
       ]
+    },
+    {
+      "id": "ep.config_check",
+      "sources": [
+        "ep/tests/test_config_check.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "gh200",
+        "gb10"
+      ],
+      "paths": [
+        "ep/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "python3 -m pytest -q ep/tests/test_config_check.py -k GlooTest --junitxml=\"$CI_TEST_JUNIT\""
     },
     {
       "id": "ep.low_latency",
@@ -3516,6 +3698,36 @@
       }
     },
     {
+      "id": "p2p.compressed_registered_range",
+      "sources": [
+        "p2p/tests/scenario_compressed_registered_range.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gh200"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cuda",
+        "gpu-rdma"
+      ],
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 300,
+      "command": "for api in write write_async writev writev_async; do bash ci/torchrun.sh p2p/tests/scenario_compressed_registered_range.py --api=\"$api\" || exit $?; done",
+      "setup": [
+        "compression"
+      ],
+      "env": {
+        "UCCL_P2P_COMPRESS_STRATEGY": "split_only",
+        "UCCL_P2P_COMPRESS_BUFFER_BYTES": "134217728"
+      }
+    },
+    {
       "id": "disabled.p2p.tests.test-hygon-p2p-basic.py",
       "sources": [
         "p2p/tests/test_hygon_p2p_basic.py"
@@ -4125,6 +4337,17 @@
       "requires": []
     },
     {
+      "id": "p2p.bench.proxy_fairness",
+      "sources": [
+        "p2p/benchmarks/benchmark_proxy_fairness.py"
+      ],
+      "enabled": false,
+      "tier": "performance",
+      "reason": "Manual A/B comparison: each arm starts two peer processes and one initiator in fresh processes, and no CI launcher runs them. The script's descriptor preflight is covered by p2p.cpu.cooperative_proxy.",
+      "targets": [],
+      "requires": []
+    },
+    {
       "id": "misc.pcie",
       "sources": [
         "experimental/misc/benchmark_pcie_bw.py"
@@ -4491,6 +4714,12 @@
     }
   ],
   "support": [
+    {
+      "sources": [
+        "include/util/shm_ring_stress_test.cc"
+      ],
+      "reason": "Manual shared-ring stress harness; high-iteration fork/flock tests are intentionally not part of CI."
+    },
     {
       "sources": [
         "p2p/tests/native_runtime.py",

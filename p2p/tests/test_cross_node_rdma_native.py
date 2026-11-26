@@ -16,7 +16,8 @@ Run on the "initiator" machine, pointing at the acceptor's rendezvous IP:
     python3 test_cross_node_rdma_native.py --role initiator --peer-ip <acceptor_ip> --mode read
 
 Run the same script revision on both peers. Use --mode readv-reject with the
-RDMA or EFA transport to check a rejected second window.
+RDMA or EFA transport to check a rejected second window, or
+--mode readv-invalid-length to check vector length validation before posting.
 """
 
 from __future__ import annotations
@@ -169,6 +170,32 @@ def run_initiator(mode: str, peer_ip: str, rendezvous_port: int, gpu_idx: int) -
         ok = ep.write(conn_id, mr_id, dev_ptr.value, NBYTES, fifo_meta)
         assert ok, "write failed"
         print("✓ Initiator RDMA-WRITE completed")
+    elif mode == "readv-invalid-length":
+        # The Python binding rejects mismatched lengths before calling the
+        # engine, so accept either its RuntimeError or a False return.
+        word = ctypes.sizeof(ctypes.c_float)
+        for name, fn in (("readv", ep.readv), ("writev", ep.writev)):
+            try:
+                ok = fn(
+                    conn_id,
+                    [mr_id],
+                    [dev_ptr.value],
+                    [word, word],
+                    [fifo_meta, fifo_meta],
+                    2,
+                )
+            except RuntimeError as e:
+                if "length num_iovs" not in str(e):
+                    raise
+                ok = False
+            if ok:
+                raise RuntimeError(f"{name} accepted vectors shorter than num_iovs")
+        # advertisev has no binding-side length check, so this reaches the
+        # engine guard directly.
+        ok, _ = ep.advertisev([mr_id], [dev_ptr.value], [NBYTES], 2)
+        if ok:
+            raise RuntimeError("advertisev accepted vectors shorter than num_iovs")
+        print("✓ Initiator rejected short readv/writev/advertisev vectors")
     elif mode == "readv-reject":
         word = ctypes.sizeof(ctypes.c_float)
         ptrs = [dev_ptr.value + i * word for i in range(READV_WINDOW)] + [0]
@@ -203,7 +230,9 @@ def main() -> None:
     )
     parser.add_argument("--role", choices=["acceptor", "initiator"], required=True)
     parser.add_argument(
-        "--mode", choices=["write", "read", "readv-reject"], required=True
+        "--mode",
+        choices=["write", "read", "readv-reject", "readv-invalid-length"],
+        required=True,
     )
     parser.add_argument("--peer-ip", default=None, help="Required for --role initiator")
     parser.add_argument("--rendezvous-port", type=int, default=DEFAULT_RENDEZVOUS_PORT)
@@ -213,9 +242,9 @@ def main() -> None:
     if args.role == "initiator" and not args.peer_ip:
         parser.error("--peer-ip is required when --role initiator")
 
-    if args.mode == "readv-reject":
+    if args.mode in {"readv-reject", "readv-invalid-length"}:
         if os.environ.get("UCCL_P2P_TRANSPORT", "rdma") not in {"rdma", "ib", "efa"}:
-            parser.error("readv-reject requires the RDMA or EFA transport")
+            parser.error("readv vector checks require the RDMA or EFA transport")
         os.environ["UCCL_P2P_RDMA_CC"] = "none"
         os.environ["UCCL_P2P_MAX_INFLIGHT_OPS"] = str(READV_WINDOW)
 

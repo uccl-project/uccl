@@ -15,6 +15,11 @@ CPU tests and orchestrates GPU jobs over SSH as `uccl`, using local
 | `gb10` | `gb10_0`, `gb10_1` | 1 GB10/node, RoCE, CUDA 13.0 | Host-staged EP/P2P and NIXL |
 | `amd` | Offline | ROCm | Disabled; worker support needs validation |
 
+CPU setup adds kernel.org, when reachable, as the preferred entry in the runner's
+`/etc/apt/apt-mirrors.txt`, retaining its default fallback mirrors. APT uses
+bounded retries/timeouts and an eight-minute step limit. Setup output is saved
+in the job log and the `ci-cpu` artifact as `cpu-setup.log`.
+
 Both GH200 nodes are provisioned and reachable as of 2026-11-09; both RDMA ports
 report active 400G links. Single-node suites use `gh200_1`; two-node suites
 require both. Link rate is not application throughput. Per-host interfaces and
@@ -113,6 +118,29 @@ Manual runs ignore changed-file filtering. Comment commands require `write`,
 `maintain` or `admin` permission and run the PR's exact head SHA at dispatch.
 Supported targets: `all`, `cpu`, `l4`, `gb10`, `gh200`.
 
+GPU jobs queue per target (up to 100 waiting runs), so newer requests do not
+cancel waiting runs. `CI status` reports job outcomes; cancelled work is incomplete.
+
+Each valid, authorized command creates a short acknowledgement with the requester
+mention, queued/running status and run/log link. Completion updates that short
+status and posts a separate full report with the command, source commit, requester
+mention, result table and run link. The full report notifies the requester and is
+the only comment containing results for that attempt. Retries update the existing
+report without creating another copy; a rerun gets its own completion report.
+An initial status-update failure is noted separately and does not turn passing
+CI jobs into a failed test result.
+Status labels use ⏳ Queued, 🔄 Running, ✅ Pass, ❌ Failed, ⚠️ Cancelled or
+failed to dispatch, and — Skipped. CPU/GPU rows also show executed and skipped
+suite counts, aggregated across targets without counting ranks twice. Successful
+jobs with all suites skipped are — Skipped; partial execution is ⚠️ Incomplete.
+Missing or unreadable artifacts are ❔ Unknown or unclassified, never a pass.
+The overall status follows these suite outcomes, with failed/cancelled jobs taking
+precedence. `CI status` continues to show the workflow gate's job result.
+Malformed commands receive usage feedback only after the same permission check;
+non-maintainers remain silent. Forked PRs use the same permission check and exact
+commit; only separate jobs running trusted workflow code can write comments.
+Dispatch failures update the status reply too.
+
 ```text
 /run-ci all
 /run-ci l4 p2p.*
@@ -132,6 +160,12 @@ nightly or label trigger. Benchmarks do not run correctness suites first.
 - CPU suites run on GitHub; GPU/RDMA suites run on lab nodes.
 - GPU runs serialize per target. Busy GPUs, held locks or unverifiable GPU
   activity skip the target; CPU-only work does not block it.
+- NVIDIA desktop activity is tolerated up to 5% utilization per GPU when all
+  foreign contexts on that GPU are graphics-only `/usr/lib/xorg/Xorg` or
+  `/usr/bin/gnome-shell` processes using at most 256 MiB combined. Compute or
+  mixed compute/graphics contexts still block admission, even at 0% utilization.
+  Unknown or heavier activity retains the existing idle check. This policy is
+  shared by correctness tests and benchmarks; desktop processes are left running.
 - CI rechecks GPU activity during execution and stops its own work if another job
   starts. Only verified stale CI processes may be cleaned up.
 - Unreachable lab SSH skips the target with a reason; recorded test failures still
@@ -215,6 +249,10 @@ To find failure logs on a GitHub run page:
 3. For complete files, download `ci-cpu` or `ci-gpu-<target>` under **Summary → Artifacts**.
    `<suite-id>.log` holds test output; `environment.log` / `build-*.log` hold setup
    output; `node-*.ssh.log` holds worker/SSH output. `performance.json` explains gates.
+
+The **CI report** job puts every target in one table on the run **Summary** page.
+It marks each failed suite as new or also failing on main, using the latest
+executed result of that suite in the five most recent `main` push runs.
 
 ## Performance policy and current validation
 

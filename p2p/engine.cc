@@ -6,6 +6,7 @@
 #include "util/debug.h"
 #include "util/gpu_rt.h"
 #include "util/pause.h"
+#include "util/proxy_scheduler.h"
 #include "util/python_signal.h"
 #include "util/util.h"
 #include <arpa/inet.h>
@@ -20,11 +21,13 @@
 #include <cstring>
 #include <future>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <sstream>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -69,6 +72,35 @@ struct IpcMappings {
   std::vector<size_t> iov_slots;
   std::unordered_map<std::string_view, size_t> other_handles;
 };
+
+template <typename Descriptor>
+bool remote_extent_fits(size_t size, Descriptor const& descriptor) {
+  // CNRT FIFO metadata describes its staging window, not the payload extent.
+  if constexpr (std::is_same_v<Descriptor, FifoItem> &&
+                uccl::device::Backend::staged_network)
+    return true;
+  size_t advertised_size = descriptor.size;
+  if (unlikely(size > advertised_size)) {
+    UCCL_LOG(ERROR) << "transfer size " << size
+                    << " exceeds advertised remote size " << advertised_size;
+    return false;
+  }
+  return true;
+}
+
+template <typename Descriptor>
+bool remote_extents_fit(std::vector<size_t> const& sizes,
+                        std::vector<Descriptor> const& descriptors,
+                        size_t num_iovs) {
+  if (unlikely(num_iovs > sizes.size() || num_iovs > descriptors.size())) {
+    UCCL_LOG(ERROR) << "transfer vector is shorter than num_iovs";
+    return false;
+  }
+  for (size_t i = 0; i < num_iovs; ++i) {
+    if (!remote_extent_fits(sizes[i], descriptors[i])) return false;
+  }
+  return true;
+}
 
 // Ordinal in this process of the GPU with PCI bus id `bdf`, or -1.
 int visible_ordinal_of_bdf(std::string const& bdf) {
@@ -413,6 +445,7 @@ Endpoint::~Endpoint() {
 
   if (passive_accept_) {
     passive_accept_stop_.store(true, std::memory_order_release);
+    passive_accept_cv_.notify_all();
     if (passive_accept_thread_.joinable()) {
       passive_accept_thread_.join();
     }
@@ -465,15 +498,12 @@ Endpoint::~Endpoint() {
   }
 
   {
-    std::shared_lock<std::shared_mutex> lock(mr_mu_);
-    for (auto& [mr_id, mr] : mr_id_to_mr_) {
-      // Deregister MRs the caller did not destroy: an MR left open keeps the
-      // transport's domain busy, so it could not be closed at teardown.
-      mr->mhandle_->compress_ctx.reset();
-      uccl_deregmr(ep_, mr->mhandle_);
-      delete mr->mhandle_;
-      delete mr;
-    }
+    std::unique_lock<std::shared_mutex> lock(mr_mu_);
+    // Deregister MRs the caller did not destroy: an MR left open keeps the
+    // transport's domain busy, so it could not be closed at teardown. The proxy
+    // threads were joined above, so the registry holds the last reference and
+    // clearing it releases each registration.
+    mr_id_to_mr_.clear();
   }
 
   std::cout << "Engine destroyed" << std::endl;
@@ -611,6 +641,16 @@ std::tuple<std::string, uint16_t, std::string> Endpoint::parse_metadata(
 
 bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
                       uint64_t& conn_id) {
+  // The passive accept thread already consumes every incoming connection.
+  // Competing with it here could wait forever for a peer it has taken.
+  if (passive_accept_.load(std::memory_order_acquire)) {
+    return take_passive_accept(false, ip_addr, remote_gpu_idx, conn_id);
+  }
+  return do_accept(ip_addr, remote_gpu_idx, conn_id);
+}
+
+bool Endpoint::do_accept(std::string& ip_addr, int& remote_gpu_idx,
+                         uint64_t& conn_id) {
   std::cout << "Waiting to accept incoming connection..." << std::endl;
 
   // For demo purposes, simulate accepted connection
@@ -682,13 +722,15 @@ bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id,
 
   P2PMhandle* mhandle = new P2PMhandle();
   mhandle->compress_ctx = make_compress_ctx(float_type);
+  mhandle->registered_addr = data;
+  mhandle->registered_len = size;
   if (!uccl_regmr(ep_, const_cast<void*>(data), size, mhandle)) {
     delete mhandle;
     return false;
   }
   {
     std::unique_lock<std::shared_mutex> lock(mr_mu_);
-    mr_id_to_mr_[mr_id] = new MR{mr_id, mhandle};
+    mr_id_to_mr_[mr_id] = make_mr(mr_id, mhandle);
   }
 
   return true;
@@ -726,7 +768,7 @@ bool Endpoint::reg_compress_only(void const* data, size_t size, uint64_t& mr_id,
   }
   {
     std::unique_lock<std::shared_mutex> lock(mr_mu_);
-    mr_id_to_mr_[mr_id] = new MR{mr_id, mhandle};
+    mr_id_to_mr_[mr_id] = make_mr(mr_id, mhandle);
   }
 
   return true;
@@ -780,15 +822,27 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
 
     {
       std::unique_lock<std::shared_mutex> lock(mr_mu_);
-      mr_id_to_mr_[id] = new MR{id, mhandle};
+      mr_id_to_mr_[id] = make_mr(id, mhandle);
     }
     mr_id_v[i] = id;
   }
   return true;
 }
 
+std::shared_ptr<MR> Endpoint::make_mr(uint64_t id, P2PMhandle* handle) {
+  // A cooperative request pins the registration until its last DMA completes.
+  // Capture the transport by value so a deferred release never accesses a
+  // destroyed Endpoint or transport. No registry lock is held during DMA.
+  return std::shared_ptr<MR>(new MR{id, handle}, [transport = ep_](MR* mr) {
+    mr->mhandle_->compress_ctx.reset();
+    uccl_deregmr(transport, mr->mhandle_);
+    delete mr->mhandle_;
+    delete mr;
+  });
+}
+
 bool Endpoint::dereg(uint64_t mr_id) {
-  MR* mr = nullptr;
+  std::shared_ptr<MR> mr;
   {
     std::unique_lock<std::shared_mutex> lock(mr_mu_);
     auto it = mr_id_to_mr_.find(mr_id);
@@ -796,18 +850,18 @@ bool Endpoint::dereg(uint64_t mr_id) {
       std::cerr << "[dereg] Error: Invalid mr_id " << mr_id << std::endl;
       return false;
     }
-    mr = it->second;
+    mr = std::move(it->second);
     mr_id_to_mr_.erase(mr_id);
   }
-  mr->mhandle_->compress_ctx.reset();
-  uccl_deregmr(ep_, mr->mhandle_);
-  delete mr->mhandle_;
-  delete mr;
+  // Immediate for unpinned registrations, otherwise the last active request
+  // performs the release. The caller still owns the underlying data buffer.
+  mr.reset();
   return true;
 }
 
 bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
                     FifoItem const& slot_item) {
+  if (!remote_extent_fits(size, slot_item)) return false;
   UCCL_DCHECK(size <= 0xffffffff) << "size must be < 4 GB";
   if constexpr (uccl::device::Backend::staged_network)
     return staging_.read(conn_id, dst, size, slot_item);
@@ -857,6 +911,7 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
                           size_t size, FifoItem const& slot_item,
                           uint64_t* transfer_id) {
   *transfer_id = 0;
+  if (!remote_extent_fits(size, slot_item)) return false;
   if (size <= kDirectAsyncNetThreshold) {
     auto* conn = get_conn(conn_id);
     if (unlikely(conn == nullptr)) {
@@ -929,6 +984,11 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
                      std::vector<size_t> const& size_v,
                      std::vector<FifoItem> const& slot_item_v,
                      size_t num_iovs) {
+  if (unlikely(num_iovs > mr_id_v.size() || num_iovs > dst_v.size())) {
+    UCCL_LOG(ERROR) << "readv input vector is shorter than num_iovs";
+    return false;
+  }
+  if (!remote_extents_fit(size_v, slot_item_v, num_iovs)) return false;
   auto* conn = get_conn(conn_id);
   if (unlikely(conn == nullptr)) {
     std::cerr << "[readv] Error: Invalid conn_id " << conn_id << std::endl;
@@ -1053,10 +1113,12 @@ bool Endpoint::readv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                            std::vector<void*> dst_v, std::vector<size_t> size_v,
                            std::vector<FifoItem> slot_item_v, size_t num_iovs,
                            uint64_t* transfer_id) {
+  *transfer_id = 0;
+  if (!remote_extents_fit(size_v, slot_item_v, num_iovs)) return false;
   // Use move semantics to reduce memory copies
   auto task_ptr =
       create_readv_task(conn_id, std::move(dst_v), std::move(size_v),
-                        std::move(mr_id_v), std::move(slot_item_v));
+                        std::move(mr_id_v), std::move(slot_item_v), num_iovs);
   if (unlikely(task_ptr == nullptr)) {
     return false;
   }
@@ -1135,6 +1197,7 @@ bool Endpoint::run_raw_one_sided_pipeline(
 
 bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
                      FifoItem const& slot_item) {
+  if (!remote_extent_fits(size, slot_item)) return false;
   UCCL_DCHECK(size <= 0xffffffff) << "size must be < 4 GB";
   if constexpr (uccl::device::Backend::staged_network)
     return staging_.write(conn_id, src, size, slot_item);
@@ -1182,6 +1245,7 @@ bool Endpoint::write_async(uint64_t conn_id, uint64_t mr_id, void* src,
                            size_t size, FifoItem const& slot_item,
                            uint64_t* transfer_id) {
   *transfer_id = 0;
+  if (!remote_extent_fits(size, slot_item)) return false;
   if (size <= kDirectAsyncNetThreshold) {
     auto* conn = get_conn(conn_id);
     if (unlikely(conn == nullptr)) {
@@ -1241,6 +1305,11 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
                       std::vector<size_t> const& size_v,
                       std::vector<FifoItem> const& slot_item_v,
                       size_t num_iovs) {
+  if (unlikely(num_iovs > mr_id_v.size() || num_iovs > src_v.size())) {
+    UCCL_LOG(ERROR) << "writev input vector is shorter than num_iovs";
+    return false;
+  }
+  if (!remote_extents_fit(size_v, slot_item_v, num_iovs)) return false;
   auto* conn = get_conn(conn_id);
   if (unlikely(conn == nullptr)) {
     std::cerr << "[writev] Error: Invalid conn_id " << conn_id << std::endl;
@@ -1383,10 +1452,12 @@ bool Endpoint::writev_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                             std::vector<size_t> size_v,
                             std::vector<FifoItem> slot_item_v, size_t num_iovs,
                             uint64_t* transfer_id) {
+  *transfer_id = 0;
+  if (!remote_extents_fit(size_v, slot_item_v, num_iovs)) return false;
   // Use move semantics to reduce memory copies
   auto task_ptr =
       create_writev_task(conn_id, std::move(src_v), std::move(size_v),
-                         std::move(mr_id_v), std::move(slot_item_v));
+                         std::move(mr_id_v), std::move(slot_item_v), num_iovs);
   if (unlikely(task_ptr == nullptr)) {
     return false;
   }
@@ -1429,6 +1500,11 @@ bool Endpoint::advertise(uint64_t mr_id, void* addr, size_t len,
 bool Endpoint::advertisev(std::vector<uint64_t> mr_id_v,
                           std::vector<void*> addr_v, std::vector<size_t> len_v,
                           std::vector<char*> out_buf_v, size_t num_iovs) {
+  if (unlikely(num_iovs > mr_id_v.size() || num_iovs > addr_v.size() ||
+               num_iovs > len_v.size() || num_iovs > out_buf_v.size())) {
+    UCCL_LOG(ERROR) << "advertisev input vector is shorter than num_iovs";
+    return false;
+  }
   std::vector<P2PMhandle*> mhandles(num_iovs);
 
   for (int i = 0; i < num_iovs; i++) {
@@ -1457,29 +1533,40 @@ bool Endpoint::advertisev(std::vector<uint64_t> mr_id_v,
 
 bool Endpoint::connect_local(std::string const& remote_gpu_bdf,
                              uint64_t& conn_id, bool same_process) {
-  constexpr int kMaxRetry = 20;
   constexpr int kRetrySleepMs = 10;
+  constexpr int kAttachDeadlineMs = 2000;
+
+  // Normalise once so the remote BDF and shared-memory ring name use the same
+  // format as gpu_bus_id_. Same-GPU connect_local is retained for IPC flows
+  // that exchange advertised metadata without calling accept_local().
+  std::string const remote_bdf = uccl::normalize_pci_bus_id(remote_gpu_bdf);
 
   Conn* conn = new Conn;
-  conn->remote_gpu_bdf_ = remote_gpu_bdf;
-  conn->remote_gpu_ordinal_ = visible_ordinal_of_bdf(remote_gpu_bdf);
+  conn->remote_gpu_bdf_ = remote_bdf;
+  conn->remote_gpu_ordinal_ = visible_ordinal_of_bdf(remote_bdf);
 
   if (same_process) {
     // Same process: use inbox_rings_ directly, no shm attach needed.
-    auto it = inbox_rings_.find(remote_gpu_bdf);
+    auto it = inbox_rings_.find(remote_bdf);
     if (it != inbox_rings_.end()) {
       conn->remote_inbox_ = it->second;
     }
     conn->shm_attached_ = false;
   } else {
     // cross process: attach remote inbox via shared memory
-    conn->remote_inbox_.shm_name = shm_ring_name(gpu_bus_id_, remote_gpu_bdf);
+    conn->remote_inbox_.shm_name = shm_ring_name(gpu_bus_id_, remote_bdf);
 
+    // The peer may be starting up (or replacing a stale ring), in which
+    // case attach reports "no live owner" until its engine is up. Retry
+    // until the deadline. EACCES is not transient and stops the loop.
     jring_t* ring = nullptr;
     int attempts = 0;
     int attach_errno = 0;
-    while (attempts < kMaxRetry) {
+    auto const deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(kAttachDeadlineMs);
+    for (;;) {
       errno = 0;
+      conn->remote_inbox_.shm_size = 0;  // re-detect every attempt
       ring = uccl::attach_shared_ring(conn->remote_inbox_.shm_name.c_str(),
                                       conn->remote_inbox_.shm_fd,
                                       conn->remote_inbox_.shm_size);
@@ -1491,6 +1578,9 @@ bool Endpoint::connect_local(std::string const& remote_gpu_bdf,
       // A permission error does not go away; only retry while the peer may
       // still be creating its ring.
       if (attach_errno == EACCES) {
+        break;
+      }
+      if (std::chrono::steady_clock::now() >= deadline) {
         break;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(kRetrySleepMs));
@@ -1515,8 +1605,11 @@ bool Endpoint::connect_local(std::string const& remote_gpu_bdf,
   conn_id = next_conn_id_.fetch_add(1);
   conn->conn_id_ = conn_id;
 
-  if (!same_process) {
-    // Cross-process: send CONNECT handshake via shm ring.
+  if (!same_process && remote_bdf != gpu_bus_id_) {
+    // Cross-GPU: send the CONNECT handshake through the shm ring. A same-GPU
+    // connector sends nothing: accept_local() never reads its own-BDF ring,
+    // so the message would sit unconsumed and occupy a slot forever
+    // (shm_ring_send busy-waits once the ring is full).
     ShmMsg msg;
     std::strncpy(msg.src_bdf, gpu_bus_id_.c_str(), sizeof(msg.src_bdf) - 1);
     msg.src_bdf[sizeof(msg.src_bdf) - 1] = '\0';
@@ -1536,8 +1629,27 @@ bool Endpoint::connect_local(std::string const& remote_gpu_bdf,
   return true;
 }
 
-bool Endpoint::accept_local(std::string& remote_gpu_bdf, uint64_t& conn_id) {
+bool Endpoint::accept_local(std::string& remote_gpu_bdf, uint64_t& conn_id,
+                            int64_t timeout_ms) {
+  // Define the out-parameter before any failure return (timeout, shutdown):
+  // 0 is a valid conn id, so use the top of the range as the invalid handle.
+  conn_id = UINT64_MAX;
+  if (passive_accept_.load(std::memory_order_acquire)) {
+    int remote_gpu_idx;
+    return take_passive_accept(true, remote_gpu_bdf, remote_gpu_idx, conn_id,
+                               timeout_ms);
+  }
+  return do_accept_local(remote_gpu_bdf, conn_id, timeout_ms);
+}
+
+bool Endpoint::do_accept_local(std::string& remote_gpu_bdf, uint64_t& conn_id,
+                               int64_t timeout_ms) {
   std::cout << "Waiting for local CONNECT..." << std::endl;
+
+  auto const deadline = timeout_ms < 0
+                            ? std::chrono::steady_clock::time_point::max()
+                            : std::chrono::steady_clock::now() +
+                                  std::chrono::milliseconds(timeout_ms);
 
   // recv CONNECT
   ShmMsg msg;
@@ -1550,6 +1662,17 @@ bool Endpoint::accept_local(std::string& remote_gpu_bdf, uint64_t& conn_id) {
         shm_ring_recv(handle.ring, msg);
         goto got;
       }
+    }
+    if (passive_accept_stop_.load(std::memory_order_acquire) ||
+        stop_.load(std::memory_order_acquire)) {
+      std::cout << "[accept_local] endpoint is stopping, giving up"
+                << std::endl;
+      return false;
+    }
+    if (std::chrono::steady_clock::now() >= deadline) {
+      std::cerr << "[accept_local] Error: timed out after " << timeout_ms
+                << " ms waiting for a local CONNECT" << std::endl;
+      return false;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
@@ -1577,6 +1700,12 @@ got:
     conn->remote_inbox_.ring = uccl::attach_shared_ring(
         conn->remote_inbox_.shm_name.c_str(), conn->remote_inbox_.shm_fd,
         conn->remote_inbox_.shm_size);
+    if (conn->remote_inbox_.ring == nullptr) {
+      std::cerr << "[accept_local] Error: failed to attach remote inbox "
+                << conn->remote_inbox_.shm_name << std::endl;
+      delete conn;
+      return false;
+    }
     conn->shm_attached_ = true;
   }
 
@@ -1593,6 +1722,7 @@ got:
 
 bool Endpoint::write_ipc(uint64_t conn_id, void const* data, size_t size,
                          IpcTransferInfo const& info) {
+  if (!remote_extent_fits(size, info)) return false;
   UCCL_CHECK(data != nullptr) << "write_ipc: data pointer is null!";
 
   // Get connection info
@@ -1653,6 +1783,7 @@ bool Endpoint::write_ipc(uint64_t conn_id, void const* data, size_t size,
 
 bool Endpoint::read_ipc(uint64_t conn_id, void* data, size_t size,
                         IpcTransferInfo const& info) {
+  if (!remote_extent_fits(size, info)) return false;
   UCCL_CHECK(data != nullptr) << "read_ipc: data pointer is null!";
 
   // Get connection info
@@ -1715,6 +1846,7 @@ bool Endpoint::writev_ipc(uint64_t conn_id, std::vector<void const*> data_v,
                           std::vector<size_t> size_v,
                           std::vector<IpcTransferInfo> info_v,
                           size_t num_iovs) {
+  if (!remote_extents_fit(size_v, info_v, num_iovs)) return false;
   UCCL_CHECK_EQ(data_v.size(), num_iovs) << "writev_ipc: data_v size mismatch";
   UCCL_CHECK_EQ(size_v.size(), num_iovs) << "writev_ipc: size_v size mismatch";
   UCCL_CHECK_EQ(info_v.size(), num_iovs) << "writev_ipc: info_v size mismatch";
@@ -1786,6 +1918,7 @@ bool Endpoint::writev_ipc(uint64_t conn_id, std::vector<void const*> data_v,
 bool Endpoint::readv_ipc(uint64_t conn_id, std::vector<void*> data_v,
                          std::vector<size_t> size_v,
                          std::vector<IpcTransferInfo> info_v, size_t num_iovs) {
+  if (!remote_extents_fit(size_v, info_v, num_iovs)) return false;
   UCCL_CHECK_EQ(data_v.size(), num_iovs) << "readv_ipc: data_v size mismatch";
   UCCL_CHECK_EQ(size_v.size(), num_iovs) << "readv_ipc: size_v size mismatch";
   UCCL_CHECK_EQ(info_v.size(), num_iovs) << "readv_ipc: info_v size mismatch";
@@ -1857,6 +1990,8 @@ bool Endpoint::readv_ipc(uint64_t conn_id, std::vector<void*> data_v,
 bool Endpoint::write_ipc_async(uint64_t conn_id, void const* data, size_t size,
                                IpcTransferInfo const& info,
                                uint64_t* transfer_id) {
+  *transfer_id = 0;
+  if (!remote_extent_fits(size, info)) return false;
   Conn* conn = get_conn(conn_id);
   if (unlikely(conn == nullptr)) {
     std::cerr << "[write_ipc_async] Error: Invalid conn_id " << conn_id
@@ -1931,6 +2066,8 @@ bool Endpoint::write_ipc_async(uint64_t conn_id, void const* data, size_t size,
 bool Endpoint::read_ipc_async(uint64_t conn_id, void* data, size_t size,
                               IpcTransferInfo const& info,
                               uint64_t* transfer_id) {
+  *transfer_id = 0;
+  if (!remote_extent_fits(size, info)) return false;
   Conn* conn = get_conn(conn_id);
   if (unlikely(conn == nullptr)) {
     std::cerr << "[read_ipc_async] Error: Invalid conn_id " << conn_id
@@ -2006,6 +2143,8 @@ bool Endpoint::writev_ipc_async(uint64_t conn_id,
                                 std::vector<size_t> size_v,
                                 std::vector<IpcTransferInfo> info_v,
                                 size_t num_iovs, uint64_t* transfer_id) {
+  *transfer_id = 0;
+  if (!remote_extents_fit(size_v, info_v, num_iovs)) return false;
   UCCL_CHECK_EQ(data_v.size(), num_iovs)
       << "writev_ipc_async: data_v size mismatch";
   UCCL_CHECK_EQ(size_v.size(), num_iovs)
@@ -2116,6 +2255,8 @@ bool Endpoint::readv_ipc_async(uint64_t conn_id, std::vector<void*> data_v,
                                std::vector<size_t> size_v,
                                std::vector<IpcTransferInfo> info_v,
                                size_t num_iovs, uint64_t* transfer_id) {
+  *transfer_id = 0;
+  if (!remote_extents_fit(size_v, info_v, num_iovs)) return false;
   UCCL_CHECK_EQ(data_v.size(), num_iovs)
       << "readv_ipc_async: data_v size mismatch";
   UCCL_CHECK_EQ(size_v.size(), num_iovs)
@@ -2379,15 +2520,65 @@ bool Endpoint::remove_remote_endpoint(uint64_t conn_id) {
 }
 
 bool Endpoint::start_passive_accept() {
-  if (!passive_accept_) {
+  if (!passive_accept_.exchange(true, std::memory_order_acq_rel)) {
     passive_accept_stop_.store(false, std::memory_order_release);
     passive_accept_thread_ =
         std::thread(&Endpoint::passive_accept_thread_func, this);
     passive_accept_local_thread_ =
         std::thread(&Endpoint::passive_accept_local_thread_func, this);
-    passive_accept_ = true;
   }
   return true;
+}
+
+void Endpoint::publish_passive_accept(uint64_t conn_id, int remote_gpu_idx) {
+  {
+    std::unique_lock<std::shared_mutex> lock(conn_mu_);
+    auto it = conn_id_to_conn_.find(conn_id);
+    if (it == conn_id_to_conn_.end()) return;
+    it->second->accept_pending_ = true;
+    it->second->accepted_gpu_idx_ = remote_gpu_idx;
+  }
+  passive_accept_cv_.notify_all();
+}
+
+bool Endpoint::take_passive_accept(bool local, std::string& peer,
+                                   int& remote_gpu_idx, uint64_t& conn_id,
+                                   int64_t timeout_ms) {
+  auto const deadline = timeout_ms < 0
+                            ? std::chrono::steady_clock::time_point::max()
+                            : std::chrono::steady_clock::now() +
+                                  std::chrono::milliseconds(timeout_ms);
+  std::unique_lock<std::shared_mutex> lock(conn_mu_);
+  while (!passive_accept_stop_.load(std::memory_order_acquire) &&
+         !uccl_accept_stopped(ep_)) {
+    // The pending state lives on the Conn itself, so a receiver that never
+    // calls accept() keeps no backlog beyond its connections.
+    Conn* oldest = nullptr;
+    for (auto const& [id, conn] : conn_id_to_conn_) {
+      if (conn->accept_pending_ && conn->is_local_ == local &&
+          (oldest == nullptr || id < oldest->conn_id_)) {
+        oldest = conn;
+      }
+    }
+    if (oldest != nullptr) {
+      oldest->accept_pending_ = false;
+      peer = local ? oldest->remote_gpu_bdf_ : oldest->ip_addr_;
+      remote_gpu_idx = oldest->accepted_gpu_idx_;
+      conn_id = oldest->conn_id_;
+      return true;
+    }
+    auto const now = std::chrono::steady_clock::now();
+    if (now >= deadline) return false;
+    passive_accept_cv_.wait_until(
+        lock, std::min(deadline, now + std::chrono::milliseconds(100)));
+    if (inside_python) {
+      // The signal check takes the GIL; do not hold conn_mu_ across it.
+      lock.unlock();
+      check_python_signals();
+      lock.lock();
+    }
+  }
+  return false;
 }
 
 bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
@@ -2407,6 +2598,7 @@ bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
 }
 
 int Endpoint::get_sock_fd(uint64_t conn_id) const {
+  std::shared_lock<std::shared_mutex> lock(conn_mu_);
   auto it = conn_id_to_conn_.find(conn_id);
   if (it == conn_id_to_conn_.end()) {
     return -1;
@@ -2428,6 +2620,7 @@ std::shared_ptr<EpollClient> Endpoint::get_oob_client() const {
 }
 
 std::string Endpoint::get_oob_conn_key(uint64_t conn_id) const {
+  std::shared_lock<std::shared_mutex> lock(conn_mu_);
   auto it = conn_id_to_conn_.find(conn_id);
   if (it == conn_id_to_conn_.end()) {
     return "";
@@ -2460,7 +2653,7 @@ MR* Endpoint::get_mr(uint64_t mr_id) const {
   if (it == mr_id_to_mr_.end()) {
     return nullptr;
   }
-  return it->second;
+  return it->second.get();
 }
 
 P2PMhandle* Endpoint::get_mhandle(uint64_t mr_id) const {
@@ -2535,7 +2728,294 @@ void Endpoint::initialize_engine() {
   }
 }
 
+struct Endpoint::ProxyTaskState {
+  struct Range {
+    uint64_t begin;
+    uint64_t end;
+  };
+
+  std::shared_ptr<UnifiedTask> task;
+  uint64_t conn_id = 0;
+  SendConnection* group = nullptr;
+  SendType send_type = SendType::Write;
+  size_t num_iovs = 1;
+  bool raw = false;
+  // This proxy writes remote ranges for WRITEV, and local ranges for READV.
+  // Numeric remote addresses are compared conservatively across connections.
+  std::vector<Range> written_ranges;
+  std::vector<std::shared_ptr<MR>> registrations;
+};
+
+struct Endpoint::CooperativeProxyBackend {
+  using Task = std::shared_ptr<ProxyTaskState>;
+
+  Endpoint& endpoint;
+  bool sending;
+
+  Task prepare(UnifiedTask* task) {
+    auto state = std::make_shared<ProxyTaskState>();
+    state->task = task->status_ptr->task_ptr;
+    state->conn_id = task->conn_id;
+    state->send_type = sending ? SendType::Write : SendType::Read;
+    if (task->type != (sending ? TaskType::WRITEV : TaskType::READV))
+      return state;
+
+    auto const& batch = task->task_batch();
+    if (batch.num_iovs == 0 || !batch.data_ptr || !batch.size_ptr ||
+        !batch.mr_id_ptr || !batch.slot_item_ptr ||
+        batch.data_ptr->size() != batch.num_iovs ||
+        batch.size_ptr->size() != batch.num_iovs ||
+        batch.mr_id_ptr->size() != batch.num_iovs ||
+        batch.slot_item_ptr->size() != batch.num_iovs)
+      return state;
+
+    {
+      std::shared_lock<std::shared_mutex> lock(endpoint.conn_mu_);
+      auto it = endpoint.conn_id_to_conn_.find(task->conn_id);
+      if (it == endpoint.conn_id_to_conn_.end()) return state;
+      // Do not retain a Conn pointer after dropping conn_mu_. SendConnection
+      // is owned by the transport endpoint for the lifetime of the proxy.
+      state->group = uccl_resolve_send_group(endpoint.ep_,
+                                             it->second->uccl_conn_id_.peer_id);
+    }
+    if (!state->group ||
+        !raw_one_sided_batch_eligible(*batch.size_ptr, batch.num_iovs) ||
+        !state->group->can_use_raw_one_sided_batch(
+            state->send_type, max_iov_bytes(*batch.size_ptr, batch.num_iovs)))
+      return state;
+
+    {
+      std::shared_lock<std::shared_mutex> lock(endpoint.mr_mu_);
+      for (size_t i = 0; i < batch.num_iovs; ++i) {
+        auto it = endpoint.mr_id_to_mr_.find((*batch.mr_id_ptr)[i]);
+        if (it == endpoint.mr_id_to_mr_.end() ||
+            it->second->mhandle_ == nullptr ||
+            it->second->mhandle_->compress_only ||
+            (*batch.data_ptr)[i] == nullptr)
+          return state;
+
+        uint64_t local = reinterpret_cast<uintptr_t>((*batch.data_ptr)[i]);
+        uint64_t remote = (*batch.slot_item_ptr)[i].addr;
+        size_t size = (*batch.size_ptr)[i];
+        if (size > std::numeric_limits<uint64_t>::max() - local ||
+            size > std::numeric_limits<uint64_t>::max() - remote)
+          return state;
+        uint64_t begin = sending ? remote : local;
+        state->written_ranges.push_back({begin, begin + size});
+      }
+    }
+
+    auto& ranges = state->written_ranges;
+    std::sort(ranges.begin(), ranges.end(),
+              [](auto const& a, auto const& b) { return a.begin < b.begin; });
+    size_t merged = 0;
+    for (auto const range : ranges) {
+      if (merged && range.begin <= ranges[merged - 1].end) {
+        ranges[merged - 1].end = std::max(ranges[merged - 1].end, range.end);
+      } else {
+        ranges[merged++] = range;
+      }
+    }
+    ranges.resize(merged);
+    state->num_iovs = batch.num_iovs;
+    state->raw = true;
+    return state;
+  }
+
+  void drive() {
+    uccl_drive_send(endpoint.ep_);
+    if (!sending) uccl_drive_recv(endpoint.ep_);
+  }
+
+  uccl::ProxyPostResult post(Task& state, size_t offset, size_t budget) {
+    auto const& batch = state->task->task_batch();
+    if (state->registrations.empty()) {
+      state->registrations.reserve(batch.num_iovs);
+      std::shared_lock<std::shared_mutex> lock(endpoint.mr_mu_);
+      for (auto id : *batch.mr_id_ptr) {
+        auto it = endpoint.mr_id_to_mr_.find(id);
+        // Registration may have been removed while this request was queued.
+        if (it == endpoint.mr_id_to_mr_.end() ||
+            it->second->mhandle_ == nullptr ||
+            it->second->mhandle_->compress_only)
+          return {uccl::ProxyPostStatus::Failed, 0, {}};
+        state->registrations.push_back(it->second);
+      }
+    }
+
+    constexpr size_t kQuantumBytes = 1024 * 1024;
+    size_t limit = std::min(budget, batch.num_iovs - offset);
+    size_t count = 0;
+    size_t bytes = 0;
+    while (count < limit) {
+      size_t next_size = (*batch.size_ptr)[offset + count];
+      if (count &&
+          (bytes >= kQuantumBytes || next_size > kQuantumBytes - bytes))
+        break;
+      bytes += next_size;
+      ++count;
+    }
+    if (count == 0) return {uccl::ProxyPostStatus::Retry, 0, {}};
+
+    // One turn submits at most the scheduler quantum; size the batch for it.
+    constexpr size_t kMaxPostIovs = uccl::ProxySchedulerOptions{}.quantum;
+    std::array<SendConnection::OneSidedBatchOp, kMaxPostIovs> ops{};
+    std::array<SendConnection::RawBatchWait, kMaxPostIovs> waits{};
+    std::array<int64_t, kMaxPostIovs> wr_ids{};
+    UCCL_CHECK(count <= ops.size());
+    for (size_t i = 0; i < count; ++i) {
+      size_t iov = offset + i;
+      ops[i].local_addr = (*batch.data_ptr)[iov];
+      ops[i].size = (*batch.size_ptr)[iov];
+      ops[i].local_mr_array = &state->registrations[iov]->mhandle_->mr_array;
+      ops[i].slot_item = &(*batch.slot_item_ptr)[iov];
+    }
+
+    size_t num_waits = 0;
+    // Keep the transport's existing failure behavior, including its fatal
+    // handling of provider failures after raw tracker IDs are allocated.
+    if (!state->group->post_write_or_read_batch(state->send_type, ops.data(),
+                                                count, wr_ids.data(),
+                                                waits.data(), &num_waits))
+      return {uccl::ProxyPostStatus::Failed, 0, {}};
+
+    UCCL_CHECK(num_waits > 0 && num_waits <= count);
+    uccl::ProxyPostResult result{uccl::ProxyPostStatus::Posted, count, {}};
+    result.waits.reserve(num_waits);
+    size_t represented = 0;
+    for (size_t i = 0; i < num_waits; ++i) {
+      result.waits.push_back({waits[i].wr_id, waits[i].iov_count});
+      represented += waits[i].iov_count;
+    }
+    UCCL_CHECK(represented == count);
+    return result;
+  }
+
+  uccl::ProxyCompletion poll(Task& state, uccl::ProxyWait const& wait) {
+    return uccl_check_wr_fast(state->group, wait.wr_id)
+               ? uccl::ProxyCompletion::Complete
+               : uccl::ProxyCompletion::Pending;
+  }
+
+  bool conflicts(Task const& a, Task const& b) {
+    if (a->conn_id == b->conn_id) return true;
+    auto const& lhs = a->written_ranges;
+    auto const& rhs = b->written_ranges;
+    size_t i = 0, j = 0;
+    while (i < lhs.size() && j < rhs.size()) {
+      if (lhs[i].begin < rhs[j].end && rhs[j].begin < lhs[i].end) return true;
+      if (lhs[i].end <= rhs[j].end)
+        ++i;
+      else
+        ++j;
+    }
+    return false;
+  }
+
+  bool run_exclusive(Task& state) {
+    auto const& task = *state->task;
+    switch (task.type) {
+      case TaskType::WRITE_NET:
+        return endpoint.write(task.conn_id, task.mr_id, task.data, task.size,
+                              task.slot_item());
+      case TaskType::READ_NET:
+        return endpoint.read(task.conn_id, task.mr_id, task.data, task.size,
+                             task.slot_item());
+      case TaskType::WRITEV:
+      case TaskType::READV: {
+        auto const& batch = task.task_batch();
+        if (task.type == TaskType::WRITEV)
+          return endpoint.writev(task.conn_id, *batch.mr_id_ptr,
+                                 *batch.data_ptr, *batch.size_ptr,
+                                 *batch.slot_item_ptr, batch.num_iovs);
+        return endpoint.readv(task.conn_id, *batch.mr_id_ptr, *batch.data_ptr,
+                              *batch.size_ptr, *batch.slot_item_ptr,
+                              batch.num_iovs);
+      }
+      default:
+        UCCL_LOG(ERROR) << "Unexpected task type in cooperative proxy: "
+                        << static_cast<int>(task.type);
+        return false;
+    }
+  }
+
+  void finish(Task& state, bool success) {
+    auto* status = state->task->status_ptr;
+    status->success = success;
+    state->registrations.clear();
+    state->task.reset();
+    status->task_ptr.reset();
+    // poll_async may delete status immediately after this publication.
+    status->done.store(true, std::memory_order_release);
+  }
+};
+
+void Endpoint::cooperative_proxy_thread_func(bool sending) {
+  uccl::pin_thread_to_numa(numa_node_);
+  auto* ring = sending ? send_unified_task_ring_ : recv_unified_task_ring_;
+  auto& sleeper =
+      sending ? send_proxy_adaptive_sleeper_ : recv_proxy_adaptive_sleeper_;
+  uccl::ProxySchedulerOptions options;
+  options.max_inflight = max_one_sided_inflight_ops();
+  uccl::ProxyScheduler<CooperativeProxyBackend::Task> scheduler(options);
+  CooperativeProxyBackend backend{*this, sending};
+  alignas(16) char task_buffer[16];
+  bool fallback_logged = false;
+  sleeper.update_timer();
+
+  for (;;) {
+    if (stop_.load(std::memory_order_acquire)) scheduler.stop_admission();
+    while (scheduler.accepting() && scheduler.size() < options.max_requests) {
+      if (stop_.load(std::memory_order_acquire)) {
+        scheduler.stop_admission();
+        break;
+      }
+      if (jring_sc_dequeue_bulk(ring, task_buffer, 1, nullptr) != 1) break;
+      auto state =
+          backend.prepare(*reinterpret_cast<UnifiedTask**>(task_buffer));
+      // A vector request that is not raw-eligible runs as an exclusive
+      // barrier. Say so once, or a misconfigured opt-in looks like no effect.
+      if (!state->raw && !fallback_logged &&
+          state->task->type == (sending ? TaskType::WRITEV : TaskType::READV)) {
+        fallback_logged = true;
+        UCCL_LOG(WARN) << "cooperative proxy: a "
+                       << (sending ? "WRITEV" : "READV")
+                       << " request is not raw-eligible (congestion control, "
+                          "compression, chunked IOVs or connection state) and "
+                          "runs as an exclusive barrier; further cases are not "
+                          "logged";
+      }
+      // The loop condition already guarantees admission; enqueue cannot fail.
+      UCCL_CHECK(scheduler.enqueue(state, state->num_iovs, !state->raw));
+    }
+
+    if (!scheduler.empty()) {
+      scheduler.progress(backend);
+      sleeper.update_timer();
+      continue;
+    }
+    // Stop admitting work on shutdown, but drain every accepted request before
+    // allowing the endpoint destructor to release connections or registrations.
+    if (!scheduler.accepting()) break;
+    if (!sending) uccl_drive_recv(ep_);
+    // CQ completions do not signal the task eventfd; never sleep with work
+    // live.
+    sleeper.maybe_sleep();
+  }
+}
+
+static bool cooperative_proxy_enabled() {
+  char const* value = std::getenv("UCCL_P2P_COOPERATIVE_PROXY");
+  return value && std::strcmp(value, "1") == 0;
+}
+
 void Endpoint::send_proxy_thread_func() {
+  if constexpr (!uccl::device::Backend::staged_network) {
+    if (cooperative_proxy_enabled()) {
+      cooperative_proxy_thread_func(true);
+      return;
+    }
+  }
   uccl::pin_thread_to_numa(numa_node_);
   // Use 16-byte buffer to avoid stringop-overflow warning from jring's 16-byte
   // bulk copy
@@ -2577,6 +3057,12 @@ void Endpoint::send_proxy_thread_func() {
 }
 
 void Endpoint::recv_proxy_thread_func() {
+  if constexpr (!uccl::device::Backend::staged_network) {
+    if (cooperative_proxy_enabled()) {
+      cooperative_proxy_thread_func(false);
+      return;
+    }
+  }
   uccl::pin_thread_to_numa(numa_node_);
   // Use 16-byte buffer to avoid stringop-overflow warning from jring's 16-byte
   // bulk copy
@@ -2625,7 +3111,9 @@ void Endpoint::passive_accept_thread_func() {
   int remote_gpu_idx;
   uint64_t conn_id;
   while (!stop_.load(std::memory_order_acquire)) {
-    (void)accept(ip_addr, remote_gpu_idx, conn_id);
+    if (do_accept(ip_addr, remote_gpu_idx, conn_id)) {
+      publish_passive_accept(conn_id, remote_gpu_idx);
+    }
   }
 }
 
@@ -2639,7 +3127,9 @@ void Endpoint::passive_accept_local_thread_func() {
 
       std::string remote_gpu_bdf;
       uint64_t conn_id;
-      (void)accept_local(remote_gpu_bdf, conn_id);
+      if (do_accept_local(remote_gpu_bdf, conn_id)) {
+        publish_passive_accept(conn_id, -1);
+      }
       found = true;
       break;
     }
@@ -2656,17 +3146,19 @@ void Endpoint::ipc_poller_thread_func() {
   int cur_device = -1;
   ipc_proxy_adaptive_sleeper_.update_timer();
 
-  while (!stop_.load(std::memory_order_acquire) || !active_ops.empty()) {
+  while (true) {
     // only try to sleep if there are no more inflight ops
     if (!active_ops.empty()) {
       ipc_proxy_adaptive_sleeper_.update_timer();
     }
     ipc_proxy_adaptive_sleeper_.maybe_sleep();
 
-    // Drain newly submitted ops into the local active list.
+    // Observe shutdown before draining so the final pass sees accepted work.
+    bool const stopping = stop_.load(std::memory_order_acquire);
     while (jring_sc_dequeue_bulk(ipc_inflight_ring_, buf, 1, nullptr) == 1) {
       active_ops.push_back(*reinterpret_cast<IpcInflightOp**>(buf));
     }
+    if (stopping && active_ops.empty()) break;
 
     for (auto it = active_ops.begin(); it != active_ops.end();) {
       IpcInflightOp* op = *it;
@@ -2739,12 +3231,12 @@ std::shared_ptr<UnifiedTask> Endpoint::create_batch_task(uint64_t conn_id,
 
 std::shared_ptr<UnifiedTask> Endpoint::create_writev_task(
     uint64_t conn_id, std::vector<void*>&& data_v, std::vector<size_t>&& size_v,
-    std::vector<uint64_t>&& mr_id_v, std::vector<FifoItem>&& slot_item_v) {
+    std::vector<uint64_t>&& mr_id_v, std::vector<FifoItem>&& slot_item_v,
+    size_t num_iovs) {
   if (data_v.size() != size_v.size() || size_v.size() != mr_id_v.size() ||
-      mr_id_v.size() != slot_item_v.size()) {
+      mr_id_v.size() != slot_item_v.size() || num_iovs > data_v.size()) {
     return nullptr;
   }
-  size_t num_iovs = data_v.size();
   auto data_ptr = std::make_shared<std::vector<void*>>(std::move(data_v));
   auto size_ptr = std::make_shared<std::vector<size_t>>(std::move(size_v));
   auto mr_id_ptr = std::make_shared<std::vector<uint64_t>>(std::move(mr_id_v));
@@ -2761,12 +3253,12 @@ std::shared_ptr<UnifiedTask> Endpoint::create_writev_task(
 
 std::shared_ptr<UnifiedTask> Endpoint::create_readv_task(
     uint64_t conn_id, std::vector<void*>&& data_v, std::vector<size_t>&& size_v,
-    std::vector<uint64_t>&& mr_id_v, std::vector<FifoItem>&& slot_item_v) {
+    std::vector<uint64_t>&& mr_id_v, std::vector<FifoItem>&& slot_item_v,
+    size_t num_iovs) {
   if (data_v.size() != size_v.size() || size_v.size() != mr_id_v.size() ||
-      mr_id_v.size() != slot_item_v.size()) {
+      mr_id_v.size() != slot_item_v.size() || num_iovs > data_v.size()) {
     return nullptr;
   }
-  size_t num_iovs = data_v.size();
   auto data_ptr = std::make_shared<std::vector<void*>>(std::move(data_v));
   auto size_ptr = std::make_shared<std::vector<size_t>>(std::move(size_v));
   auto mr_id_ptr = std::make_shared<std::vector<uint64_t>>(std::move(mr_id_v));
