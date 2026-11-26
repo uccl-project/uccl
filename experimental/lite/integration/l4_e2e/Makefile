@@ -16,8 +16,18 @@ $(BUILD)/peer.o: $(LITE)/src/collectives/peer_collectives.cu | $(BUILD)
 	$(NVCC) $(FLAGS) -c $< -o $@
 $(BUILD)/bridge.o: collectives.cc | $(BUILD)
 	$(NVCC) $(FLAGS) -x cu -c $< -o $@
-$(LITE)/build/cpu_router/libuccl_lite_cpu_router.a:
+$(LITE)/build/cpu_router/libuccl_lite_cpu_router.a: router-refresh
 	$(MAKE) -C $(LITE) build/cpu_router/libuccl_lite_cpu_router.a CUDA_HOME=$(CUDA_HOME) CUDA_ARCH=$(CUDA_ARCH)
-$(BUILD)/libuccl_lite_peer_e2e.so: $(BUILD)/bridge.o $(BUILD)/peer.o $(LITE)/build/cpu_router/libuccl_lite_cpu_router.a
+$(BUILD)/libuccl_lite_peer_e2e.so: $(BUILD)/bridge.o $(BUILD)/peer.o $(LITE)/build/cpu_router/libuccl_lite_cpu_router.a $(LITE)/build/planner/libuccl_lite_planner.a $(LITE)/build/runtime/peer_calibration.o $(LITE)/build/topology/calibration.o
 	$(NVCC) -shared -L$(MPI_HOME)/lib -lmpi -Xlinker=-rpath,$(MPI_HOME)/lib -arch=$(CUDA_ARCH) $^ -L$(NCCL_HOME)/lib -l:libnccl.so.2 -L$(CUDA_LIB) -lcudart -Xcompiler=-pthread -ldl -Xlinker=-rpath,$(NCCL_HOME)/lib -Xlinker=-rpath,$(CUDA_LIB) -o $@
 -include $(BUILD)/*.d
+
+.PHONY: planner-refresh
+planner-refresh:
+	$(MAKE) -C $(LITE) planner build/runtime/peer_calibration.o build/topology/calibration.o CUDA_HOME=$(CUDA_HOME) CUDA_ARCH=$(CUDA_ARCH)
+$(LITE)/build/planner/libuccl_lite_planner.a: planner-refresh
+
+.PHONY: router-refresh
+router-refresh:
+
+$(LITE)/build/runtime/peer_calibration.o $(LITE)/build/topology/calibration.o: planner-refresh

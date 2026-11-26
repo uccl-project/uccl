@@ -21,7 +21,10 @@ void child(std::array<unsigned char, 128> id, int rank, int ranks,
                           expectFailure ? 800 : 4000);
       if (scenario == 2 && rank == ranks - 1) return;
       for (int generation = 0; generation < 5; ++generation) {
-        size_t bytes = generation % 2 ? 131071 : 33;
+        size_t bytes =
+            generation % 2
+                ? std::min(size_t(131071), (1UL << 20) / size_t(ranks) - 1)
+                : 33;
         std::vector<unsigned char> local(bytes), all(bytes * ranks);
         for (size_t i = 0; i < bytes; ++i)
           local[i] = pattern(rank, generation, i);
@@ -92,13 +95,18 @@ void run(int ranks, int scenario) {
 }  // namespace
 int main() {
   try {
+    run(1, 0);
+    run(3, 0);
+    run(5, 0);
+    run(9, 0);
     run(4, 0);
     run(8, 0);
     run(4, 1);
     run(4, 2);
     run(4, 3);
     std::puts(
-        "PASS: CPU control 4/8 ranks, changing payloads, three lifetimes, "
+        "PASS: CPU control 1/3/4/5/8/9 ranks, changing payloads, three "
+        "lifetimes, "
         "late root, wrong session, disconnected peer and occupied port");
   } catch (std::exception const& error) {
     std::fprintf(stderr, "FAIL: %s\n", error.what());

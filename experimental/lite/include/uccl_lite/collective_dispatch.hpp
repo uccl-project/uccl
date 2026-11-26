@@ -1,24 +1,13 @@
 #pragma once
 
 #include "backend_policy.hpp"
+#include "collective_call.hpp"
 #include "cpu_router/cpu_router.hpp"
 #include <functional>
 #include <memory>
 #include <vector>
 
 namespace uccl_lite {
-
-Topology inspectTopology(std::vector<int> const& devices);
-
-struct CollectiveCall {
-  Collective collective = Collective::AllReduce;
-  ScalarType dtype = ScalarType::BFloat16;
-  // AR tensor elements, AG contribution elements, or RS output-shard elements.
-  size_t count = 0;
-  bool inPlace = false;
-  std::vector<cpu_router::PacketPort> ports;
-  Workload workload() const;
-};
 
 // Optional decorator around a caller-owned existing backend. No NCCL
 // dependency. One process owns all device ports. Calls are serialized by the

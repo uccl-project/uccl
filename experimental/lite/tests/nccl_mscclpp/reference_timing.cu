@@ -10,6 +10,11 @@
 #include <cuda_runtime.h>
 #include <mpi.h>
 #include <nccl.h>
+#ifdef UCCL_LITE_REFERENCE_LOCAL
+constexpr int kRanks = 4;
+#else
+constexpr int kRanks = 8;
+#endif
 extern "C" ncclResult_t uccl_lite_nccl_synchronize(ncclComm_t);
 void checked(cudaError_t s) {
   if (s != cudaSuccess) throw std::runtime_error(cudaGetErrorString(s));
@@ -21,14 +26,14 @@ __global__ void prepareAg(float* input, size_t count, int rank,
                           int generation) {
   for (size_t i = blockIdx.x * blockDim.x + threadIdx.x; i < count;
        i += gridDim.x * blockDim.x)
-    input[i] = float(rank + 1 + generation * 8) * float(1 + i % 97);
+    input[i] = float(rank + 1 + generation * kRanks) * float(1 + i % 97);
 }
 __global__ void verifyAg(float const* output, size_t count, size_t shard,
                          int generation, unsigned* wrong) {
   for (size_t i = blockIdx.x * blockDim.x + threadIdx.x; i < count;
        i += gridDim.x * blockDim.x) {
-    float expected =
-        float(i / shard + 1 + generation * 8) * float(1 + (i % shard) % 97);
+    float expected = float(i / shard + 1 + generation * kRanks) *
+                     float(1 + (i % shard) % 97);
     if (output[i] != expected) atomicAdd(wrong, 1);
   }
 }
@@ -38,9 +43,10 @@ int main(int argc, char** argv) {
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   MPI_Comm_size(MPI_COMM_WORLD, &world);
   try {
-    if ((argc != 7 && argc != 8) || world != 8)
+    if ((argc != 7 && argc != 8) || world != kRanks)
       throw std::invalid_argument(
-          "op(ag/ar/rs) layout(out/in) begin end warmups iterations; eight "
+          "op(ag/ar/rs) layout(out/in) begin end warmups iterations; "
+          "configured "
           "ranks required");
     std::string op = argv[1], layout = argv[2];
     bool ag = op == "ag", rs = op == "rs", inplace = layout == "in";
@@ -65,21 +71,38 @@ int main(int argc, char** argv) {
     checked(cudaMalloc(&a, allocation));
     checked(cudaMalloc(&b, allocation));
     checked(cudaMalloc(&wrong, sizeof(unsigned)));
+#ifdef UCCL_LITE_REFERENCE_LOCAL
+    cudaEvent_t eventStart = nullptr, eventEnd = nullptr;
+    float* referenceScratch = nullptr;
+    if (ag || rs) {
+      checked(cudaEventCreate(&eventStart));
+      checked(cudaEventCreate(&eventEnd));
+      checked(cudaMalloc(&referenceScratch, allocation));
+    }
+#endif
     ncclUniqueId id;
     if (!rank) checked(ncclGetUniqueId(&id));
     MPI_Bcast(&id, sizeof(id), MPI_BYTE, 0, MPI_COMM_WORLD);
     ncclComm_t comm;
     checked(ncclCommInitRank(&comm, world, id, rank));
     if (!rank) {
+#ifdef UCCL_LITE_REFERENCE_LOCAL
+      std::printf(
+          "# local timing=%s; reference AG/RS uses one process/four GPUs; "
+          "candidate uses four processes\n",
+          ag || rs ? "max-rank CUDA events including enqueue gaps"
+                   : "max-rank host enqueue+completion");
+#else
       std::printf(
           "# protocol=UCCL per-call preparation; completion includes internal "
           "retirement; fixed pointers; reference AG process layout differs\n");
+#endif
       std::printf("# dtype=FP32; warmup=%d iterations=%d max_allocation=%zu\n",
                   warmup, iterations, allocation);
     }
     std::vector<float> hostInput, hostOutput;
     for (size_t bytes = begin; bytes <= end; bytes *= 2) {
-      size_t count = bytes / 4, shard = count / 8;
+      size_t count = bytes / 4, shard = count / kRanks;
       float* output = inplace ? a + (rs ? rank * shard : 0) : b;
       float* input = a + (inplace && ag ? rank * shard : 0);
       hostInput.resize(ag ? shard : count);
@@ -87,7 +110,18 @@ int main(int argc, char** argv) {
       double total = 0;
       for (int i = 0; i < warmup + iterations; ++i) {
         int generation = 10 + i;
-        if (ag) {
+#ifdef UCCL_LITE_REFERENCE_LOCAL
+        if (ag || rs) {
+          if (inplace) checked(cudaMemsetAsync(a, 0xff, bytes, stream));
+          prepareAg<<<256, 256, 0, stream>>>(input, ag ? shard : count, rank,
+                                             generation);
+          if (!inplace) checked(cudaMemsetAsync(b, 0xff, bytes, stream));
+          checked(cudaMemsetAsync(referenceScratch, 0xff, bytes, stream));
+          checked(cudaGetLastError());
+          checked(cudaDeviceSynchronize());
+        } else
+#endif
+            if (ag) {
           if (inplace) {
             checked(cudaMemsetAsync(a, 0xff, bytes, stream));
             prepareAg<<<256, 256, 0, stream>>>(input, shard, rank, generation);
@@ -99,12 +133,16 @@ int main(int argc, char** argv) {
           checked(cudaDeviceSynchronize());
         } else {
           for (size_t j = 0; j < count; ++j)
-            hostInput[j] = float(rank + 1 + generation * 8) * float(1 + j % 97);
+            hostInput[j] =
+                float(rank + 1 + generation * kRanks) * float(1 + j % 97);
           checked(cudaMemcpyAsync(input, hostInput.data(), bytes,
                                   cudaMemcpyHostToDevice, stream));
           checked(cudaStreamSynchronize(stream));
         }
         MPI_Barrier(MPI_COMM_WORLD);
+#ifdef UCCL_LITE_REFERENCE_LOCAL
+        if (ag || rs) checked(cudaEventRecord(eventStart, stream));
+#endif
         auto start = std::chrono::steady_clock::now();
         if (ag)
           checked(ncclAllGather(input, output, shard, ncclFloat, comm, stream));
@@ -114,11 +152,25 @@ int main(int argc, char** argv) {
         else
           checked(ncclAllReduce(input, output, count, ncclFloat, ncclSum, comm,
                                 stream));
+#ifdef UCCL_LITE_REFERENCE_LOCAL
+        // The original local AR harness times launch + caller-stream
+        // completion.
+        if (ag || rs) checked(cudaEventRecord(eventEnd, stream));
+        checked(cudaStreamSynchronize(stream));
+#else
         checked(uccl_lite_nccl_synchronize(comm));
+#endif
         auto stop = std::chrono::steady_clock::now();
         double localUs = std::chrono::duration<double, std::micro>(stop - start)
                              .count(),
                maxUs = 0;
+#ifdef UCCL_LITE_REFERENCE_LOCAL
+        if (ag || rs) {
+          float ms;
+          checked(cudaEventElapsedTime(&ms, eventStart, eventEnd));
+          localUs = double(ms) * 1000;
+        }
+#endif
         MPI_Allreduce(&localUs, &maxUs, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
         double error = 0;
         if (ag) {
@@ -134,7 +186,8 @@ int main(int argc, char** argv) {
         } else {
           checked(cudaMemcpy(hostOutput.data(), output, hostOutput.size() * 4,
                              cudaMemcpyDeviceToHost));
-          double factor = 36.0 + generation * 64.0;
+          double factor =
+              kRanks * (kRanks + 1) / 2.0 + generation * kRanks * kRanks;
           for (size_t j = 0; j < hostOutput.size(); ++j) {
             double expected = factor * (1 + (j + (rs ? rank * shard : 0)) % 97);
             double e = std::fabs(double(hostOutput[j]) - expected) / expected;
@@ -165,6 +218,11 @@ int main(int argc, char** argv) {
     checked(cudaFree(a));
     checked(cudaFree(b));
     checked(cudaFree(wrong));
+#ifdef UCCL_LITE_REFERENCE_LOCAL
+    if (referenceScratch) checked(cudaFree(referenceScratch));
+    if (eventStart) checked(cudaEventDestroy(eventStart));
+    if (eventEnd) checked(cudaEventDestroy(eventEnd));
+#endif
     checked(cudaStreamDestroy(stream));
     checked(cudaStreamDestroy(upload));
     if (!rank) std::puts("UCCL reference-protocol checks passed");

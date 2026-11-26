@@ -1,5 +1,5 @@
 // Benchmark-only, single-process two-GPU bridge. No automatic backend policy.
-#include "uccl_lite/collective_dispatch.hpp"
+#include "uccl_lite/collective_call.hpp"
 #include "uccl_lite/collectives/peer_collectives.hpp"
 #include <array>
 #include <cstdio>
@@ -26,14 +26,7 @@ struct Context {
   bool usePeer;
   explicit Context(bool value) : usePeer(value) {
     if (usePeer) {
-      uccl_lite::Topology topology;
-      topology.devices = {0, 1};
-      for (int r = 0; r < 2; ++r)
-        for (int s = 0; s < 2; ++s) {
-          int access = 1;
-          if (r != s) cudaCheck(cudaDeviceCanAccessPeer(&access, r, s));
-          topology.peerAccess.push_back(access);
-        }
+      auto topology = uccl_lite::inspectTopology({0, 1});
       peer = std::make_unique<uccl_lite::PeerCollectives>(topology);
     } else {
       int devices[] = {0, 1};
@@ -111,7 +104,11 @@ int uccl_lite_e2e_prepare(void* context, size_t count, void** input,
       cudaCheck(cudaSetDevice(r));
       cudaCheck(cudaDeviceSynchronize());
     }
-    if (c.usePeer) c.peer->prepare(call);
+    if (c.usePeer) {
+      c.peer->prepare(call);
+      call.collective = uccl_lite::Collective::AllGather;
+      c.peer->prepare(call);
+    }
     c.prepared.insert(count);
   });
 }

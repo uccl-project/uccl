@@ -35,7 +35,6 @@
 #include <cuda_runtime.h>
 #include <mpi.h>
 
-
 #define CUDACHECK(cmd)                                                   \
   do {                                                                   \
     cudaError_t e_ = (cmd);                                              \
@@ -366,8 +365,7 @@ int main(int argc, char** argv) {
   }
   if (cfg.rsRing && !cfg.reduceScatter) {
     if (rank == 0)
-      std::fprintf(stderr,
-                   "--rs-ring is only valid for --op reducescatter\n");
+      std::fprintf(stderr, "--rs-ring is only valid for --op reducescatter\n");
     MPI_Abort(MPI_COMM_WORLD, 2);
   }
   if (cfg.rsFastPack && !cfg.rsRing) {
@@ -388,8 +386,8 @@ int main(int argc, char** argv) {
     MPI_Abort(MPI_COMM_WORLD, 2);
   }
   if (cfg.rsTargetPieceBytes &&
-      (!cfg.rsDirectRing || cfg.rsPieces != 1 ||
-       cfg.rsTargetPieceBytes < 512 || cfg.rsTargetPieceBytes % 512)) {
+      (!cfg.rsDirectRing || cfg.rsPieces != 1 || cfg.rsTargetPieceBytes < 512 ||
+       cfg.rsTargetPieceBytes % 512)) {
     if (rank == 0)
       std::fprintf(stderr,
                    "--rs-piece-bytes requires direct ring, default "
@@ -399,8 +397,7 @@ int main(int argc, char** argv) {
   if (cfg.minBytes < 1024 || cfg.maxBytes < cfg.minBytes ||
       cfg.minBytes % 512 || cfg.maxBytes % 512 || cfg.warmup < 0 ||
       cfg.iters < 1 || cfg.blocks < 1 || cfg.rsFlatBlocks < 1 ||
-      cfg.threads < 1 ||
-      cfg.threads > 1024 || cfg.pieceBytes < 512 ||
+      cfg.threads < 1 || cfg.threads > 1024 || cfg.pieceBytes < 512 ||
       cfg.pipelineDistance < 1) {
     if (rank == 0)
       std::fprintf(stderr, "invalid size, launch, or iteration settings\n");
@@ -499,7 +496,8 @@ int main(int argc, char** argv) {
           0));
     else if (cfg.agRing)
       CUDACHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
-          &residentBlocks, hierarchicalAllGatherRing<PortChan>, cfg.threads, 0));
+          &residentBlocks, hierarchicalAllGatherRing<PortChan>, cfg.threads,
+          0));
     else
       CUDACHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
           &residentBlocks, hierarchicalAllGather, cfg.threads, 0));
@@ -520,11 +518,12 @@ int main(int argc, char** argv) {
           0));
     else if (cfg.rsDirectRing)
       CUDACHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
-          &residentBlocks, hierarchicalReduceScatterDirectRing<PortChan>, cfg.threads,
-          0));
+          &residentBlocks, hierarchicalReduceScatterDirectRing<PortChan>,
+          cfg.threads, 0));
     else if (cfg.rsRing)
       CUDACHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
-          &residentBlocks, hierarchicalReduceScatterRing<PortChan>, cfg.threads, 0));
+          &residentBlocks, hierarchicalReduceScatterRing<PortChan>, cfg.threads,
+          0));
     else
       CUDACHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
           &residentBlocks, hierarchicalReduceScatter, cfg.threads, 0));
@@ -535,8 +534,8 @@ int main(int argc, char** argv) {
       residentBlocks = std::min(residentBlocks, flatResidentBlocks);
       int packedResidentBlocks = 0;
       CUDACHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
-          &packedResidentBlocks, hierarchicalReduceScatterRing<PortChan>, cfg.threads,
-          0));
+          &packedResidentBlocks, hierarchicalReduceScatterRing<PortChan>,
+          cfg.threads, 0));
       residentBlocks = std::min(residentBlocks, packedResidentBlocks);
     }
   } else
@@ -677,6 +676,7 @@ int main(int argc, char** argv) {
   localAg.c[ringPredecessor(localRank)] = localRecvObject.deviceHandle();
   localAg.c[localRank ^ 3] = localDiagObject.deviceHandle();
   LocalDirectChans localDirect{};
+  uint64_t* directSent = nullptr;
   std::array<std::unique_ptr<mscclpp::MemoryChannel>, 3> directObjects;
   bool needsDirectLocal =
       cfg.agPipeline == 1 || cfg.agPipeline >= 4 || cfg.rsOverlapLocal ||
@@ -688,14 +688,16 @@ int main(int argc, char** argv) {
       (cfg.arAuto && !cfg.allGather && !cfg.reduceScatter &&
        cfg.minBytes <= kSerialArMaxBytes);
   if (needsDirectLocal) {
+    CUDACHECK(cudaMalloc(&directSent, 3 * sizeof(uint64_t)));
+    CUDACHECK(cudaMemset(directSent, 0, 3 * sizeof(uint64_t)));
     std::array<std::shared_future<mscclpp::Semaphore>, 3> directSemaphores;
     for (int i = 0; i < 3; ++i)
-      directSemaphores[i] =
-          comm.buildSemaphore(connections[i], peers[i], 320);
+      directSemaphores[i] = comm.buildSemaphore(connections[i], peers[i], 320);
     for (int i = 0; i < 3; ++i) {
       directObjects[i] = std::make_unique<mscclpp::MemoryChannel>(
           directSemaphores[i].get(), remoteMemory[i], localMemory, buffer);
-      localDirect.c[peers[i] - nodeBase] = directObjects[i]->deviceHandle();
+      localDirect.c[peers[i] - nodeBase] =
+          MemChan(directObjects[i]->deviceHandle(), directSent + i);
     }
   }
   // MSCCL++ IPC import can leave a handled invalid-handle probe status.
@@ -724,23 +726,21 @@ int main(int argc, char** argv) {
     size_t inputCount = cfg.allGather ? count / kWorld : count;
     hostIn.resize(inputCount);
     for (size_t i = 0; i < inputCount; i++) {
-      hostIn[i] = (float)(rank + 1 + generation * kWorld) *
-                  (float)(1 + i % 97);
+      hostIn[i] = (float)(rank + 1 + generation * kWorld) * (float)(1 + i % 97);
     }
     if (cfg.allGather)
       CUDACHECK(cudaMemsetAsync(buffer + layout.data, 0xff,
                                 count * sizeof(float), stream));
     size_t inputOffset = cfg.allGather ? layout.ibSend : layout.data;
     bool serialRs = cfg.rsSerialLocal ||
-                    (cfg.rsAuto && count * sizeof(float) <=
-                                      kSerialRsMaxBytes);
+                    (cfg.rsAuto && count * sizeof(float) <= kSerialRsMaxBytes);
     if (cfg.reduceScatter && !serialRs && cfg.rsRing &&
         (!cfg.rsDirectRing ||
          (cfg.rsAuto && autoPackedRs(count * sizeof(float)) &&
           !mediumDirectRs(count * sizeof(float)))))
       inputOffset = layout.immutableInput;
-    CUDACHECK(cudaMemcpyAsync(buffer + inputOffset,
-                              hostIn.data(), inputCount * sizeof(float),
+    CUDACHECK(cudaMemcpyAsync(buffer + inputOffset, hostIn.data(),
+                              inputCount * sizeof(float),
                               cudaMemcpyHostToDevice, stream));
     CUDACHECK(cudaStreamSynchronize(stream));
   };
@@ -748,43 +748,37 @@ int main(int argc, char** argv) {
     size_t outputCount = cfg.reduceScatter ? count / kWorld : count;
     char* output = buffer;
     if (cfg.reduceScatter)
-      output += layout.ibSend +
-                size_t(rank < kLocalRanks ? 0 : 1) * outputCount *
-                    sizeof(float);
+      output += layout.ibSend + size_t(rank < kLocalRanks ? 0 : 1) *
+                                    outputCount * sizeof(float);
     hostOut.resize(outputCount);
-    CUDACHECK(cudaMemcpy(hostOut.data(), output,
-                         outputCount * sizeof(float),
+    CUDACHECK(cudaMemcpy(hostOut.data(), output, outputCount * sizeof(float),
                          cudaMemcpyDeviceToHost));
     double worst = 0.0;
     size_t firstBad = outputCount;
-    double rankSum = (double)kWorld * (kWorld + 1) / 2.0 +
-                     generation * kWorld * kWorld;
+    double rankSum =
+        (double)kWorld * (kWorld + 1) / 2.0 + generation * kWorld * kWorld;
     for (size_t i = 0; i < outputCount; i++) {
-      double want = cfg.allGather
-                        ? (double)(i / (count / kWorld) + 1 +
-                                   generation * kWorld) *
-                              (double)(1 + (i % (count / kWorld)) % 97)
-                    : cfg.reduceScatter
-                        ? rankSum *
-                              (double)(1 +
-                                       (size_t(rank) * outputCount + i) % 97)
-                        : rankSum * (double)(1 + i % 97);
+      double want =
+          cfg.allGather
+              ? (double)(i / (count / kWorld) + 1 + generation * kWorld) *
+                    (double)(1 + (i % (count / kWorld)) % 97)
+          : cfg.reduceScatter
+              ? rankSum * (double)(1 + (size_t(rank) * outputCount + i) % 97)
+              : rankSum * (double)(1 + i % 97);
       double error = std::fabs((double)hostOut[i] - want) / want;
       if ((!std::isfinite(error) || error > 1e-5) && firstBad == outputCount)
         firstBad = i;
       worst = std::max(worst, std::isfinite(error) ? error : INFINITY);
     }
     if (firstBad != outputCount) {
-      double want = cfg.allGather
-                        ? (double)(firstBad / (count / kWorld) + 1 +
+      double want =
+          cfg.allGather ? (double)(firstBad / (count / kWorld) + 1 +
                                    generation * kWorld) *
                               (double)(1 + (firstBad % (count / kWorld)) % 97)
-                    : cfg.reduceScatter
-                        ? rankSum *
-                              (double)(1 + (size_t(rank) * outputCount +
-                                            firstBad) %
-                                           97)
-                        : rankSum * (double)(1 + firstBad % 97);
+          : cfg.reduceScatter
+              ? rankSum *
+                    (double)(1 + (size_t(rank) * outputCount + firstBad) % 97)
+              : rankSum * (double)(1 + firstBad % 97);
       std::fprintf(
           stderr,
           "rank %d first bad index %zu got %.1f want %.1f relerr %.3e\n", rank,
@@ -797,16 +791,13 @@ int main(int argc, char** argv) {
     return cfg.agAuto ? bytes == 1024 || bytes >= (1UL << 20) : cfg.agRing;
   };
   auto useAgSerial = [&](size_t bytes) {
-    return cfg.agSerialLocal ||
-           (cfg.agAuto && bytes <= kSerialAgMaxBytes);
+    return cfg.agSerialLocal || (cfg.agAuto && bytes <= kSerialAgMaxBytes);
   };
   auto useRsSerial = [&](size_t bytes) {
-    return cfg.rsSerialLocal ||
-           (cfg.rsAuto && bytes <= kSerialRsMaxBytes);
+    return cfg.rsSerialLocal || (cfg.rsAuto && bytes <= kSerialRsMaxBytes);
   };
   auto useArSerial = [&](size_t bytes) {
-    return cfg.arSerialLocal ||
-           (cfg.arAuto && bytes <= kSerialArMaxBytes);
+    return cfg.arSerialLocal || (cfg.arAuto && bytes <= kSerialArMaxBytes);
   };
   auto useRsDirectRing = [&](size_t bytes) {
     if (!cfg.rsAuto) return cfg.rsDirectRing;
@@ -903,16 +894,17 @@ int main(int argc, char** argv) {
                   relayOffset, relayHalfBytes);
       } else if (useAgSerial(bytes))
         hierarchicalAllGatherSerial<<<1, 256, 0, stream>>>(
-            localDirect, ib, reinterpret_cast<float*>(buffer), count,
-            layout, rank, localRank);
+            localDirect, ib, reinterpret_cast<float*>(buffer), count, layout,
+            rank, localRank);
       else if (useAgRing(bytes))
-        hierarchicalAllGatherRing<PortChan><<<cfg.blocks, cfg.threads, 0, stream>>>(
-            localSend, localRecv, ib, reinterpret_cast<float*>(buffer), count,
-            layout, rank, localRank, ringPosition(localRank));
+        hierarchicalAllGatherRing<PortChan>
+            <<<cfg.blocks, cfg.threads, 0, stream>>>(
+                localSend, localRecv, ib, reinterpret_cast<float*>(buffer),
+                count, layout, rank, localRank, ringPosition(localRank));
       else
         hierarchicalAllGather<<<cfg.blocks, cfg.threads, 0, stream>>>(
-            localAg, ib, reinterpret_cast<float*>(buffer), count, layout,
-            rank, localRank);
+            localAg, ib, reinterpret_cast<float*>(buffer), count, layout, rank,
+            localRank);
       return;
     }
     if (hybridRs && bytes <= kHybridSerialArMaxBytes) {
@@ -938,27 +930,25 @@ int main(int argc, char** argv) {
                     size_t(overlapSequence++ & 1) * (cfg.maxBytes / kWorld));
       else if (useRsSerial(bytes))
         hierarchicalReduceScatterSerial<<<1, 256, 0, stream>>>(
-            localDirect, ib, reinterpret_cast<float*>(buffer), count,
-            layout, rank, localRank);
+            localDirect, ib, reinterpret_cast<float*>(buffer), count, layout,
+            rank, localRank);
       else if (useRsDirectRing(bytes)) {
-        int availablePieces =
-            int(std::max<size_t>(1, count / kWorld / 32));
-        int requestedPieces = cfg.rsTargetPieceBytes
-                                  ? int(std::max<size_t>(
-                                        2, (bytes / kWorld +
-                                            cfg.rsTargetPieceBytes - 1) /
-                                               cfg.rsTargetPieceBytes))
-                                  : cfg.rsPieces;
+        int availablePieces = int(std::max<size_t>(1, count / kWorld / 32));
+        int requestedPieces =
+            cfg.rsTargetPieceBytes
+                ? int(std::max<size_t>(
+                      2, (bytes / kWorld + cfg.rsTargetPieceBytes - 1) /
+                             cfg.rsTargetPieceBytes))
+                : cfg.rsPieces;
         if (cfg.rsAuto && cfg.reduceScatter && mediumDirectRs(bytes))
           requestedPieces = 1;
         int pieces = std::min(requestedPieces, availablePieces);
-        hierarchicalReduceScatterDirectRing<PortChan><<<cfg.blocks, cfg.threads, 0,
-                                              stream>>>(
-            localSend, localRecv, ib, reinterpret_cast<float*>(buffer), count,
-            layout, rank, ringPosition(localRank), pieces);
+        hierarchicalReduceScatterDirectRing<PortChan>
+            <<<cfg.blocks, cfg.threads, 0, stream>>>(
+                localSend, localRecv, ib, reinterpret_cast<float*>(buffer),
+                count, layout, rank, ringPosition(localRank), pieces);
       } else if (cfg.rsRing && (!cfg.rsAuto || autoPackedRs(bytes))) {
-        int availablePieces =
-            int(std::max<size_t>(1, count / kWorld / 32));
+        int availablePieces = int(std::max<size_t>(1, count / kWorld / 32));
         int pieces = cfg.rsAuto ? 1 : std::min(cfg.rsPieces, availablePieces);
         bool fastPack = cfg.rsAuto || cfg.rsFastPack;
         if (fastPack) {
@@ -976,15 +966,15 @@ int main(int argc, char** argv) {
             MPICHECK(MPI_Barrier(MPI_COMM_WORLD));
           }
         }
-        hierarchicalReduceScatterRing<PortChan><<<cfg.blocks, cfg.threads, 0, stream>>>(
-            localSend, localRecv, ib, reinterpret_cast<float*>(buffer), count,
-            layout, rank, ringPosition(localRank), fastPack, pieces);
+        hierarchicalReduceScatterRing<PortChan>
+            <<<cfg.blocks, cfg.threads, 0, stream>>>(
+                localSend, localRecv, ib, reinterpret_cast<float*>(buffer),
+                count, layout, rank, ringPosition(localRank), fastPack, pieces);
       } else
         hierarchicalReduceScatter<<<cfg.rsAuto ? cfg.rsFlatBlocks : cfg.blocks,
-                                    cfg.threads,
-                                    0, stream>>>(
-            localAg, ib, reinterpret_cast<float*>(buffer), count, layout,
-            rank, localRank);
+                                    cfg.threads, 0, stream>>>(
+            localAg, ib, reinterpret_cast<float*>(buffer), count, layout, rank,
+            localRank);
       if (hybridRs) {
         CUDACHECK(cudaGetLastError());
         CUDACHECK(cudaStreamSynchronize(stream));
@@ -1027,7 +1017,7 @@ int main(int argc, char** argv) {
                       MPI_BYTE, 0, MPI_COMM_WORLD));
   if (rank == 0) {
     std::printf("# UCCL Lite two-node hierarchical %s, float32\n",
-                cfg.allGather      ? "AllGather"
+                cfg.allGather       ? "AllGather"
                 : cfg.reduceScatter ? "ReduceScatter"
                                     : "AllReduce");
     std::printf("# timing=%s; slowest of eight ranks\n",
@@ -1039,30 +1029,34 @@ int main(int argc, char** argv) {
           "# explicit host packet gather; chunk=%zu; slots=3; GPU "
           "reduction=%s; timing includes phase handoff\n",
           cfg.hostPieceBytes,
-          hybridRs ? "tuned RS 96x512, 8MiB target"
-          : cfg.hostOneShot ? "SM full-input sum" : "none");
+          hybridRs          ? "tuned RS 96x512, 8MiB target"
+          : cfg.hostOneShot ? "SM full-input sum"
+                            : "none");
     if (cfg.allGather || cfg.reduceScatter)
-      std::printf("# local %s, remote-rank IB exchange; rail map "
-                  "%d,%d,%d,%d; RS pieces %d\n",
-                  cfg.allGather ? (cfg.agSerialLocal ? "serial direct local AG"
-                                   : cfg.agAuto ? "adaptive ring/multicast"
-                                   : cfg.agRing ? "ring" : "multicast")
-                                : (cfg.rsSerialLocal ? "serial direct local reduction"
-                                   : cfg.rsAuto ? "adaptive direct/packed/flat reduction"
-                                   : cfg.rsDirectRing ? "direct ring reduction"
-                                   : cfg.rsRing ? (cfg.rsFastPack
-                                                    ? "ring reduction + GPU pack"
-                                                    : "ring reduction")
-                                              : "flat reduction"),
-                  cfg.railMap[0], cfg.railMap[1], cfg.railMap[2],
-                  cfg.railMap[3], cfg.rsPieces);
+      std::printf(
+          "# local %s, remote-rank IB exchange; rail map "
+          "%d,%d,%d,%d; RS pieces %d\n",
+          cfg.allGather
+              ? (cfg.agSerialLocal ? "serial direct local AG"
+                 : cfg.agAuto      ? "adaptive ring/multicast"
+                 : cfg.agRing      ? "ring"
+                                   : "multicast")
+              : (cfg.rsSerialLocal  ? "serial direct local reduction"
+                 : cfg.rsAuto       ? "adaptive direct/packed/flat reduction"
+                 : cfg.rsDirectRing ? "direct ring reduction"
+                 : cfg.rsRing ? (cfg.rsFastPack ? "ring reduction + GPU pack"
+                                                : "ring reduction")
+                              : "flat reduction"),
+          cfg.railMap[0], cfg.railMap[1], cfg.railMap[2], cfg.railMap[3],
+          cfg.rsPieces);
     if (cfg.hostOneShot)
       std::printf(
           "# experimental host one-shot: CE D2H raw inputs; UCX "
           "host RDMA; SM mapped-host reduction; no GPU P2P payload\n");
     else if (cfg.arOneShot)
-      std::printf("# experimental one-shot: full-input IB exchange; SM local "
-                  "pull/reduction; 1 CTA x 256 threads; 2 banks; no result AG\n");
+      std::printf(
+          "# experimental one-shot: full-input IB exchange; SM local "
+          "pull/reduction; 1 CTA x 256 threads; 2 banks; no result AG\n");
     else if (cfg.rsTargetPieceBytes && rank == 0)
       std::printf("# RS target piece %zu B per destination shard\n",
                   cfg.rsTargetPieceBytes);
@@ -1071,11 +1065,11 @@ int main(int argc, char** argv) {
           "# local ring 0->1->3->2->0; AG %s; rail map %d,%d,%d,%d; "
           "piece %zu B; pipeline >= %zu B\n",
           cfg.arSerialLocal ? "serial direct local AR"
-          : cfg.arAuto ? "adaptive flat/ring"
-                     : cfg.flatAg ? "flat" : "ring",
-          cfg.railMap[0], cfg.railMap[1],
-          cfg.railMap[2], cfg.railMap[3], cfg.pieceBytes,
-          cfg.pipelineMinBytes);
+          : cfg.arAuto      ? "adaptive flat/ring"
+          : cfg.flatAg      ? "flat"
+                            : "ring",
+          cfg.railMap[0], cfg.railMap[1], cfg.railMap[2], cfg.railMap[3],
+          cfg.pieceBytes, cfg.pipelineMinBytes);
     std::printf("# %12s %12s %8s %10s %10s %10s %10s\n", "size(B)", "count",
                 "pieces", "time(us)", "algbw", "busbw", "maxrelerr");
   }
@@ -1091,8 +1085,7 @@ int main(int argc, char** argv) {
             ? std::min(
                   cfg.rsTargetPieceBytes
                       ? int(std::max<size_t>(
-                            2, (bytes / kWorld +
-                                cfg.rsTargetPieceBytes - 1) /
+                            2, (bytes / kWorld + cfg.rsTargetPieceBytes - 1) /
                                    cfg.rsTargetPieceBytes))
                       : cfg.rsPieces,
                   int(std::max<size_t>(1, count / kWorld / 32)))
@@ -1142,8 +1135,9 @@ int main(int argc, char** argv) {
                  : useArFlatGather(bytes) ? "flat-local-gather"
                                           : "ring-local-gather");
       std::printf("# selected,%s,%zu,%s\n",
-                  cfg.allGather ? "allgather"
-                  : cfg.reduceScatter ? "reducescatter" : "allreduce",
+                  cfg.allGather       ? "allgather"
+                  : cfg.reduceScatter ? "reducescatter"
+                                      : "allreduce",
                   bytes, selected);
       if (cfg.agPipeline)
         std::printf(
@@ -1223,9 +1217,9 @@ int main(int argc, char** argv) {
         if (rank == 0 && i >= cfg.warmup) {
           timedSum += callUs;
           std::printf("# sample,%s,%zu,%d,%.3f,%.3e\n",
-                      cfg.allGather ? "allgather" : cfg.reduceScatter
-                                                  ? "reducescatter"
-                                                  : "allreduce",
+                      cfg.allGather       ? "allgather"
+                      : cfg.reduceScatter ? "reducescatter"
+                                          : "allreduce",
                       bytes, i - cfg.warmup + 1, callUs, callErr);
         }
         MPICHECK(MPI_Barrier(MPI_COMM_WORLD));
@@ -1290,6 +1284,7 @@ int main(int argc, char** argv) {
   if (timingEnd) CUDACHECK(cudaEventDestroy(timingEnd));
   if (timingStart) CUDACHECK(cudaEventDestroy(timingStart));
   CUDACHECK(cudaStreamDestroy(stream));
+  if (directSent) CUDACHECK(cudaFree(directSent));
   CUDACHECK(cudaFree(buffer));
   MPI_Comm_free(&localComm);
   MPI_Finalize();

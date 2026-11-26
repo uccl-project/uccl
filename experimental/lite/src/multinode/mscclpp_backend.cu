@@ -3,6 +3,7 @@
 #include "async_host_gather.cuh"
 #endif
 #include "uccl_lite/collectives.h"
+#include <mscclpp/utils.hpp>
 #if defined(UCCL_LITE_GRAPH_BINDING_CACHE) ||  \
     defined(UCCL_LITE_SYNC_PRIMARY_CONTEXT) || \
     defined(UCCL_LITE_DRIVER_COMPLETION) ||    \
@@ -640,6 +641,7 @@ struct ReduceGraph {
 
 struct Context {
   int rank, device, rail;
+  std::array<int, 2> numaNodes;
   size_t capacity;
   size_t bankBytes = 0;
   uint64_t sequence = 0;
@@ -717,8 +719,8 @@ struct Context {
   std::map<GraphKey, ReduceGraph> reduceGraphs, scatterGraphs;
   GraphInput* graphInput = nullptr;
   std::shared_ptr<mscclpp::Communicator> owner;
-  Context(int r, int d, int net, size_t bytes)
-      : rank(r), device(d), rail(net), capacity(bytes) {}
+  Context(int r, int d, int net, size_t bytes, std::array<int, 2> nodes)
+      : rank(r), device(d), rail(net), numaNodes(nodes), capacity(bytes) {}
   ~Context() {
     int previous = 0;
     cudaGetDevice(&previous);
@@ -947,7 +949,7 @@ struct Context {
 #define UCCL_LITE_HOST_GATHER_CHUNK (256UL << 10)
 #endif
     hostGather = std::make_unique<multinode::AsyncHostGather>(
-        *comm, rank, UCCL_LITE_HOST_GATHER_CHUNK);
+        *comm, rank, UCCL_LITE_HOST_GATHER_CHUNK, device, numaNodes, rail);
 #ifdef UCCL_LITE_HOST_HYBRID_EXPERIMENT
     checked(cudaMalloc(&hybridShard, capacity / 8));
 #endif
@@ -1823,11 +1825,14 @@ class NetworkCollectives::Impl {
 #ifdef UCCL_LITE_FIXED_ALGORITHM_DISPATCH
   std::array<std::shared_ptr<mscclpp::Algorithm>, 3> fixedAlgorithms{};
 #endif
-  Impl(NetworkId uid, int rank, int device, int rail, size_t capacity)
+  Impl(NetworkId uid, int rank, int device, int rail, size_t capacity,
+       std::array<int, 2> numaNodes)
       : id(uid),
-        context(std::make_shared<Context>(rank, device, rail, capacity)) {
+        context(std::make_shared<Context>(rank, device, rail, capacity,
+                                          numaNodes)) {
     if (rank < 0 || rank >= 8 || device < 0 || rail < 0 || rail >= 8 ||
-        !capacity || capacity > (1UL << 30) || capacity % 128)
+        !capacity || capacity > (1UL << 30) || capacity % 128 ||
+        numaNodes[0] < 0 || numaNodes[1] < 0 || numaNodes[0] == numaNodes[1])
       throw std::invalid_argument("unsupported network configuration");
     for (int i = 1; i <= 3; ++i) {
       auto op = static_cast<NetworkOperation>(i);
@@ -1876,9 +1881,35 @@ class NetworkCollectives::Impl {
 NetworkId NetworkCollectives::createUniqueId() {
   return mscclpp::TcpBootstrap::createUniqueId();
 }
+bool NetworkCollectives::supportsCurrentDevice() {
+  checked(cudaGetLastError());
+  int device;
+  cudaDeviceProp property{};
+  checked(cudaGetDevice(&device));
+  checked(cudaGetDeviceProperties(&property, device));
+  if (!property.canMapHostMemory) return false;
+#ifdef UCCL_LITE_HOST_GATHER_EXPERIMENT
+  if (!property.cooperativeLaunch) return false;
+#endif
+  cudaFuncAttributes attributes{};
+  auto status = cudaFuncGetAttributes(&attributes, stagedCollective<false, 0>);
+  if (status == cudaErrorNoKernelImageForDevice ||
+      status == cudaErrorInvalidDeviceFunction ||
+      status == cudaErrorUnsupportedPtxVersion) {
+    (void)cudaGetLastError();
+    return false;
+  }
+  checked(status);
+  return true;
+}
 NetworkCollectives::NetworkCollectives(NetworkId id, int rank, int device,
                                        int rail, size_t capacity)
-    : impl_(std::make_unique<Impl>(id, rank, device, rail, capacity)) {}
+    : NetworkCollectives(id, rank, device, rail, capacity, {0, 1}) {}
+NetworkCollectives::NetworkCollectives(NetworkId id, int rank, int device,
+                                       int rail, size_t capacity,
+                                       std::array<int, 2> numaNodes)
+    : impl_(std::make_unique<Impl>(id, rank, device, rail, capacity,
+                                   numaNodes)) {}
 NetworkCollectives::~NetworkCollectives() = default;
 bool NetworkCollectives::initialized() const {
   return bool(impl_->context->transport);
@@ -2043,14 +2074,23 @@ void NetworkCollectives::synchronize() {
   }
 #endif
 }
-void NetworkCollectives::prepare() {
+void NetworkCollectives::prepare() { prepare(nullptr); }
+void NetworkCollectives::prepare(
+    std::shared_ptr<mscclpp::Bootstrap> bootstrap) {
   auto& s = *impl_;
   if (initialized()) return;
-  auto bootstrap = std::make_shared<mscclpp::TcpBootstrap>(s.context->rank, 8);
-  bootstrap->initialize(s.id, 120);
+  if (!bootstrap) {
+    auto tcp = std::make_shared<mscclpp::TcpBootstrap>(s.context->rank, 8);
+    tcp->initialize(s.id, 120);
+    bootstrap = std::move(tcp);
+  }
+  if (bootstrap->getRank() != s.context->rank || bootstrap->getNranks() != 8)
+    throw std::invalid_argument("network plan/bootstrap extent mismatch");
   struct Metadata {
     size_t capacity;
-    int device, rail;
+    int device, rail, railValid;
+    std::array<int, 2> numaNodes;
+    char nic[64];
     char host[256];
     char uuid[16];
   };
@@ -2059,6 +2099,16 @@ void NetworkCollectives::prepare() {
   local.capacity = s.context->capacity;
   local.device = s.context->device;
   local.rail = s.context->rail;
+  local.numaNodes = s.context->numaNodes;
+  try {
+    auto name =
+        mscclpp::getIBDeviceName(multinode_kernels::ibTransport(local.rail));
+    local.railValid = !name.empty() && mscclpp::getIBTransportByDeviceName(
+                                           name) != mscclpp::Transport::Unknown;
+    std::snprintf(local.nic, sizeof(local.nic), "%s", name.c_str());
+  } catch (std::exception const&) {
+    local.railValid = 0;
+  }
   cudaDeviceProp property{};
   checked(cudaGetDeviceProperties(&property, local.device));
   std::memcpy(local.uuid, property.uuid.bytes, sizeof(local.uuid));
@@ -2066,8 +2116,10 @@ void NetworkCollectives::prepare() {
     throw std::runtime_error("host identity unavailable");
   bootstrap->allGather(metadata.data(), sizeof(Metadata));
   for (int r = 0; r < 8; ++r) {
-    if (metadata[r].capacity != local.capacity || metadata[r].device != r % 4 ||
-        metadata[r].rail != (r % 4) / 2 ||
+    if (metadata[r].capacity != local.capacity || metadata[r].device < 0 ||
+        metadata[r].numaNodes != metadata[r / 4 * 4].numaNodes ||
+        (metadata[r].rail < 0 || metadata[r].rail >= 8 ||
+         !metadata[r].railValid) ||
         std::strcmp(metadata[r].host, metadata[r / 4 * 4].host) ||
         ((std::strcmp(metadata[r].host, metadata[0].host) == 0) != (r < 4)))
       throw std::invalid_argument("two-host placement/capacity mismatch");

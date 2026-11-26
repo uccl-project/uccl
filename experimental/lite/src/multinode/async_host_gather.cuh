@@ -585,14 +585,18 @@ class AsyncHostGather {
  public:
   AsyncHostGather(mscclpp::Communicator& comm, int rank,
                   size_t chunk = 256UL << 10)
+      : AsyncHostGather(comm, rank, chunk, rank % 4, {0, 1}, -1) {}
+  AsyncHostGather(mscclpp::Communicator& comm, int rank, size_t chunk,
+                  int expectedDevice, std::array<int, 2> numaNodes, int rail)
       : rank_(rank),
         chunk_(chunk),
 #ifdef UCCL_LITE_HOST_COOPERATIVE_ONE_PACKET
-        packets_(comm, rank, std::max(chunk, kHostCooperativePacket)),
+        packets_(comm, rank, std::max(chunk, kHostCooperativePacket),
+                 expectedDevice, numaNodes),
 #else
-        packets_(comm, rank, chunk),
+        packets_(comm, rank, chunk, expectedDevice, numaNodes),
 #endif
-        transport_(comm, packets_, rank) {
+        transport_(comm, packets_, rank, rail) {
     for (int g = 0; g < 2; ++g) view_.control[g] = packets_.mapped(g);
 #ifdef UCCL_LITE_HOST_COOPERATIVE_SM
     int device, blocks;

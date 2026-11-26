@@ -8,6 +8,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <string>
+#include <vector>
 #include <cuda_runtime.h>
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -19,12 +20,15 @@ namespace uccl_lite::multinode {
 // Storage for the README host-packet schedule under one GPU per process.
 // Local source rows stay in their owner's NUMA region. Remote rows are packed
 // in the consuming NUMA region. No worker or CUDA operation is started here.
-class SharedHostPackets {
- public:
 #ifndef UCCL_LITE_HOST_SLOTS
 #define UCCL_LITE_HOST_SLOTS 3
 #endif
-  static constexpr int slots = UCCL_LITE_HOST_SLOTS;
+// Different algorithm configurations coexist in one runtime. Encode the slot
+// count in the C++ type so inline constructors/layout methods cannot collide.
+template <int SlotCount>
+class SharedHostPacketsStorage {
+ public:
+  static constexpr int slots = SlotCount;
   static_assert(slots >= 2 && slots <= 8, "bounded host packet pipeline");
   // Optional progress-worker summaries; individual ownership counters remain
   // authoritative and are never replaced when granting reuse or receive credit.
@@ -73,10 +77,16 @@ class SharedHostPackets {
   }
 
  public:
-  SharedHostPackets(mscclpp::Communicator& comm, int rank, size_t capacity)
+  SharedHostPacketsStorage(mscclpp::Communicator& comm, int rank,
+                           size_t capacity)
+      : SharedHostPacketsStorage(comm, rank, capacity, rank % 4, {0, 1}) {}
+  SharedHostPacketsStorage(mscclpp::Communicator& comm, int rank,
+                           size_t capacity, int expectedDevice,
+                           std::array<int, 2> numaNodes)
       : rank_(rank), group_((rank % 4) / 2), capacity_(capacity) {
     if (rank < 0 || rank >= 8 || !capacity || capacity > (1UL << 20) ||
-        capacity % 16)
+        capacity % 16 || numaNodes[0] < 0 || numaNodes[1] < 0 ||
+        numaNodes[0] == numaNodes[1])
       throw std::invalid_argument("invalid shared host packet configuration");
     size_t page = sysconf(_SC_PAGESIZE);
     auto align = [page](size_t n) { return (n + page - 1) / page * page; };
@@ -84,9 +94,8 @@ class SharedHostPackets {
     bytes_ = align(controlBytes_ + slots * 6 * capacity_);
     int device;
     check(cudaGetDevice(&device));
-    if (device != rank % 4)
-      throw std::invalid_argument(
-          "shared packets require contiguous four-GPU hosts");
+    if (device != expectedDevice)
+      throw std::invalid_argument("shared packets current device mismatch");
     struct Identity {
       char name[96];
       size_t bytes;
@@ -104,9 +113,12 @@ class SharedHostPackets {
       own.owner = true;
       systemCheck(ftruncate(own.fd, bytes_) == 0, "size host packets");
       map(own);
-      unsigned long mask = 1UL << group_;
-      systemCheck(syscall(SYS_mbind, own.host, bytes_, MPOL_BIND, &mask,
-                          8 * sizeof(mask), 0) == 0,
+      unsigned node = unsigned(numaNodes[group_]);
+      constexpr unsigned bits = 8 * sizeof(unsigned long);
+      std::vector<unsigned long> mask(node / bits + 1, 0);
+      mask[node / bits] = 1UL << (node % bits);
+      systemCheck(syscall(SYS_mbind, own.host, bytes_, MPOL_BIND, mask.data(),
+                          mask.size() * bits, 0) == 0,
                   "bind host packets");
       std::memset(own.host, 0, bytes_);
       std::memcpy(ids[rank].name, own.name, sizeof(own.name));
@@ -138,8 +150,8 @@ class SharedHostPackets {
       regions_[group_].name[0] = 0;
     }
   }
-  SharedHostPackets(SharedHostPackets const&) = delete;
-  SharedHostPackets& operator=(SharedHostPackets const&) = delete;
+  SharedHostPacketsStorage(SharedHostPacketsStorage const&) = delete;
+  SharedHostPacketsStorage& operator=(SharedHostPacketsStorage const&) = delete;
   size_t bytes() const { return bytes_; }
   size_t capacity() const { return capacity_; }
   char* host(int group) const { return regions_.at(group).host; }
@@ -173,4 +185,5 @@ class SharedHostPackets {
                                        (slot * flagCount + index) * 64);
   }
 };
+using SharedHostPackets = SharedHostPacketsStorage<UCCL_LITE_HOST_SLOTS>;
 }  // namespace uccl_lite::multinode

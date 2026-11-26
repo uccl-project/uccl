@@ -1,5 +1,6 @@
 #pragma once
 
+#include "uccl_lite/peer_plan.hpp"
 #include <memory>
 
 namespace uccl_lite {
@@ -10,17 +11,20 @@ struct Topology;
 // JointCollectives owns validation, capture rejection and backend policy. This
 // executor owns only peer streams, events, scratch and collective scheduling.
 // Its caller must validate positive, out-of-place BF16 calls on this topology,
-// serialize host calls, and prepare with idle streams before enqueue. No router
-// allocation or profile selection occurs here; unsupported topologies reject.
+// serialize host calls, and prepare each exact workload with idle streams.
+// Plans use an immutable topology/calibration snapshot, so enqueue needs no
+// allocation or model evaluation. No CPU-router resources are allocated here;
+// unsupported topologies reject.
 class PeerCollectives {
  public:
-  explicit PeerCollectives(Topology const& topology);
+  explicit PeerCollectives(Topology const& topology, PeerTuning tuning = {});
   ~PeerCollectives();
   PeerCollectives(PeerCollectives const&) = delete;
   PeerCollectives& operator=(PeerCollectives const&) = delete;
 
   void prepare(CollectiveCall const& call);
   void enqueue(CollectiveCall const& call);
+  PeerSelection const& plan(CollectiveCall const& call) const;
   static bool supported(Topology const& topology);
 
  private:

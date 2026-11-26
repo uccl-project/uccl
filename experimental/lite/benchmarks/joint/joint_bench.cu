@@ -116,13 +116,16 @@ struct Buffers {
   std::vector<__nv_bfloat16 *> in, out;
   std::vector<cudaStream_t> streams;
   std::vector<cudaEvent_t> start, stop;
-  std::vector<int *> errors;
-  Buffers(int ranks, size_t bytes) {
+  std::vector<int*> errors;
+  Buffers(int ranks, size_t bytes, std::vector<int> order = {}) {
+    if (!order.empty() && order.size() != size_t(ranks))
+      throw std::invalid_argument("device order extent mismatch");
     for (int r = 0; r < ranks; ++r) {
-      ck(cudaSetDevice(r));
-      devices.push_back(r);
+      int device = order.empty() ? r : order[r];
+      ck(cudaSetDevice(device));
+      devices.push_back(device);
       __nv_bfloat16 *a, *b;
-      int *e;
+      int* e;
       cudaStream_t s;
       cudaEvent_t x, y;
       ck(cudaMalloc(&a, bytes + 4 * kGuard));
@@ -182,7 +185,7 @@ double invocation(Buffers &b, int op, size_t bytes, unsigned generation,
   size_t inputs = count * (op == 2 ? ranks : 1),
          outputs = count * (op == 1 ? ranks : 1);
   for (int r = 0; r < ranks; ++r) {
-    ck(cudaSetDevice(r));
+    ck(cudaSetDevice(b.devices[r]));
     initialize<<<128, 256, 0, b.streams[r]>>>(
         b.in[r], b.out[r], inputs, outputs, r, generation,
         delayed && r == ranks - 1 ? 500000 : 0);
@@ -192,7 +195,7 @@ double invocation(Buffers &b, int op, size_t bytes, unsigned generation,
   // Deliberately no producer-stream synchronization before candidate enqueue.
   enqueue();
   for (int r = 0; r < ranks; ++r) {
-    ck(cudaSetDevice(r));
+    ck(cudaSetDevice(b.devices[r]));
     ck(cudaEventRecord(b.stop[r], b.streams[r]));
     verify<<<128, 256, 0, b.streams[r]>>>(b.in[r], b.out[r], inputs, outputs, r,
                                           ranks, op, count, generation,
@@ -201,7 +204,7 @@ double invocation(Buffers &b, int op, size_t bytes, unsigned generation,
   }
   double worst = 0;
   for (int r = 0; r < ranks; ++r) {
-    ck(cudaSetDevice(r));
+    ck(cudaSetDevice(b.devices[r]));
     ck(cudaStreamSynchronize(b.streams[r]));
     int errors;
     ck(cudaMemcpy(&errors, b.errors[r], sizeof(int), cudaMemcpyDeviceToHost));
@@ -252,7 +255,7 @@ struct Nccl {
     size_t count = bytes / 2 / (op == 0 ? 1 : comm.size());
     nk(ncclGroupStart());
     for (size_t r = 0; r < comm.size(); ++r) {
-      ck(cudaSetDevice(int(r)));
+      ck(cudaSetDevice(b.devices[r]));
       if (op == 0)
         nk(ncclAllReduce(b.in[r], b.out[r], count, ncclBfloat16, ncclSum,
                          comm[r], b.streams[r]));
@@ -287,27 +290,27 @@ void streamBurst(Buffers &b, int op, size_t bytes, unsigned seed,
   size_t inputs = count * (op == 2 ? ranks : 1),
          outputs = count * (op == 1 ? ranks : 1);
   for (int r = 0; r < ranks; ++r) {
-    ck(cudaSetDevice(r));
+    ck(cudaSetDevice(b.devices[r]));
     ck(cudaMemsetAsync(b.errors[r], 0, sizeof(int), b.streams[r]));
   }
   for (int iteration = 0; iteration < 12; ++iteration) {
     unsigned generation = seed + iteration;
     for (int r = 0; r < ranks; ++r) {
-      ck(cudaSetDevice(r));
+      ck(cudaSetDevice(b.devices[r]));
       initialize<<<32, 128, 0, b.streams[r]>>>(
           b.in[r], b.out[r], inputs, outputs, r, generation,
           r == iteration % ranks ? 200000 : 0);
     }
     enqueue();
     for (int r = 0; r < ranks; ++r) {
-      ck(cudaSetDevice(r));
+      ck(cudaSetDevice(b.devices[r]));
       verify<<<32, 128, 0, b.streams[r]>>>(b.in[r], b.out[r], inputs, outputs,
                                            r, ranks, op, count, generation,
                                            b.errors[r]);
     }
   }
   for (int r = 0; r < ranks; ++r) {
-    ck(cudaSetDevice(r));
+    ck(cudaSetDevice(b.devices[r]));
     ck(cudaStreamSynchronize(b.streams[r]));
     int errors;
     ck(cudaMemcpy(&errors, b.errors[r], sizeof(int), cudaMemcpyDeviceToHost));
@@ -341,14 +344,14 @@ void hostOracle(Config const &cfg, Buffers &b, JointMode mode) {
               i < 8 ? special[(i + r) % 8] : unsigned(h);
         }
       }
-      ck(cudaSetDevice(r));
+      ck(cudaSetDevice(b.devices[r]));
       ck(cudaMemcpyAsync(b.in[r], host[r].data(), inputs * 2,
                          cudaMemcpyHostToDevice, b.streams[r]));
       ck(cudaMemsetAsync(b.out[r], 0xff, outputs * 2, b.streams[r]));
     }
     impl.enqueue(c);
     for (int r = 0; r < ranks; ++r) {
-      ck(cudaSetDevice(r));
+      ck(cudaSetDevice(b.devices[r]));
       ck(cudaStreamSynchronize(b.streams[r]));
       std::vector<__nv_bfloat16> actual(outputs);
       ck(cudaMemcpy(actual.data(), b.out[r], outputs * 2,
@@ -414,30 +417,35 @@ void selftest(Config const &cfg, Buffers &b) {
         b, op, 1024, cfg.seed + 101, [&] { matching.enqueue(c); }, true);
     streamBurst(b, op, 1024, cfg.seed + 500, [&] { missing.enqueue(c); });
     streamBurst(b, op, 1024, cfg.seed + 700, [&] { matching.enqueue(c); });
-    auto noPeer = t;
-    for (size_t r = 0; r < noPeer.devices.size(); ++r)
-      for (size_t q = 0; q < noPeer.devices.size(); ++q)
-        if (r != q)
-          noPeer.peerAccess[r * noPeer.devices.size() + q] = false;
-    JointCollectives fallback(noPeer, JointMode::Auto);
-    if (!fallback.decision(c).cpuRouter)
-      throw std::runtime_error("unavailable peer must select valid router");
-    bool unavailableRejected = false;
-    try {
-      JointCollectives unavailable(noPeer, JointMode::Peer);
-    } catch (std::invalid_argument const &) {
-      unavailableRejected = true;
+    if (b.devices.size() > 1) {
+      auto noPeer = t;
+      for (size_t r = 0; r < noPeer.devices.size(); ++r)
+        for (size_t q = 0; q < noPeer.devices.size(); ++q)
+          if (r != q) noPeer.peerAccess[r * noPeer.devices.size() + q] = false;
+      JointCollectives fallback(noPeer, JointMode::Auto);
+      bool unadmittedRejected = false;
+      try {
+        fallback.decision(c);
+      } catch (std::invalid_argument const&) {
+        unadmittedRejected = true;
+      }
+      if (!unadmittedRejected || fallback.routerInitialized())
+        throw std::runtime_error(
+            "unavailable peer must not force uncalibrated routing");
+      bool unavailableRejected = false;
+      try {
+        JointCollectives unavailable(noPeer, JointMode::Peer);
+      } catch (std::invalid_argument const&) {
+        unavailableRejected = true;
+      }
+      if (!unavailableRejected)
+        throw std::runtime_error("unavailable explicit peer was accepted");
     }
-    if (!unavailableRejected)
-      throw std::runtime_error("unavailable explicit peer was accepted");
     for (int mutation = 0; mutation < 5; ++mutation) {
       auto stale = m;
-      if (mutation == 0)
-        stale.topologyIdentity += "stale";
-      if (mutation == 1)
-        stale.fallbackIdentity += "stale";
-      if (mutation == 2)
-        stale.workload.bytes *= 2;
+      if (mutation == 0) stale.topologyIdentity += "stale";
+      if (mutation == 1) stale.fallbackIdentity += "stale";
+      if (mutation == 2) stale.workload.bytes *= 2;
       if (mutation == 3)
         stale.workload.inPlace = true;
       if (mutation == 4)
@@ -449,7 +457,7 @@ void selftest(Config const &cfg, Buffers &b) {
     }
     // Capture is deliberately outside the supported eager contract; reject
     // before the candidate launches any work or creates cross-stream waits.
-    ck(cudaSetDevice(0));
+    ck(cudaSetDevice(b.devices.front()));
     ck(cudaStreamBeginCapture(b.streams[0], cudaStreamCaptureModeThreadLocal));
     bool rejected = false;
     try {
@@ -531,7 +539,9 @@ int main(int argc, char **argv) {
       else
         throw std::invalid_argument("unknown option " + a);
     }
-    if ((cfg.gpus != 2 && cfg.gpus != 4) || cfg.begin < 8 ||
+    int visibleDevices = 0;
+    ck(cudaGetDeviceCount(&visibleDevices));
+    if (cfg.gpus < 1 || cfg.gpus > visibleDevices || cfg.begin < 8 ||
         cfg.end < cfg.begin || cfg.end > (1UL << 30) ||
         cfg.begin % (2 * cfg.gpus) || cfg.warmup < 0 || cfg.repeats < 1 ||
         cfg.iterations < 1)

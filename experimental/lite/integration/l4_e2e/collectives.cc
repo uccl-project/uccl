@@ -47,14 +47,7 @@ struct Context {
     if (usePacket && nodes == 2 && !replicas)
       throw std::runtime_error("packet AG requires local four-rank sharding");
     if (p) {
-      uccl_lite::Topology t;
-      t.devices = {0, 1, 2, 3};
-      for (int r = 0; r < 4; ++r)
-        for (int s = 0; s < 4; ++s) {
-          int a = 1;
-          if (r != s) ck(cudaDeviceCanAccessPeer(&a, r, s));
-          t.peerAccess.push_back(a);
-        }
+      auto t = uccl_lite::inspectTopology({0, 1, 2, 3});
       if (!uccl_lite::PeerCollectives::supported(t))
         throw std::runtime_error("full four-GPU P2P required");
       peer = std::make_unique<uccl_lite::PeerCollectives>(t);
@@ -171,11 +164,11 @@ int uccl_lite_e2e_prepare(void* p, size_t n, void** in, void** out,
       throw std::runtime_error("positive shard <=64MiB required");
     if (c.usePacket && n * 8 > (64UL << 20))
       throw std::runtime_error("packet AG prepared extent exceeds 64 MiB");
+    auto call = c.call(2, n, in, out, streams);
     for (int r = 0; r < 4; ++r) {
       ck(cudaSetDevice(r));
       ck(cudaDeviceSynchronize());
     }
-    auto call = c.call(2, n, in, out, streams);
     if (c.usePeer) {
       if (c.nodes == 2 && !c.replicas) {
         if (n > c.capacity) {
@@ -191,6 +184,13 @@ int uccl_lite_e2e_prepare(void* p, size_t n, void** in, void** out,
         call = c.call(2, n * 2, c.temporary.data(), c.local.data(), streams);
       }
       c.peer->prepare(call);
+      if (c.nodes == 2 && !c.replicas)
+        c.peer->prepare(
+            c.call(1, n * 2, c.local.data(), c.temporary.data(), streams));
+      else {
+        call.collective = uccl_lite::Collective::AllGather;
+        c.peer->prepare(call);
+      }
       if (c.usePacket && !c.packet) {
         uccl_lite::cpu_router::PacketPipelineOptions options;
         options.maxTensorBytes = 64UL << 20;

@@ -30,6 +30,8 @@ def record(real, library, strict=True, local8=False):
         raise ValueError("native NCCL fallback mode has been removed")
     common.LIBRARY = library
     _, details = common.identity(real)
+    network_profile = os.environ.get('UCCL_LITE_NETWORK_PROFILE')
+    details['network_profile_sha256'] = common.sha256(network_profile) if network_profile else None
     dependencies = subprocess.check_output(['ldd', str(library)], text=True)
     if re.search(r'libnccl\.so', dependencies) or 'not found' in dependencies:
         raise RuntimeError('strict replacement has a native NCCL or unresolved dependency')
@@ -49,6 +51,13 @@ def record(real, library, strict=True, local8=False):
         if getattr(lib, name)(ctypes.byref(value)):
             raise RuntimeError(name + ' failed')
         versions.append(value.value)
+    adapter = ctypes.CDLL(str(library))
+    if hasattr(adapter, 'uccl_lite_nccl_runtime_topology'):
+        adapter.uccl_lite_nccl_runtime_topology.restype = ctypes.c_char_p
+        snapshot = adapter.uccl_lite_nccl_runtime_topology()
+        if not snapshot:
+            raise RuntimeError('runtime topology discovery failed')
+        details['runtime_topology_identity'] = snapshot.decode()
     details['cudart_sha256'] = common.sha256(runtime[1])
     details.update(mscclpp_sha256=common.sha256(match[1]) if match else None,
                    adapter_launcher_sha256=common.sha256(__file__),
@@ -78,18 +87,20 @@ def descriptor(r):
 def write_candidate(path, records, shapes, strict=True, local8=False):
     if not strict:
         raise ValueError("native NCCL fallback mode has been removed")
-    if len(records) != (1 if local8 else 2) or (not local8 and records[0]['hostname'] == records[1]['hostname']):
+    if (len(records) != 1 if local8 else len(records) not in (1, 2)) or (len(records) == 2 and records[0]['hostname'] == records[1]['hostname']):
         raise ValueError('one eight-L4 host is required' if local8 else
-                         'two ordered, distinct hosts are required')
+                         'one local host or two ordered, distinct hosts are required')
     rows = []
     for op, count in shapes:
-        scale = (2 if local8 else 4) * (1 if op == 3 else 8)
+        scale = (2 if local8 else 4) * (1 if op == 3 else (8 if local8 else 4 * len(records)))
         if op not in (1, 2, 3) or count <= 0 or count * scale > ((1 << 30) if strict else (512 << 10)) or count * scale % 128:
             raise ValueError('unsupported candidate shape')
         rows.append(f'{op} {count}')
     if not rows or len(set(rows)) != len(rows):
         raise ValueError('candidate requires unique exact shapes')
     text = ('UCCL_LITE_LOCAL8_STRICT_V1' if local8 else 'UCCL_LITE_MSCCLPP_STRICT_V1') + '\n'
+    if not local8 and len(records) == 1:
+        text = 'UCCL_LITE_MSCCLPP_LOCAL_STRICT_V1\n'
     text += '\n'.join(' '.join(descriptor(r)) for r in records) + '\n'
     Path(path).write_text(text + '\n'.join(rows) + '\n')
 
@@ -130,7 +141,9 @@ def main():
     try:
         r = record(real, library, strict=args.strict, local8=args.local8)
         lines = args.profile.read_text().splitlines()
-        if lines[0] == ('UCCL_LITE_LOCAL8_STRICT_V1' if args.local8 else 'UCCL_LITE_MSCCLPP_STRICT_V1') and descriptor(r) in [x.split() for x in lines[1:2 if args.local8 else 3]]:
+        magic = ('UCCL_LITE_LOCAL8_STRICT_V1',) if args.local8 else ('UCCL_LITE_MSCCLPP_STRICT_V1', 'UCCL_LITE_MSCCLPP_LOCAL_STRICT_V1')
+        hosts = 2 if lines[0] == 'UCCL_LITE_MSCCLPP_STRICT_V1' else 1
+        if lines[0] in magic and descriptor(r) in [x.split() for x in lines[1:1 + hosts]]:
             identity = r['identity']
         else:
             print('UCCL Lite: stale identity; strict initialization will reject', file=sys.stderr)

@@ -6,6 +6,10 @@
 #include <memory>
 #include <cuda_runtime_api.h>
 
+namespace mscclpp {
+class Bootstrap;
+}
+
 namespace uccl_lite {
 
 // Explicit experimental two-host/four-GPU FP32 GPU hierarchy. No automatic
@@ -17,15 +21,21 @@ using NetworkId = std::array<uint8_t, 128>;
 class NetworkCollectives {
  public:
   static NetworkId createUniqueId();
+  // Read-only compiled-image/capability check before transport construction.
+  static bool supportsCurrentDevice();
   // Construction does not allocate GPU buffers, register memory or start
   // workers.
   NetworkCollectives(NetworkId id, int rank, int device, int rail,
                      size_t capacity);
+  NetworkCollectives(NetworkId id, int rank, int device, int rail,
+                     size_t capacity, std::array<int, 2> numaNodes);
   ~NetworkCollectives();
   NetworkCollectives(NetworkCollectives const&) = delete;
   NetworkCollectives& operator=(NetworkCollectives const&) = delete;
   // Collective initialization with idle streams, outside capture and timing.
   void prepare();
+  // Reuse a collectively initialized bootstrap after topology/plan agreement.
+  void prepare(std::shared_ptr<mscclpp::Bootstrap> bootstrap);
   // Serialized host calls; one prepared large communicator per process.
   // Caller ensures ordering against other backends.
   // Output and input reuse are safe after completion on the supplied stream.

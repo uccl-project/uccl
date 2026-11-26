@@ -23,20 +23,20 @@ struct CurrentDevice {
 class JointCollectives::Impl {
  public:
   Impl(Topology topology, JointMode mode, BackendPolicy policy,
-       cpu_router::CpuRouterOptions options) {
+       cpu_router::CpuRouterOptions options, PeerTuning tuning)
+      : peerTuning(std::move(tuning)) {
     if (mode != JointMode::Peer && mode != JointMode::Router &&
         mode != JointMode::Auto)
       throw std::invalid_argument("invalid joint mode");
-    if (topology.devices.size() != 2 && topology.devices.size() != 4 &&
-        topology.devices.size() != 8)
+    if (topology.devices.empty() || topology.devices.size() > 32)
       throw std::invalid_argument(
-          "joint collectives require two, four, or eight GPUs");
-    bool capable = JointCollectives::peerSupported(topology);
-    if (mode == JointMode::Peer && !capable)
+          "joint collectives require 1..32 distinct devices");
+    peerAvailable = JointCollectives::peerSupported(topology);
+    if (mode == JointMode::Peer && !peerAvailable)
       throw std::invalid_argument("requested direct-peer topology unavailable");
-    policy.mode = mode == JointMode::Router || !capable ? RouterMode::Force
-                  : mode == JointMode::Peer             ? RouterMode::Off
-                                                        : RouterMode::Auto;
+    policy.mode = mode == JointMode::Router ? RouterMode::Force
+                  : mode == JointMode::Peer ? RouterMode::Off
+                                            : RouterMode::Auto;
     policy.fallbackIdentity = JointCollectives::peerIdentity();
     if (policy.mode == RouterMode::Auto &&
         policy.fallbackIdentity.find("build=unavailable") != std::string::npos)
@@ -75,17 +75,25 @@ class JointCollectives::Impl {
   }
   std::unique_ptr<PeerCollectives> peer;
   std::unique_ptr<CollectiveDispatcher> dispatcher;
+  bool peerAvailable = false;
+  PeerTuning peerTuning;
 };
 
 JointCollectives::JointCollectives(Topology topology, JointMode mode,
                                    BackendPolicy policy,
-                                   cpu_router::CpuRouterOptions options)
+                                   cpu_router::CpuRouterOptions options,
+                                   PeerTuning tuning)
     : impl_(std::make_unique<Impl>(std::move(topology), mode, std::move(policy),
-                                   std::move(options))) {}
+                                   std::move(options), std::move(tuning))) {}
 JointCollectives::~JointCollectives() = default;
 BackendDecision JointCollectives::decision(CollectiveCall const& call) const {
   impl_->validate(call);
-  return impl_->dispatcher->decision(call);
+  auto result = impl_->dispatcher->decision(call);
+  if (!result.cpuRouter && !impl_->peerAvailable)
+    throw std::invalid_argument(
+        "no admitted collective backend: peer unavailable and router lacks "
+        "matching calibration; explicit Router mode is for validation only");
+  return result;
 }
 BackendDecision JointCollectives::prepare(CollectiveCall const& call) {
   CurrentDevice restore;
@@ -93,7 +101,8 @@ BackendDecision JointCollectives::prepare(CollectiveCall const& call) {
   impl_->rejectCapture(call);
   if (!selected.cpuRouter) {
     if (!impl_->peer)
-      impl_->peer = std::make_unique<PeerCollectives>(topology());
+      impl_->peer =
+          std::make_unique<PeerCollectives>(topology(), impl_->peerTuning);
     impl_->peer->prepare(call);
   }
   return impl_->dispatcher->prepare(call);
@@ -106,6 +115,11 @@ BackendDecision JointCollectives::enqueue(CollectiveCall const& call) {
 }
 Topology const& JointCollectives::topology() const {
   return impl_->dispatcher->topology();
+}
+PeerSelection const& JointCollectives::peerPlan(
+    CollectiveCall const& call) const {
+  if (!impl_->peer) throw std::logic_error("peer executor is not prepared");
+  return impl_->peer->plan(call);
 }
 bool JointCollectives::routerInitialized() const {
   return impl_->dispatcher->routerInitialized();

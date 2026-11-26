@@ -9,6 +9,42 @@
 
 ## Design principles
 
+The topology-driven runtime's organization and current limits are described in
+[the current capability audit](docs/topology-runtime-status.md), with detailed
+evidence in [the migration record](docs/topology-runtime-refactor.md). The common
+`nccl-runtime` entry point now offers
+[collective prepared peer/host selection](docs/prepared-local-runtime.md)
+for BF16/FP32 single-host workloads. The core also supports
+[independently qualified owned graphs](docs/prepared-graphs.md). Historical testbed results below retain their
+original configurations and do not qualify changed implementations.
+The explicit core API additionally supports
+[distributed network selection against a caller baseline](docs/prepared-network-runtime.md).
+The [unified preparation entry point](docs/prepared-runtime.md) discovers
+participants and selects the local or distributed preparation flow automatically.
+The [native communicator C extension](docs/nccl-prepared-api.md) exposes that
+preparation flow to C/FFI callers while retaining caller-owned NCCL fallback.
+Eligible preparation now [measures missing network resource profiles](docs/automatic-network-calibration.md)
+automatically before comparing the exact collective against NCCL.
+Local selection additionally considers [source-ordered peer trees](docs/peer-tree-runtime.md)
+derived from actual access edges, GPU-memory bandwidth and measured peer paths.
+An optional [distributed plan cache](docs/network-plan-cache.md) reuses matching
+resource/decision evidence across processes with fresh correctness and timing checks.
+The [dependency cost model](docs/overlap-model.md) accounts for pipeline overlap
+and contention on declared resources when choosing a peer-tree prior.
+The [prepared NCCL ABI](docs/prepared-nccl-abi.md) uses those plans from ordinary
+host NCCL calls after explicit preparation, with separately timed dispatch and
+native group/capture handoff.
+A [general direct-exchange executor](docs/direct-exchange.md) now supports variable
+host layouts and participates in [measured distributed candidate selection](docs/network-candidate-selection.md).
+Its [operation cost model](docs/direct-model-calibration.md) is calibrated during
+prepare from actual copy, reduction, transport and control timings, with unknown
+shared resources reported explicitly.
+The [strict distributed provider](docs/strict-distributed-selection.md) uses it
+as a validated reference when native NCCL is excluded.
+Its opt-in [initialization adapter](docs/automatic-nccl-init.md) prepares a workload
+manifest from standard communicator initialization; algorithms and paths are
+selected from discovered topology and measured evidence.
+
 - **Provide a drop-in NCCL replacement.** Preserve NCCL's API and ABI so
   supported workloads can use UCCL Lite without application code changes.
 - **Exploit PCIe hierarchy.** Map collective stages to PCIe and NUMA groups.

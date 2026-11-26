@@ -1,4 +1,4 @@
 {
-  global: nccl*; uccl_lite_nccl_synchronize;
+  global: nccl*; uccl_lite_nccl_synchronize; uccl_lite_nccl_runtime_backends; uccl_lite_nccl_runtime_topology;
   local: *;
 };

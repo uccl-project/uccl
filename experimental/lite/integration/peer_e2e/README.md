@@ -258,3 +258,23 @@ records and raw JSON/log files retain every sample. The offline summarizer
 rejects incomplete or mislabeled trials, changed configurations, missing AG/RS
 evidence and mismatched numerical results. `checksums.json` covers the retained
 dataset; `provenance.json` records the measured sources and build commands.
+
+The current bridge prepares separate exact AG and RS plans for each extent.
+Peer algorithm selection uses the common topology/resource planner. Preparation
+automatically fills missing GPU-resource data and qualifies candidates using
+private buffers at the exact workload. Enqueue uses cached plans; prior
+machine-specific size thresholds are no longer used. Historical timings above
+remain measurements of their recorded source versions.
+
+Local bridge correctness (without loading a model):
+
+```bash
+python3 tests/collectives/peer_integration_check.py \
+  build/peer_e2e/libuccl_lite_peer_e2e.so --ranks 2
+```
+
+Run this command from the UCCL Lite root after building the integration.
+
+The peer branch now links the [standalone peer runtime](../../docs/peer-runtime.md)
+rather than the CPU-router archive. NCCL remains a dependency of this benchmark
+bridge only for its separately selected native reference branch.

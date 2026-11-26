@@ -4,16 +4,11 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <fstream>
-#include <iomanip>
 #include <limits>
-#include <regex>
-#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <elf.h>
 #include <link.h>
-#include <sched.h>
 
 namespace uccl_lite {
 namespace {
@@ -80,27 +75,6 @@ std::string const& routerBuildId() {
 void check(cudaError_t error) {
   if (error != cudaSuccess) throw std::runtime_error(cudaGetErrorString(error));
 }
-std::string read(std::string const& path) {
-  std::ifstream input(path);
-  return std::string(std::istreambuf_iterator<char>(input), {});
-}
-std::vector<int> cpuList(int node, cpu_set_t const& allowed) {
-  std::istringstream input(read("/sys/devices/system/node/node" +
-                                std::to_string(node) + "/cpulist"));
-  std::string range;
-  std::vector<int> result;
-  while (std::getline(input, range, ',')) {
-    auto dash = range.find('-');
-    int begin = std::stoi(range), end = dash == std::string::npos
-                                            ? begin
-                                            : std::stoi(range.substr(dash + 1));
-    if (begin < 0 || end >= CPU_SETSIZE || end < begin)
-      throw std::runtime_error("invalid host CPU list");
-    for (int cpu = begin; cpu <= end; ++cpu)
-      if (CPU_ISSET(cpu, &allowed)) result.push_back(cpu);
-  }
-  return result;
-}
 cpu_router::PacketProgram program(CollectiveCall const& call) {
   int ranks = int(call.ports.size());
   switch (call.collective) {
@@ -114,89 +88,6 @@ cpu_router::PacketProgram program(CollectiveCall const& call) {
   throw std::invalid_argument("unsupported collective");
 }
 }  // namespace
-
-Topology inspectTopology(std::vector<int> const& devices) {
-  if (devices.empty() || devices.size() > 32 ||
-      std::set<int>(devices.begin(), devices.end()).size() != devices.size())
-    throw std::invalid_argument("expected 1..32 distinct local devices");
-  Topology t;
-  t.devices = devices;
-  t.avx2 = __builtin_cpu_supports("avx2");
-  check(cudaRuntimeGetVersion(&t.cudaRuntimeVersion));
-  std::smatch match;
-  std::string driver = read("/proc/driver/nvidia/version");
-  if (std::regex_search(driver, match,
-                        std::regex(R"(\b[0-9]{3}\.[0-9]+\.[0-9]+\b)")))
-    t.driverVersion = match.str();
-  cpu_set_t allowed;
-  if (sched_getaffinity(0, sizeof(allowed), &allowed))
-    throw std::runtime_error("cannot query CPU affinity");
-  std::ostringstream identity;
-  identity << "uccl-lite-router-v1;cuda=" << t.cudaRuntimeVersion
-           << ";driver=" << t.driverVersion;
-  identity << ";avx2=" << bool(__builtin_cpu_supports("avx2"))
-           << ";avx512f=" << bool(__builtin_cpu_supports("avx512f"))
-           << ";avx512bw=" << bool(__builtin_cpu_supports("avx512bw"));
-  std::istringstream cpuInfo(read("/proc/cpuinfo"));
-  std::string line;
-  while (std::getline(cpuInfo, line))
-    if (line.rfind("model name", 0) == 0) {
-      identity << ";cpu=" << line;
-      break;
-    }
-  for (int device : devices) {
-    cudaDeviceProp property{};
-    check(cudaGetDeviceProperties(&property, device));
-    int node = cpu_router::gpuNumaNode(device);
-    t.numaNodes.push_back(node);
-    t.gpuNames.emplace_back(property.name);
-    t.mappedHost.push_back(property.canMapHostMemory);
-    if (!t.permittedCpuIds.count(node))
-      t.permittedCpuIds[node] = cpuList(node, allowed);
-    t.permittedCpusPerNode[node] = int(t.permittedCpuIds[node].size());
-    char pci[32];
-    check(cudaDeviceGetPCIBusId(pci, sizeof(pci), device));
-    identity << ";gpu=" << device << ':' << pci << ':' << node << ':'
-             << property.name << ':';
-    for (unsigned char byte : property.uuid.bytes)
-      identity << std::hex << std::setw(2) << std::setfill('0')
-               << unsigned(byte);
-    identity << std::dec;
-    for (int peer : devices) {
-      int accessible = 0;
-      if (device != peer)
-        check(cudaDeviceCanAccessPeer(&accessible, device, peer));
-      t.peerAccess.push_back(accessible != 0);
-      identity << accessible;
-    }
-  }
-  for (auto const& entry : t.permittedCpuIds) {
-    identity << ";node=" << entry.first << ":cpus=";
-    for (int cpu : entry.second) identity << cpu << ',';
-  }
-  t.identity = identity.str();
-  return t;
-}
-
-Workload CollectiveCall::workload() const {
-  size_t scalar = dtype == ScalarType::Float32 ? 4 : 2;
-  size_t expansion = collective == Collective::AllReduce ? 1 : ports.size();
-  if (!count || !expansion ||
-      count > std::numeric_limits<size_t>::max() / scalar / expansion)
-    throw std::invalid_argument("empty or overflowing collective extent");
-  uintptr_t addresses = 0;
-  bool complete = !ports.empty();
-  for (auto const& port : ports) {
-    addresses |= reinterpret_cast<uintptr_t>(port.input) |
-                 reinterpret_cast<uintptr_t>(port.output);
-    complete &= port.input && port.output;
-  }
-  unsigned alignment = !complete ? 0
-                       : !addresses
-                           ? 256
-                           : 1U << std::min(8, __builtin_ctzll(addresses));
-  return {collective, dtype, count * scalar * expansion, inPlace, alignment};
-}
 
 CollectiveDispatcher::CollectiveDispatcher(Topology topology,
                                            BackendPolicy policy,
@@ -241,7 +132,8 @@ CollectiveDispatcher::CollectiveDispatcher(Topology topology,
       (options_.autoLargeAllGatherPacketBytes < 16 ||
        options_.autoLargeAllGatherPacketBytes > (32UL << 20) ||
        options_.autoLargeAllGatherPacketBytes % 16))
-    throw std::invalid_argument("invalid automatic large AllGather packet target");
+    throw std::invalid_argument(
+        "invalid automatic large AllGather packet target");
   if (options_.smallReduceScatterPacketBytes &&
       (options_.smallReduceScatterPacketBytes < options_.minPacketBytes ||
        options_.smallReduceScatterPacketBytes > options_.packetBytes ||
@@ -331,7 +223,8 @@ CollectiveDispatcher::CollectiveDispatcher(Topology topology,
   if (options_.largeAllGatherPacketBytes)
     key << ";large-ag-packet-v1=" << options_.largeAllGatherPacketBytes;
   if (options_.autoLargeAllGatherPacketBytes)
-    key << ";auto-large-ag-packet-v1=" << options_.autoLargeAllGatherPacketBytes;
+    key << ";auto-large-ag-packet-v1="
+        << options_.autoLargeAllGatherPacketBytes;
   for (int cpu : options_.workerCpus) key << ";worker=" << cpu;
   for (int cpu : options_.gpuLaunchAllowedCpus)
     key << ";gpu-launch-allowed-cpu=" << cpu;
@@ -437,7 +330,8 @@ size_t CollectiveDispatcher::packetBytesFor(CollectiveCall const& call) const {
     if (options_.largeAllGatherPacketBytes)
       return options_.largeAllGatherPacketBytes;
     if (options_.autoLargeAllGatherPacketBytes)
-      return std::max(options_.packetBytes, options_.autoLargeAllGatherPacketBytes);
+      return std::max(options_.packetBytes,
+                      options_.autoLargeAllGatherPacketBytes);
   }
   if (call.collective == Collective::AllReduce &&
       call.workload().bytes <= (4UL << 20) &&

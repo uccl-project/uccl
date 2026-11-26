@@ -1,6 +1,7 @@
 #pragma once
 #include "channel.hpp"
 #include "router_core.hpp"
+#include "uccl_lite/device_port.hpp"
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -15,12 +16,6 @@ inline constexpr int kMaxRanks = 32;
 inline constexpr int kMaxTransportBlocks = 1024;
 // CUDA NUMA hint, PCI sysfs fallback, then the first online host node.
 int gpuNumaNode(int device);
-struct PacketPort {
-  void const* input;
-  void* output;
-  cudaStream_t stream;
-  int device;
-};
 enum class PacketTransform : uint32_t { Sum, Copy };
 enum class PacketLayout : uint32_t { Replicate, Concatenate, Scatter };
 // CPU routing/ownership stays shared; only the Sum arithmetic is relocated.

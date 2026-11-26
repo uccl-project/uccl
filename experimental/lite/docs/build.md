@@ -37,6 +37,56 @@ because the measured CUDA 12.9 compiler had a frontend failure with C++20.
 
 ## Build targets
 
+For topology-driven library use, the common entry points are:
+
+| Target | Responsibility |
+| --- | --- |
+| `topology`, `calibrate-hardware`, `planner` | Discover resources, measure effective paths, build resource models |
+| `peer-runtime` | Standalone peer collectives and prepared algorithm selection |
+| `prepared-runtime`, `prepared-runtime-check` | Common caller-baseline API: discover participants and choose local/distributed/native-only preparation |
+| `prepared-local-runtime` | Multiprocess BF16/FP32 selection, optional caller fallback, owned graph qualification |
+| `prepared-network-runtime` | Distributed exact-request comparison against a caller-owned baseline; static/shared core without NCCL/MPI linkage |
+| `nccl-runtime` | One strict NCCL frontend with capability-described providers |
+| `native-nccl-fallback` | Optional adapter for a caller-owned native communicator |
+| `nccl-prepared-api`, `nccl-prepared-api-check` | C extension attaching unified preparation to a native communicator; explicit handles and diagnostics |
+| `nccl-prepared-abi`, `nccl-prepared-abi-check` | Standard host NCCL calls on explicitly prepared native communicators, whole-ABI qualification and native handoff |
+| `automatic-network-check` | Two-host automatic GPU/NIC resource measurement, cache and caller-baseline validation |
+| `network-cache-runtime-check` | Cross-process distributed plan reuse, checkpoints, drift and cache rejection |
+| `peer-tree-check`, `peer-graph-check` | Source-ordered path/star forwarding, direct regressions and owned-graph correctness |
+| `prepared-local-check`, `prepared-scalar-check`, `prepared-graph-check` | Build correctness clients; invoke them on the documented GPU layouts |
+| `network-runtime-check` | Build the direct network-registry checker for two four-GPU hosts |
+| `prepared-network-check` | Build caller-baseline distributed admission and fallback checks |
+
+Peer packet and host packet control/device objects are owned by
+`src/collectives/module.mk` and live in `build/collectives/`.
+The main runtime does not consume `nccl_local/local_strict.o` or `nccl_local8/`
+objects. The peer implementation uses the same configured MSCCL++ IB headers as
+the common runtime's linked library.
+
+The network algorithm similarly builds as
+`build/multinode/network_hierarchy.o`, owned by `src/multinode/module.mk` with
+parameters in `network_hierarchy_flags.mk`. Its current candidate retains the
+declared two-host/four-ranks-per-host contract; the name is not an assertion of
+arbitrary topology support. Live network discovery and measured-path preparation
+choose NIC placement. Historical `UCCL_LITE_NCCL_POLICY` settings affect the
+separate `nccl-mscclpp-strict` reproduction target; they do not configure the
+common runtime's network object.
+
+`nccl-local-strict` and `nccl-local8-strict` remain historical reproduction
+targets with separate objects and policy flags. `UCCL_LITE_NCCL_LOCAL_POLICY`
+and `LOCAL8_PACKET_BYTES` affect those targets, not common-runtime candidates.
+The common host packet size is configured with `HOST_PACKET_BYTES`; a changed
+value rebuilds both control and device objects. Peer candidate flags live next
+to the algorithm in `src/collectives/peer_packet_flags.mk`. Compiling a retained
+candidate never admits it: live capability checks and exact-request timing
+remain required. Historical timing does not qualify rebuilt artifacts.
+
+For current limitations and execution commands, see
+[the migration record](topology-runtime-refactor.md),
+[prepared local selection](prepared-local-runtime.md), and
+[owned graphs](prepared-graphs.md). The standalone benchmark targets below retain
+their recorded workload/topology names.
+
 ```bash
 # Required paths can be supplied on every make invocation.
 make -j2 single-node MSCCLPP_HOME=/path/to/mscclpp
@@ -262,3 +312,26 @@ one CTA per GPU; stop the workers before device-wide synchronization or cleanup.
 control; `--nccl-graph 2` uses per-device graphs. These options change only the
 reference control, not the resident execution contract. See the
 [full study and complete tables](../benchmarks/data/small_medium_4l4_20261113/README.md).
+
+The native-enabled ABI also supports opt-in [automatic initialization](automatic-nccl-init.md).
+`make nccl-auto-init-check` builds its CUDA initialization/dispatch checkers and
+runs the CPU workload-manifest checks. GPU/MPI checks must be run separately;
+this build target alone does not claim GPU validation.
+
+`make direct-exchange direct-exchange-check` builds the [general experimental direct-exchange executor](direct-exchange.md)
+and its MPI correctness client. `make network-candidates-check` builds the
+[distributed qualification suite](network-candidate-selection.md) and runs its
+CPU choice-policy checks.
+
+`make strict-distributed-check` builds the [native-free distributed selection](strict-distributed-selection.md)
+correctness client. The common strict catalog now includes dynamic multi-host
+FP32/BF16 providers; legacy providers retain their own byte/layout constraints.
+
+For strict processes with different CUDA views, use [V4 per-rank profiles](strict-rank-profiles.md):
+probe/launch with `--rank` and `--device`, and construct with `--rank-records`.
+
+`make planner-check` now also builds the [direct schedule/traffic model check](direct-exchange-model.md).
+Run `build/uccl_lite_direct_plan_check` for its analytical CPU fixtures.
+
+`make direct-calibration-check` builds the [direct primitive/model calibration checker](direct-model-calibration.md).
+It retains private-buffer correctness checks and independent model/whole-call observations.

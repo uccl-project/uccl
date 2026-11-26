@@ -117,13 +117,20 @@ class GpuTransport {
       for (int i = 0; i < 3; ++i)
         localAg.c[peers[i] - nodeBase] = channels_[i]->deviceHandle();
       if (direct) {
+        auto status = cudaMalloc(&directSent_, 3 * sizeof(uint64_t));
+        if (status != cudaSuccess)
+          throw std::runtime_error(cudaGetErrorString(status));
+        status = cudaMemset(directSent_, 0, 3 * sizeof(uint64_t));
+        if (status != cudaSuccess)
+          throw std::runtime_error(cudaGetErrorString(status));
         std::array<std::shared_future<mscclpp::Semaphore>, 3> ready;
         for (int i = 0; i < 3; ++i)
           ready[i] = comm.buildSemaphore(connections_[i], peers[i], 320);
         for (int i = 0; i < 3; ++i) {
           direct_[i] = std::make_unique<mscclpp::MemoryChannel>(
               ready[i].get(), memories_[i], localMemory_, buffer);
-          localDirect.c[peers[i] - nodeBase] = direct_[i]->deviceHandle();
+          localDirect.c[peers[i] - nodeBase] =
+              MemChan(direct_[i]->deviceHandle(), directSent_ + i);
         }
       }
 
@@ -149,10 +156,15 @@ class GpuTransport {
       localProxy->stopProxy();
       localRunning_ = false;
     }
+    if (directSent_) {
+      cudaFree(directSent_);
+      directSent_ = nullptr;
+    }
   }
 
  private:
   bool localRunning_ = false, ibRunning_ = false;
+  uint64_t* directSent_ = nullptr;
   mscclpp::RegisteredMemory localMemory_;
   mscclpp::RegisteredMemory ibMemory_;
   std::array<mscclpp::Connection, 4> connections_;

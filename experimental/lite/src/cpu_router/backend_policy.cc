@@ -60,7 +60,7 @@ BackendDecision evaluate(Measurement const& m, double threshold,
           std::string(source) +
               (wins ? ": measured gain exceeds margin; ranges do not overlap"
                     : ": no stable gain; keep existing backend"),
-          gain};
+          gain, m.router.median, m.fallback.median};
 }
 std::vector<std::string> split(std::string const& line) {
   std::vector<std::string> fields;

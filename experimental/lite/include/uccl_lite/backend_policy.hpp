@@ -1,5 +1,7 @@
 #pragma once
 
+#include "collective_types.hpp"
+#include "topology.hpp"
 #include <cstddef>
 #include <map>
 #include <string>
@@ -7,34 +9,7 @@
 
 namespace uccl_lite {
 
-enum class Collective { AllReduce, AllGather, ReduceScatter };
-enum class ScalarType { BFloat16, Float16, Float32 };
 enum class RouterMode { Auto, Off, Force };
-
-struct Workload {
-  Collective collective = Collective::AllReduce;
-  ScalarType dtype = ScalarType::BFloat16;
-  // Complete per-rank output for AG, complete input for RS, tensor size for AR.
-  size_t bytes = 0;
-  bool inPlace = false;
-  // Minimum input/output pointer alignment, capped at 256 bytes. Zero denotes
-  // a caller-defined/legacy key; live dispatcher calls always record alignment.
-  unsigned alignment = 0;
-};
-
-struct Topology {
-  std::vector<int> devices, numaNodes;
-  std::vector<std::string> gpuNames;
-  std::vector<bool> mappedHost, peerAccess;  // Peer matrix is row-major.
-  std::map<int, int> permittedCpusPerNode;
-  std::map<int, std::vector<int>> permittedCpuIds;
-  bool avx2 = false;
-  int cudaRuntimeVersion = 0;
-  std::string driverVersion;
-  // Exact local identity: UUIDs, PCI IDs, CPU/affinity, driver/toolkit, router
-  // knobs.
-  std::string identity;
-};
 
 struct TimingRange {
   double minimum = 0, median = 0, maximum = 0;
@@ -52,6 +27,7 @@ struct BackendDecision {
   bool cpuRouter = false;
   std::string reason;
   double measuredSpeedup = 0;
+  double routerMicroseconds = 0, fallbackMicroseconds = 0;
 };
 
 // CPU-only selection logic. Never benchmarks, allocates GPU memory, or starts

@@ -54,7 +54,7 @@ def identity(real_nccl):
         "cpu_model": next(x for x in Path("/proc/cpuinfo").read_text().splitlines() if x.startswith("model name")),
         "launch_affinity": sorted(os.sched_getaffinity(0)),
         "environment": env, "packet": packet_environment(),
-        "nccl_sha256": sha256(real_nccl), "library_sha256": sha256(LIBRARY),
+        "nccl_sha256": sha256(real_nccl) if real_nccl is not None else None, "library_sha256": sha256(LIBRARY),
         "cudart_sha256": sha256("/usr/local/cuda/lib64/libcudart.so"),
         "launcher_sha256": sha256(__file__),
     }

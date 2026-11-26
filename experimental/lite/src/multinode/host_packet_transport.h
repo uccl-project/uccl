@@ -35,15 +35,20 @@ class HostPacketTransport {
 
  public:
   HostPacketTransport(mscclpp::Communicator& comm, SharedHostPackets& packets,
-                      int rank)
+                      int rank, int rail = -1)
       : packets_(packets),
         rank_(rank),
         group_((rank % 4) / 2),
         leader_((rank % 2) == 0) {
-    if (rank < 0 || rank >= 8) throw std::invalid_argument("packet rank");
+    if (rank < 0 || rank >= 8 || rail < -1 || rail >= 8)
+      throw std::invalid_argument("packet rank/rail");
     if (leader_) {
       auto transport = static_cast<mscclpp::Transport>(
-          int(mscclpp::Transport::IB0) + group_);
+          int(mscclpp::Transport::IB0) + (rail < 0 ? group_ : rail));
+      std::fprintf(stderr,
+                   "UCCL Lite host packet rail: rank=%d rail=%d nic=%s\n", rank,
+                   rail < 0 ? group_ : rail,
+                   mscclpp::getIBDeviceName(transport).c_str());
       memory_ = comm.registerMemory(packets_.host(group_), packets_.bytes(),
                                     transport);
       std::array<std::shared_future<mscclpp::Connection>, 2> connection;

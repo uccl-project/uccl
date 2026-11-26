@@ -20,6 +20,12 @@ constexpr auto kType = ncclFloat;
 constexpr int kLocalRanks = 4;
 #endif
 
+#ifdef UCCL_LITE_ABI_LOCAL
+constexpr int kRanks = 4;
+#else
+constexpr int kRanks = 8;
+#endif
+
 void check(cudaError_t result) {
   if (result != cudaSuccess)
     throw std::runtime_error(cudaGetErrorString(result));
@@ -46,10 +52,19 @@ int main(int argc, char** argv) {
   int rank, world;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   MPI_Comm_size(MPI_COMM_WORLD, &world);
+  MPI_Comm local;
+  MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, rank, MPI_INFO_NULL,
+                      &local);
+  int localRank, localRanks;
+  MPI_Comm_rank(local, &localRank);
+  MPI_Comm_size(local, &localRanks);
   try {
-    if (world != 8)
-      throw std::runtime_error("requires eight ranks on the profiled topology");
-    check(cudaSetDevice(rank % kLocalRanks));
+    if (world != kRanks || localRanks != kLocalRanks)
+      throw std::runtime_error("requires the configured number of ranks");
+    int device = std::getenv("UCCL_LITE_ABI_REVERSE_DEVICES")
+                     ? kLocalRanks - 1 - localRank
+                     : localRank;
+    check(cudaSetDevice(device));
     cudaStream_t streams[2];
     for (auto& s : streams)
       check(cudaStreamCreateWithFlags(&s, cudaStreamNonBlocking));
@@ -102,9 +117,9 @@ int main(int argc, char** argv) {
 #endif
                              8388608UL}) {
           for (int op = 1; op <= 3; ++op) {
-            size_t count = bytes / (sizeof(Element) * (op == 3 ? 1 : 8));
-            size_t ni = count * (op == 2 ? 8 : 1);
-            size_t no = count * (op == 1 ? 8 : 1);
+            size_t count = bytes / (sizeof(Element) * (op == 3 ? 1 : kRanks));
+            size_t ni = count * (op == 2 ? kRanks : 1);
+            size_t no = count * (op == 1 ? kRanks : 1);
             bool inplace = (rank + generation) % 2;
             size_t sourceOffset = inplace && op == 1 ? rank * count : 0;
             size_t targetOffset = inplace && op == 2 ? rank * count : 0;
@@ -167,13 +182,22 @@ int main(int argc, char** argv) {
                   expected = value(index % count, index / count, generation);
                 else {
                   expected = 0;
-                  for (int peer = 0; peer < 8; ++peer)
+                  for (int peer = 0; peer < kRanks; ++peer)
                     expected += value(op == 2 ? rank * count + index : index,
                                       peer, generation);
                 }
               }
-              if (float(output[i]) != float(Element(expected)))
+              if (float(output[i]) != float(Element(expected))) {
+                std::fprintf(
+                    stderr,
+                    "mismatch rank=%d lifetime=%d generation=%d bytes=%zu "
+                    "op=%d index=%zu guard=%zu sourceOffset=%zu "
+                    "targetOffset=%zu got=%g expected=%g\n",
+                    rank, lifetime, generation, bytes, op, i, guard,
+                    sourceOffset, targetOffset, double(float(output[i])),
+                    double(float(Element(expected))));
                 throw std::runtime_error("full-buffer/guard mismatch");
+              }
             }
             ++calls;
           }
@@ -228,5 +252,6 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "rank %d: %s\n", rank, error.what());
     MPI_Abort(MPI_COMM_WORLD, 1);
   }
+  MPI_Comm_free(&local);
   MPI_Finalize();
 }

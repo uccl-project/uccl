@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run unchanged MPI nccl-tests on two four-L4 hosts, with route assertions.
+"""Run unchanged MPI nccl-tests on two four-GPU hosts, with route assertions.
 
 This is a candidate evaluation, not automatic deployment admission. Artifacts
 are staged into a new build directory at the same path on both hosts.
@@ -21,6 +21,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'integration/nccl_lite'))
 import mscclpp_profile
+import runtime_profile
 
 
 def checked(log, operation, routed):
@@ -69,10 +70,22 @@ def main():
     p.add_argument('--hosts', required=True, help='ordered node0,node1 SSH/MPI hosts')
     p.add_argument('--iface', required=True)
     p.add_argument('--hcas', default='mlx5_0,mlx5_1')
+    p.add_argument('--peer-hcas', help='ABI-only diagnostic: override MSCCL++ HCA order on the second host')
+    p.add_argument('--devices', help='ABI-only CUDA_VISIBLE_DEVICES order on the first host (and default for the second)')
+    p.add_argument('--peer-devices', help='ABI-only CUDA_VISIBLE_DEVICES order on the second host')
+    p.add_argument('--expect-network-order', help='assert an eight-entry execution-to-logical rank permutation')
+    p.add_argument('--rank-by', choices=('slot', 'node'), default='slot', help='ABI-only global MPI rank ordering')
+    p.add_argument('--reverse-rank-devices', action='store_true', help='ABI-only assign CUDA devices in reverse local-rank order')
     p.add_argument('--mpirun', required=True)
     p.add_argument('--tests', type=Path, required=True)
     p.add_argument('--real-nccl', type=Path, required=True)
     p.add_argument('--library', type=Path, default=ROOT / 'build/nccl_lite/libuccl_lite_nccl_strict.so')
+    p.add_argument('--legacy-profile', action='store_true', help='use the historical machine-specific profile format for old library artifacts')
+    p.add_argument('--network-profile', type=Path, help='optional measured endpoint-path profile')
+    p.add_argument('--expect-network-plan', choices=('matched', 'physical'), help='assert measured-profile result in the ABI job')
+    p.add_argument('--expect-network-group', choices=('matched', 'absent'), help='assert exact concurrent flow evidence in the ABI job')
+    p.add_argument('--network-rejections', type=Path, help='NCCL-only all-rank network preparation rejection client')
+    p.add_argument('--network-group-mismatch', type=Path, help='valid profile differing only in concurrent evidence, for one-rank rejection')
     p.add_argument('--abi-extended', action='store_true', help='include the 32-MiB multi-piece ABI case')
     p.add_argument('--abi-boundary512', action='store_true', help='include the 512-KiB ABI boundary case; requires the matching ABI binary and --abi-extended')
     p.add_argument('--abi-serial-packet', action='store_true', help='add 32/64/128-KiB mixed ABI cases and delayed small AG; requires --abi-boundary512 and its matching binary')
@@ -91,6 +104,28 @@ def main():
     p.add_argument('--performance-only', action='store_true', help='omit additional ABI/graph/misalignment jobs; retain nccl-tests correctness checking in every sweep')
     p.add_argument('--max-regression', type=float, help='fail if any median candidate/native ratio exceeds 1 + this fraction')
     args = p.parse_args()
+    if args.expect_network_plan and not (args.network_profile and args.abi):
+        p.error('--expect-network-plan requires --network-profile and --abi')
+    if args.expect_network_group and not (args.network_profile and args.abi):
+        p.error('--expect-network-group requires --network-profile and --abi')
+    if args.network_rejections and not args.network_profile:
+        p.error('--network-rejections requires --network-profile')
+    if args.network_group_mismatch and not args.network_rejections:
+        p.error('--network-group-mismatch requires --network-rejections')
+    placement = bool(args.peer_hcas or args.devices or args.peer_devices)
+    explicit_ranks = args.rank_by != 'slot' or args.reverse_rank_devices
+    if args.legacy_profile and (args.devices or args.peer_devices or explicit_ranks):
+        p.error('device permutations require the runtime profile format')
+    if (placement or explicit_ranks) and not args.abi_only:
+        p.error('HCA/device placement overrides require --abi-only')
+    expected_order = None
+    if args.expect_network_order:
+        try:
+            expected_order = tuple(map(int, args.expect_network_order.split(',')))
+        except ValueError:
+            p.error('--expect-network-order requires integer ranks')
+        if sorted(expected_order) != list(range(8)) or not args.abi:
+            p.error('--expect-network-order requires a permutation of 0..7 and --abi')
     if args.abi_boundary512 and not args.abi_extended:
         p.error('--abi-boundary512 requires --abi-extended')
     if args.abi_serial_packet and not args.abi_boundary512:
@@ -116,13 +151,21 @@ def main():
     real = args.real_nccl.resolve(strict=True)
     library = out / args.library.name
     shutil.copy2(args.library, library)
+    if args.network_profile:
+        shutil.copy2(args.network_profile, out / 'network.profile')
+    if args.network_rejections:
+        shutil.copy2(args.network_rejections, out / 'network_prepare_rejection')
+        (out / 'network-corrupt.profile').write_text('deliberately invalid network resource profile\n')
+    if args.network_group_mismatch:
+        shutil.copy2(args.network_group_mismatch, out / 'network-groups-different.profile')
     (out / 'strict').mkdir()
     (out / 'strict/libnccl.so.2').symlink_to('../' + library.name)
     dependencies = subprocess.check_output(['ldd', str(library)], text=True)
     if re.search(r'libnccl\.so', dependencies):
         raise RuntimeError('strict candidate depends on native NCCL')
     (out / 'dependencies.txt').write_text(dependencies)
-    for name in ['mscclpp_profile.py', 'dropin_profile.py']:
+    profile_script = 'mscclpp_profile.py' if args.legacy_profile else 'runtime_profile.py'
+    for name in ['mscclpp_profile.py', 'runtime_profile.py', 'dropin_profile.py']:
         shutil.copy2(ROOT / 'integration/nccl_lite' / name, out / name)
     operations = [('all_gather', 1), ('reduce_scatter', 2), ('all_reduce', 3)]
     for op, _ in operations:
@@ -131,6 +174,17 @@ def main():
         if args.max_bytes < (128 if args.abi_medium128 else 64 if args.abi_medium64 else 32 if args.abi_extended else 16) << 20:
             p.error('strict ABI test profile does not cover its largest case')
         shutil.copy2(args.abi, out / 'abi_check')
+    if placement:
+        peer_name = subprocess.check_output(['ssh', hosts[1], 'hostname'], text=True).strip()
+        setup = "import os, platform, sys\npeer = platform.node() == " + repr(peer_name) + "\n"
+        if args.peer_hcas:
+            setup += "if peer:\n    os.environ['MSCCLPP_HCA_DEVICES'] = " + repr(args.peer_hcas) + "\n"
+        if args.devices or args.peer_devices:
+            setup += "devices = " + repr(args.peer_devices or args.devices) + " if peer else " + repr(args.devices) + "\n"
+            setup += "if devices is not None:\n    os.environ['CUDA_VISIBLE_DEVICES'] = devices\n"
+        (out / 'placement_launcher.py').write_text(setup
+            + "os.execv(sys.executable, [sys.executable, '-B', "
+            + repr(str(out / profile_script)) + ", *sys.argv[1:]])\n")
     subprocess.run(['ssh', hosts[1], 'mkdir -p ' + shlex.quote(str(out))], check=True)
     subprocess.run(['rsync', '-a', str(out) + '/', f'{hosts[1]}:{out}/'], check=True)
     env = os.environ.copy()
@@ -138,20 +192,29 @@ def main():
         p.error('unset LD_PRELOAD before validation')
     env.update(UCCL_LITE_MSCCLPP_CONTROL_ROOT=socket.gethostbyname(hosts[0]),
                NCCL_SOCKET_IFNAME=args.iface, NCCL_IB_HCA=args.hcas,
-               MSCCLPP_SOCKET_IFNAME=args.iface, MSCCLPP_IBV_MODE='host-no-atomic',
+               MSCCLPP_SOCKET_IFNAME=args.iface, MSCCLPP_HCA_DEVICES=args.hcas, MSCCLPP_IBV_MODE='host-no-atomic',
                LD_LIBRARY_PATH=str(real.parent) + ':' + env.get('LD_LIBRARY_PATH', ''))
     exported = ['UCCL_LITE_MSCCLPP_CONTROL_ROOT', 'NCCL_SOCKET_IFNAME', 'NCCL_IB_HCA', 'MSCCLPP_SOCKET_IFNAME',
-                'MSCCLPP_IBV_MODE', 'LD_LIBRARY_PATH']
+                'MSCCLPP_IBV_MODE', 'MSCCLPP_HCA_DEVICES', 'LD_LIBRARY_PATH']
+    if args.reverse_rank_devices:
+        env['UCCL_LITE_ABI_REVERSE_DEVICES'] = '1'
+        exported.append('UCCL_LITE_ABI_REVERSE_DEVICES')
+    if args.network_profile:
+        env['UCCL_LITE_NETWORK_PROFILE'] = str(out / 'network.profile')
+        exported.append('UCCL_LITE_NETWORK_PROFILE')
     def mpi(hosts, n, mapping):
         command = [args.mpirun, '--timeout', str(args.job_timeout), '--host', hosts, '-np', str(n), '--map-by', mapping,
+                   '--rank-by', args.rank_by,
                    '--bind-to', 'none', '--mca', 'pml', 'ob1', '--mca', 'btl', 'self,vader,tcp',
                    '--mca', 'btl_tcp_if_include', args.iface,
                    '--mca', 'oob_tcp_if_include', args.iface]
         for key in exported:
             command += ['-x', key]
         return command
-    launcher = ['python3', '-B', str(out / 'mscclpp_profile.py')]
-    options = ['--library', str(library), '--real-nccl', str(real), '--strict']
+    launcher = ['python3', '-B', str(out / ('placement_launcher.py' if placement else profile_script))]
+    options = ['--library', str(library), '--real-nccl', str(real)]
+    if args.legacy_profile:
+        options.append('--strict')
     records = []
     for i, host in enumerate(hosts):
         value = subprocess.check_output(mpi(host, 1, 'slot') + launcher + ['probe'] + options,
@@ -168,20 +231,34 @@ def main():
         p.error('strict testing requires all three operations at every tested size')
     (out / 'shapes.json').write_text(json.dumps(shapes, indent=2) + '\n')
     profile = out / 'candidate.tsv'
-    mscclpp_profile.write_candidate(profile, records, shapes, strict=True)
+    if args.legacy_profile:
+        mscclpp_profile.write_candidate(profile, records, shapes, strict=True)
+    else:
+        rank_map = None
+        if explicit_ranks:
+            rank_map = []
+            for rank in range(8):
+                host, device = (rank % 2, rank // 2) if args.rank_by == 'node' else (rank // 4, rank % 4)
+                rank_map.append([host, 3 - device if args.reverse_rank_devices else device])
+        runtime_profile.write_candidate(profile, records, shapes, 'float32',
+                                        runtime_profile.catalog(library), 'network-hierarchy', rank_map)
     subprocess.run(['rsync', '-a', str(profile), f'{hosts[1]}:{out}/'], check=True)
     prefix = mpi(','.join(h + ':4' for h in hosts), 8, 'ppr:4:node')
     manifest = {'scope': 'strict UCCL-only candidate; native NCCL absent from candidate processes',
-                'hardware': 'two hosts, four NVIDIA L4 per host; FP32 SUM',
+                'hardware': 'two hosts, four participating GPUs per host; FP32 SUM',
+                'hardware_details': [dict(hostname=r['hostname'], physical_inventory=r['details']['gpus'], participating_uuids=r['uuids']) for r in records],
                 'timing': 'nccl-tests maximum-rank host enqueue/completion batch mean; both layouts',
                 'baseline': 'native NCCL, identical environment and test binaries',
-                'selection': 'fixed compiled UCCL algorithms identified by library_sha256; no native fallback or best-of curve',
+                'selection': 'one library with topology-derived rails and retained algorithm policy; no native fallback or per-size best-of measurement envelope',
                 'repetitions': f'{args.rounds} native/candidate/candidate/native rounds; {2 * args.rounds} jobs per backend',
                 'warmup': args.warmup, 'iterations': args.iterations,
                 'max_bytes': args.max_bytes, 'shapes': shapes,
                 'max_regression': args.max_regression,
                 'library_sha256': hashlib.sha256(library.read_bytes()).hexdigest(),
                 'commands': [], 'results': {}}
+    if args.network_profile:
+        manifest['network_profile_sha256'] = hashlib.sha256((out / 'network.profile').read_bytes()).hexdigest()
+        manifest['network_model_scope'] = 'isolated directed path medians plus shared physical bounds; no concurrent throughput qualification'
     if args.abi_only:
         manifest.update(timing='not measured; correctness-only ABI check',
                         baseline='none; native NCCL is not run in ABI-only mode',
@@ -228,11 +305,11 @@ def main():
         if args.performance_only:
             continue
         run(op + '_unaligned', op, number, 'candidate', ['-u', '1'])
-        # Eager warmups can route before capture; capture itself stays native.
-        reject(op + '_graph_rejected', op, ['-G', '1'], 'network graph capture unsupported')
+        # Eager warmups complete; external capture must reject before queuing work.
+        reject(op + '_graph_rejected', op, ['-G', '1'], 'external graph capture unsupported')
     if not args.performance_only and not args.abi_only:
         reject('product_rejected', 'all_reduce', ['-o', 'prod'], 'outside the strict profile')
-        reject('missing_profile_rejected', 'all_reduce', [], 'profile/topology consensus failed', missing=True)
+        reject('missing_profile_rejected', 'all_reduce', [], 'profile/backend communicator mismatch', missing=True)
         reject('group_rejected', 'all_reduce', ['-m', '2'], 'grouped collectives unsupported')
     if args.abi:
         command = prefix + launcher + ['launch'] + options + ['--profile', str(profile), '--', str(out / 'abi_check')]
@@ -262,7 +339,45 @@ def main():
                 or any(loaded.count(str(rank)) != 2 for rank in range(8))):
             raise RuntimeError('strict ABI correctness or exact per-lifetime route assertion failed')
         manifest['results']['abi'] = {'full_buffer_calls_per_rank': abi_calls, 'lifetimes': 2, 'native_nccl_loaded': False}
+        if expected_order:
+            mappings = re.findall(r'UCCL Lite network rank mapping: rank=(\d+) execution_rank=(\d+).*?order=([0-9,]+)', log)
+            actual = Counter((int(r), int(e), tuple(map(int, order.rstrip(',').split(',')))) for r, e, order in mappings)
+            expected = Counter({(r, expected_order.index(r), expected_order): 2 for r in range(8)})
+            if actual != expected:
+                raise RuntimeError('network execution-rank mapping assertion failed')
+            manifest['results']['abi']['execution_to_logical_order'] = expected_order
+        if args.expect_network_plan:
+            plans = re.findall(r'UCCL Lite measured network plan: rank=(\d+) matched=(\d+)', log)
+            expected_match = int(args.expect_network_plan == 'matched')
+            if Counter((int(rank), int(match)) for rank, match in plans) != Counter({(rank, expected_match): 2 for rank in range(8)}):
+                raise RuntimeError('measured-network plan assertion failed')
+            manifest['results']['abi']['measured_network_plan'] = args.expect_network_plan
+        if args.expect_network_group:
+            groups = re.findall(r'UCCL Lite measured network plan: rank=(\d+).*?group_matched=(\d+)', log)
+            match = int(args.expect_network_group == 'matched')
+            if Counter((int(rank), int(value)) for rank, value in groups) != Counter({(rank, match): 2 for rank in range(8)}):
+                raise RuntimeError('concurrent-network group assertion failed')
+            manifest['results']['abi']['concurrent_network_group'] = args.expect_network_group
         (out / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+    if args.network_rejections:
+        modes = ['mismatch', 'corrupt'] + (['groups'] if args.network_group_mismatch else [])
+        if explicit_ranks:
+            modes += ['binding', 'rank-map']
+        for mode in modes:
+            negative_profile = out / ('network-groups-different.profile' if mode == 'groups' else 'network-corrupt.profile')
+            command = prefix + launcher + ['launch'] + options + ['--profile', str(profile), '--',
+                str(out / 'network_prepare_rejection'), mode, str(negative_profile)]
+            manifest['commands'].append({'label': 'network_' + mode, 'argv': command})
+            with (out / ('network_' + mode + '.log')).open('w') as log:
+                result = subprocess.run(command, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=180)
+            if result.returncode or 'PASS: network preparation rejected on all 8 ranks; mode=' + mode not in (out / ('network_' + mode + '.log')).read_text():
+                raise RuntimeError('network preparation rejection failed: ' + mode)
+            if mode == 'binding' and 'profile/topology/capability consensus failed' not in (out / ('network_' + mode + '.log')).read_text():
+                raise RuntimeError('rank binding rejection did not exercise the frontend gate')
+            if mode == 'rank-map' and 'profile/backend communicator mismatch' not in (out / ('network_' + mode + '.log')).read_text():
+                raise RuntimeError('duplicate rank map did not exercise profile parsing rejection')
+            manifest['results']['network_' + mode] = {'all_ranks_rejected': True}
+            (out / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     if args.abi_only:
         print('Strict ABI checks passed', flush=True)
         return

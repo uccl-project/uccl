@@ -1,5 +1,22 @@
 # UCCL Lite NCCL AG/RS/AR compatibility layer
 
+The [prepared native ABI](../../docs/prepared-nccl-abi.md), built with
+`make nccl-prepared-abi`, routes ordinary host NCCL calls after an explicit
+collective preparation step. It separately qualifies the complete dispatch
+path and transfers groups/capture/P2P to native ownership.
+[Automatic initialization](../../docs/automatic-nccl-init.md) can perform that
+preparation from an exact-workload file, without application prepare calls.
+
+For automatic topology discovery and measured selection with a caller-owned
+native NCCL communicator, use [the preparation C extension](../../docs/nccl-prepared-api.md)
+and `make nccl-prepared-api`. It uses explicit prepare/enqueue handles and does
+not replace standard NCCL symbols.
+
+The current shared ABI entry point is [the unified runtime](RUNTIME.md), built
+with `make nccl-runtime`. It registers providers behind one frontend and
+retains explicit experimental profile admission. The topology-specific targets
+below remain available for their recorded experiments.
+
 For the **strict single-host eight-L4 BF16 replacement**, use
 [LOCAL8.md](LOCAL8.md) and `make nccl-local8-strict`. It shares the multi-node
 ABI/control infrastructure, forbids native NCCL fallback, and runs unchanged

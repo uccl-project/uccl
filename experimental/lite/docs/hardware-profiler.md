@@ -1,5 +1,25 @@
 # Topology and hardware bandwidth profiler
 
+For measured two-host GPU/NIC paths, see
+[network calibration](network-calibration.md). That probe keeps effective path
+rates separate from the advertised NIC capacities described below.
+
+The runtime's passive topology discovery is also available independently of
+CPU-router, MSCCL++ and NCCL:
+
+```bash
+make topology topology-check
+./build/uccl_lite_topology_check
+./build/uccl_lite_topology 0 1 2 3
+```
+
+Device arguments define rank order. The probe reports shared PCIe paths, NUMA
+placement and InfiniBand port state/rate. PCIe and NIC rates are advertised
+capabilities; memory bandwidth and effective transfer rates remain unknown
+until calibrated. This command neither measures bandwidth nor starts routing
+workers. See [runtime migration status](topology-runtime-refactor.md) for the
+remaining planner and execution integration work.
+
 [hardware_profiler.cu](../benchmarks/probes/hardware_profiler.cu) is a standalone
 CUDA probe for planning local collective schedules. It reports each selected
 GPU's PCI ID, sysfs path, NUMA node, current and maximum PCIe link speed/width,
@@ -82,3 +102,70 @@ python3 scripts/summarize_hardware_profile.py \
   benchmarks/data/hardware_profile_4l4_20261110_summary.csv \
   benchmarks/data/hardware_profile_4l4_20261110_run{1,2,3}.txt
 ```
+
+## Persisted GPU resource calibration
+
+```bash
+make calibrate-hardware calibration-check
+./build/uccl_lite_calibration_check
+./build/uccl_lite_calibrate_hardware build/gpu-resources.profile 0 1 2 3
+UCCL_LITE_HARDWARE_PROFILE=build/gpu-resources.profile ./build/uccl_lite_joint_peer_check 4 direct
+```
+
+The resource probe runs only at an explicit idle preparation boundary. It uses
+private uint4 buffers and validates every copied value. GPU vector-copy memory
+rates count reads plus writes; peer-copy and remote-read path rates count
+one-way useful bytes. Each resource is measured separately at 16 bytes and
+64 MiB, with two warmups, five iterations and three complete repetitions.
+GPU events delimit the timed calls; allocation, warmup and validation are
+excluded. The saved bandwidth/intercept is an affine fit of the two medians;
+it is a workload-specific model, not a memory-controller counter or intrinsic
+link latency. The file retains all repetition samples and probe build identity.
+There is no baseline or best-variant envelope in this measurement.
+
+Hardware profiles are applied only to matching discovery/software identity;
+backend policy identity and paired collective admission remain separate.
+Physical PCIe bridges and NIC line rates remain advertised, and CPU memory and
+NUMA interconnects remain unknown until separately measured. In particular,
+end-to-end P2P bandwidth is never assigned to every bridge along that path.
+Peer preparation now automatically fills incomplete GPU resource data and
+qualifies candidate algorithms on private buffers for the exact call. The
+resource model supplies a scheduling prior; a candidate must beat the direct
+baseline with a stable local timing advantage and pass full-buffer checks.
+The fitted per-workload residual includes unmodeled execution costs and is not
+an intrinsic launch-latency measurement. Enqueue never runs calibration.
+Set PeerTuning.automaticCalibration=false only for explicit model/diagnostic
+use; without sufficient supplied data that mode retains the direct baseline.
+
+## Worker-scoped CPU and NUMA copy calibration
+
+```bash
+make calibrate-host host-calibration-check
+./build/uccl_lite_host_calibration_check
+./build/uccl_lite_calibrate_host build/host-copy.profile 0 1 2 3
+```
+
+The CPU probe uses private anonymous mappings with enforced source/destination
+NUMA policy (`mbind`) and verifies resident placement before timing. Worker
+threads run on explicitly recorded destination-node CPUs; the caller's affinity
+is preserved. Each repetition compares every output byte and verifies input
+preservation outside the common timing interval. Worker failures cancel waits
+and join all threads.
+
+Defaults are four workers per destination node (capped by permitted CPUs),
+32/64 MiB per worker, two warmups, five iterations and three repetitions.
+All host-copy path rates count **one-way payload bytes**, consistently for local
+and cross-NUMA paths. Local memory read+write traffic is twice that amount.
+The two-size model fits nonnegative fixed cost and positive time per byte;
+raw repetitions, CPU IDs, probe build identity, memcpy build identity and libc
+version are retained. It has no comparison baseline or per-size winner curve.
+Run it without concurrent collective/performance jobs when collecting a profile.
+
+Call `registerHostCopyPaths(topology, options)` with the same configuration
+before applying a persisted host profile. CPU IDs are part of resource names,
+so a result for one worker allocation cannot silently describe another one.
+These end-to-end copy measurements do not populate generic memory-controller
+bandwidth or physical NUMA-link bandwidth. Linux NUMA distances are recorded
+as relative topology metadata, never interpreted as GB/s or microseconds.
+CPU-router admission still requires its exact paired collective measurements;
+copy probes alone do not enable it.

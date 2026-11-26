@@ -43,6 +43,13 @@ def main():
     sources = [*HERE.glob("*.py"), HERE / "collectives.cc", HERE / "Makefile",
                ROOT / "src/collectives/peer_collectives.cu",
                ROOT / "src/cpu_router/collective_dispatch.cc",
+               ROOT / "src/topology/discovery.cc",
+               ROOT / "src/topology/hardware.cc",
+               ROOT / "include/uccl_lite/topology.hpp",
+               ROOT / "include/uccl_lite/peer_plan.hpp",
+               ROOT / "include/uccl_lite/planner.hpp",
+               ROOT / "src/planner/planner.cc",
+               ROOT / "src/planner/peer_plan.cc",
                ROOT / "include/uccl_lite/collectives/device_primitives.cuh",
                ROOT / "build/peer_e2e/libuccl_lite_peer_e2e.so", nccl,
                args.checkpoint / "model.safetensors", args.checkpoint / "config.json"]

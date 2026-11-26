@@ -1,14 +1,28 @@
-#include "uccl_lite/collective_dispatch.hpp"
+#include "uccl_lite/collective_call.hpp"
 #include "uccl_lite/collectives/device_primitives.cuh"
 #include "uccl_lite/collectives/peer_collectives.hpp"
+#include "uccl_lite/hardware_calibration.hpp"
+#include "uccl_lite/peer_calibration.hpp"
+#include "uccl_lite/peer_profile.hpp"
+#include "uccl_lite/runtime/build_identity.hpp"
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <limits>
+#include <map>
+#include <numeric>
+#include <set>
 #include <stdexcept>
+#include <tuple>
 #include <vector>
 
 namespace uccl_lite {
 namespace {
+std::string const& peerExecutorIdentity() {
+  static std::string id = runtime::artifactIdentity(
+      reinterpret_cast<uintptr_t>(&peerExecutorIdentity));
+  return id;
+}
 void check(cudaError_t status) {
   if (status != cudaSuccess)
     throw std::runtime_error(cudaGetErrorString(status));
@@ -18,9 +32,9 @@ struct CurrentDevice {
   CurrentDevice() { check(cudaGetDevice(&device)); }
   ~CurrentDevice() { cudaSetDevice(device); }
 };
-using Inputs = collective::PeerInputs<__nv_bfloat16, 4>;
+using Inputs = collective::PeerInputs<__nv_bfloat16, kPeerRankCapacity>;
 struct Outputs {
-  __nv_bfloat16* values[4];
+  __nv_bfloat16* values[kPeerRankCapacity];
 };
 
 // Generalization of peer_ag_rs.cu::pullGather; destination owns its output.
@@ -119,10 +133,23 @@ __global__ void peerCoordinatorVector(Inputs inputs, Outputs outputs,
 // may reuse event objects without a circular wait or an early input overwrite.
 class PeerCollectives::Impl {
  public:
-  explicit Impl(Topology const& topology) : devices_(topology.devices) {
+  explicit Impl(Topology const& topology, PeerTuning tuning)
+      : topology_(topology),
+        tuning_(std::move(tuning)),
+        devices_(topology.devices) {
     if (!PeerCollectives::supported(topology))
       throw std::invalid_argument(
           "direct-peer path requires all-pairs CUDA P2P");
+    if (tuning_.planCache.empty())
+      if (auto path = std::getenv("UCCL_LITE_PEER_PLAN_CACHE"))
+        tuning_.planCache = path;
+    if (tuning_.hardwareProfile.empty()) {
+      if (auto path = std::getenv("UCCL_LITE_HARDWARE_PROFILE"))
+        tuning_.hardwareProfile = path;
+    }
+    if (!tuning_.hardwareProfile.empty())
+      applyHardwareCalibration(
+          topology_, loadHardwareProfile(tuning_.hardwareProfile).calibration);
     CurrentDevice restore;
     try {
       for (size_t r = 0; r < devices_.size(); ++r) {
@@ -151,8 +178,132 @@ class PeerCollectives::Impl {
     }
   }
   ~Impl() { release(); }
+  using Key = std::tuple<Collective, ScalarType, size_t, bool, unsigned>;
+  Key key(CollectiveCall const& call) const {
+    if (call.ports.size() != devices_.size())
+      throw std::invalid_argument("peer call rank count changed");
+    for (size_t r = 0; r < devices_.size(); ++r)
+      if (call.ports[r].device != devices_[r] || !call.ports[r].input ||
+          !call.ports[r].output)
+        throw std::invalid_argument(
+            "peer call device order or buffers changed");
+    auto w = call.workload();
+    return {w.collective, w.dtype, w.bytes, w.inPlace, w.alignment};
+  }
+  PeerSelection const& plan(CollectiveCall const& call) const {
+    auto it = plans_.find(key(call));
+    if (it == plans_.end())
+      throw std::logic_error("prepare exact peer workload before enqueue");
+    return it->second;
+  }
   void prepare(CollectiveCall const& call) {
-    if (!stagedReduction(call)) return;
+    auto k = key(call);
+    CurrentDevice restore;
+    for (auto const& port : call.ports) {
+      check(cudaSetDevice(port.device));
+      cudaStreamCaptureStatus capture;
+      check(cudaStreamIsCapturing(port.stream, &capture));
+      if (capture != cudaStreamCaptureStatusNone)
+        throw std::invalid_argument(
+            "peer preparation is outside graph capture");
+    }
+    if (plans_.count(k)) return;
+    auto w = call.workload();
+    PeerSelection selected;
+    if (tuning_.automaticCalibration && !tuning_.validationFamily) {
+      std::optional<PeerSelection> cached;
+      if (!tuning_.planCache.empty())
+        cached = matchPeerPlanRecord(topology_, w, peerExecutorIdentity(),
+                                     loadPeerPlanRecords(tuning_.planCache));
+      selected = cached ? std::move(*cached) : calibrate(call);
+      if (!cached && !tuning_.planCache.empty())
+        updatePeerPlanRecord(
+            tuning_.planCache,
+            {topology_.identity, peerExecutorIdentity(),
+             selected.calibrationIdentity, w, selected.localTimings, true});
+    } else
+      selected = selectPeerPlan(topology_, w, tuning_);
+    if (selected.family == PeerFamily::Bulk &&
+        call.collective != Collective::AllGather)
+      reserveScratch(call);
+    plans_.emplace(k, std::move(selected));
+  }
+  PeerSelection calibrate(CollectiveCall const& call) {
+    auto w = call.workload();
+    // Admission precedes probes, allocations, and timing. A malformed call
+    // cannot trigger calibration or bypass the implementation's capabilities.
+    auto admitted = peerCandidates(topology_, w, tuning_);
+    auto initial = choosePlan(topology_, w, false, admitted);
+    if (admitted.empty() || !initial.candidates[0].eligible)
+      throw std::invalid_argument(
+          "unsupported automatic peer calibration call");
+    if (!hardwareCalibrated_) {
+      bool complete = topology_.gpuNodes.size() == devices_.size() &&
+                      (devices_.size() == 1 || !topology_.paths.empty());
+      for (auto node : topology_.gpuNodes)
+        complete &=
+            node < topology_.hardware.size() &&
+            topology_.hardware[node].memory.evidence == Evidence::Measured;
+      for (auto const& path : topology_.paths)
+        complete &= path.performance.evidence == Evidence::Measured;
+      if (!complete)
+        applyHardwareCalibration(topology_,
+                                 probeGpuResources(topology_).calibration);
+      hardwareCalibrated_ = true;
+    }
+    PeerTuning local = tuning_;
+    // Data-only estimates order trials. These zeros are not claimed as measured
+    // launch overhead and cannot admit a candidate without exact verification.
+    local.overheadUs = {{0, 0, 0}};
+    auto candidates = peerCandidates(topology_, w, local);
+    auto costs = choosePlan(topology_, w, false, candidates);
+    std::vector<size_t> order;
+    for (size_t i = 0; i < candidates.size(); ++i)
+      if (costs.candidates[i].eligible) order.push_back(i);
+    std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+      return costs.candidates[a].microseconds <
+             costs.candidates[b].microseconds;
+    });
+    std::vector<PeerFamily> families;
+    for (auto i : order) {
+      auto family = static_cast<PeerFamily>(i);
+      if (family == PeerFamily::Bulk &&
+          call.collective != Collective::AllGather)
+        reserveScratch(call);
+      families.push_back(family);
+    }
+    auto qualification = qualifyPeerPlans(
+        topology_, w, families,
+        [this](CollectiveCall const& trial, PeerFamily family) {
+          enqueueFamily(trial, family);
+        });
+    // Fit the nonnegative unmodeled cost (launches, control, model error) for
+    // this exact workload. Never
+    // extrapolate it to another size, alignment, operation, or topology.
+    for (auto const& trial : qualification.trials) {
+      auto samples = trial.microseconds;
+      std::sort(samples.begin(), samples.end());
+      auto index = static_cast<size_t>(trial.family);
+      if (costs.candidates[index].estimated)
+        local.overheadUs[index] =
+            std::max(0.0, samples[samples.size() / 2] -
+                              costs.candidates[index].microseconds);
+    }
+    candidates = peerCandidates(topology_, w, local);
+    size_t winner = static_cast<size_t>(qualification.family);
+    PeerSelection selected{
+        qualification.family, std::move(candidates[winner].plan),
+        costs.candidates[winner].estimated,
+        "verified exact local timing; 3 repetitions, 3 calls/repetition, host "
+        "enqueue-to-completion scope"};
+    selected.qualified = true;
+    selected.calibrationIdentity = topology_.calibrationIdentity;
+    for (auto const& trial : qualification.trials)
+      selected.localTimings[static_cast<size_t>(trial.family)] =
+          trial.microseconds;
+    return selected;
+  }
+  void reserveScratch(CollectiveCall const& call) {
     CurrentDevice restore;
     size_t bytes = scratchBytesFor(call);
     if (bytes <= scratchBytes_) return;
@@ -163,7 +314,7 @@ class PeerCollectives::Impl {
       check(cudaSetDevice(devices_[r]));
       check(cudaStreamSynchronize(streams_[r]));
     }
-    std::array<__nv_bfloat16*, 4> next{};
+    std::array<__nv_bfloat16*, kPeerRankCapacity> next{};
     try {
       for (size_t r = 0; r < devices_.size(); ++r) {
         check(cudaSetDevice(devices_[r]));
@@ -185,12 +336,27 @@ class PeerCollectives::Impl {
     }
   }
   void enqueue(CollectiveCall const& call) {
+    enqueueFamily(call, plan(call).family);
+  }
+  void enqueueFamily(CollectiveCall const& call, PeerFamily family) {
     CurrentDevice restore;
     int ranks = int(devices_.size());
-    bool staged = stagedReduction(call);
-    bool copyGather = call.collective == Collective::AllGather &&
-                      call.workload().bytes >= (4UL << 20);
-    bool callerSmall = ranks == 2 && isSmall(call);
+    if (ranks == 1) {
+      // A one-rank collective is an identity operation, including NaN payloads
+      // and signed zero. Chain completion across changing caller streams.
+      auto const& port = call.ports.front();
+      check(cudaSetDevice(port.device));
+      check(cudaStreamWaitEvent(port.stream, done_[0], 0));
+      check(cudaMemcpyAsync(port.output, port.input, call.count * 2,
+                            cudaMemcpyDeviceToDevice, port.stream));
+      check(cudaEventRecord(done_[0], port.stream));
+      return;
+    }
+    bool staged =
+        family == PeerFamily::Bulk && call.collective != Collective::AllGather;
+    bool copyGather =
+        family == PeerFamily::Bulk && call.collective == Collective::AllGather;
+    bool callerSmall = ranks == 2 && family == PeerFamily::Coordinator;
     if (staged && scratchBytesFor(call) > scratchBytes_)
       throw std::logic_error(
           "prepare peer scratch before a larger staged collective");
@@ -211,7 +377,7 @@ class PeerCollectives::Impl {
       callerCoordinatorPending_ = false;
       return;
     }
-    if (isSmall(call)) {
+    if (family == PeerFamily::Coordinator) {
       enqueueSmall(call, inputs, vectorized, units);
       return;
     }
@@ -270,10 +436,6 @@ class PeerCollectives::Impl {
   }
 
  private:
-  bool isSmall(CollectiveCall const& call) const {
-    size_t limit = devices_.size() == 2 ? (256UL << 10) : (64UL << 10);
-    return call.workload().bytes <= limit;
-  }
   void enqueueSmall(CollectiveCall const& call, Inputs inputs, bool vectorized,
                     size_t units) {
     int ranks = int(devices_.size());
@@ -288,7 +450,7 @@ class PeerCollectives::Impl {
       check(cudaStreamWaitEvent(stream, ready_[r], 0));
     size_t total =
         call.collective == Collective::AllReduce ? units : units * ranks;
-    unsigned blocks = unsigned((total + 255) / 256);
+    unsigned blocks = unsigned(std::min(size_t(65535), (total + 255) / 256));
     if (vectorized)
       peerCoordinatorVector<<<blocks, 256, 0, stream>>>(inputs, outputs, units,
                                                         ranks, call.collective);
@@ -305,14 +467,6 @@ class PeerCollectives::Impl {
       check(cudaSetDevice(devices_[r]));
       check(cudaStreamWaitEvent(call.ports[r].stream, done_[0], 0));
     }
-  }
-  bool stagedReduction(CollectiveCall const& call) const {
-    size_t bytes = call.workload().bytes;
-    size_t allReduceMinimum = devices_.size() == 2 ? (4UL << 20) : (64UL << 20);
-    return (call.collective == Collective::ReduceScatter &&
-            bytes >= (4UL << 20)) ||
-           (call.collective == Collective::AllReduce &&
-            bytes >= allReduceMinimum && call.count % devices_.size() == 0);
   }
   size_t reductionCount(CollectiveCall const& call) const {
     return call.collective == Collective::AllReduce
@@ -439,16 +593,21 @@ class PeerCollectives::Impl {
     }
     cudaSetDevice(old);
   }
+  bool hardwareCalibrated_ = false;
+  Topology topology_;
+  PeerTuning tuning_;
+  std::map<Key, PeerSelection> plans_;
   std::vector<int> devices_;
-  std::array<cudaStream_t, 4> streams_{};
-  std::array<cudaEvent_t, 4> ready_{}, done_{}, transferred_{}, reduced_{};
-  std::array<__nv_bfloat16*, 4> scratch_{};
+  std::array<cudaStream_t, kPeerRankCapacity> streams_{};
+  std::array<cudaEvent_t, kPeerRankCapacity> ready_{}, done_{}, transferred_{},
+      reduced_{};
+  std::array<__nv_bfloat16*, kPeerRankCapacity> scratch_{};
   size_t scratchBytes_ = 0;
   bool callerCoordinatorPending_ = false;
 };
 
-PeerCollectives::PeerCollectives(Topology const& topology)
-    : impl_(std::make_unique<Impl>(topology)) {}
+PeerCollectives::PeerCollectives(Topology const& topology, PeerTuning tuning)
+    : impl_(std::make_unique<Impl>(topology, std::move(tuning))) {}
 PeerCollectives::~PeerCollectives() = default;
 void PeerCollectives::prepare(CollectiveCall const& call) {
   impl_->prepare(call);
@@ -456,9 +615,18 @@ void PeerCollectives::prepare(CollectiveCall const& call) {
 void PeerCollectives::enqueue(CollectiveCall const& call) {
   impl_->enqueue(call);
 }
+PeerSelection const& PeerCollectives::plan(CollectiveCall const& call) const {
+  return impl_->plan(call);
+}
 bool PeerCollectives::supported(Topology const& topology) {
   size_t n = topology.devices.size();
-  if ((n != 2 && n != 4) || topology.peerAccess.size() != n * n) return false;
+  if (!n || n > kPeerRankCapacity || topology.peerAccess.size() != n * n)
+    return false;
+  if (std::set<int>(topology.devices.begin(), topology.devices.end()).size() !=
+          n ||
+      std::any_of(topology.devices.begin(), topology.devices.end(),
+                  [](int device) { return device < 0; }))
+    return false;
   for (size_t r = 0; r < n; ++r)
     for (size_t s = 0; s < n; ++s)
       if (r != s && !topology.peerAccess[r * n + s]) return false;

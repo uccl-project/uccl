@@ -1,5 +1,12 @@
 # Retained router and direct-peer optimizations
 
+Current implementation note: the shared single-process peer executor now
+supports 1..4 ranks within its explicit kernel argument capacity, including
+non-power-of-two counts and caller device permutations. See
+[topology runtime migration](topology-runtime-refactor.md) for current checks.
+The measurements and two/four-rank experiments below retain their recorded
+configuration and do not qualify subsequent source changes.
+
 This integration is based on Zhongjie's UCCL repository at `622fb704`, on the
 separate branch `codex/uccl-lite-retained-optimizations`. It preserves that
 revision's host-ring ReduceScatter implementation. It imports the retained

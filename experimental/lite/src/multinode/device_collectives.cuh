@@ -19,7 +19,26 @@ constexpr int kNodes = 2;
 constexpr int kLocalRanks = 4;
 constexpr int kWorld = 8;
 using PortChan = mscclpp::PortChannelDeviceHandle;
-using MemChan = mscclpp::MemoryChannelDeviceHandle;
+// Every direct channel has one publishing lane at each protocol phase; caller
+// barriers and stream/graph dependencies order successive phases. PCIe peer
+// access does not imply remote system-atomic support. Keep the outbound epoch
+// on the sender and publish with a system release store; MSCCL++ wait retains
+// its acquire and independently advances the local expected inbound epoch.
+struct MemChan : mscclpp::MemoryChannelDeviceHandle {
+  uint64_t* sent;
+  __host__ __device__ MemChan() = default;
+  __host__ MemChan(mscclpp::MemoryChannelDeviceHandle channel,
+                   uint64_t* counter)
+      : mscclpp::MemoryChannelDeviceHandle(channel), sent(counter) {}
+  __device__ __forceinline__ void signal() {
+    uint64_t epoch = ++*sent;
+    asm volatile("st.release.sys.global.u64 [%0], %1;"
+                 :
+                 : "l"(semaphore_.remoteInboundToken), "l"(epoch)
+                 : "memory");
+  }
+  __device__ __forceinline__ void relaxedSignal() { signal(); }
+};
 __device__ mscclpp::DeviceSyncer gMultiNodeSyncer;
 
 struct LocalAgChans {
