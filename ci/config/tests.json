@@ -3374,6 +3374,87 @@
       "reason": "Requires native peer atomics/NVLink among multiple GPUs per node. L4 supports peer copies but not native peer atomics; GH200/GB10 have one GPU per available node."
     },
     {
+      "id": "disabled.ep.tests.fp4-cvt-test.cu",
+      "sources": [
+        "ep/tests/fp4_cvt_test.cu"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "ep/**"
+      ],
+      "requires": [
+        "cuda",
+        "blackwell"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "reason": "ep/tests/Makefile builds this with FP4_CUDAFLAGS, default sm_120a (hardware UE8M0/E2M1 cvt path; a soft-cvt build is also supported). Not yet validated on a CI target: GB10 is sm_121 and no sm_121a or soft build has been run there; L4/GH200 could only cover the soft path."
+    },
+    {
+      "id": "disabled.ep.tests.mx-cvt-test.cu",
+      "sources": [
+        "ep/tests/mx_cvt_test.cu"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "ep/**"
+      ],
+      "requires": [
+        "cuda",
+        "blackwell"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "reason": "ep/tests/Makefile builds this with FP4_CUDAFLAGS, default sm_120a (hardware UE8M0/E2M1 cvt path; a soft-cvt build is also supported). Not yet validated on a CI target: GB10 is sm_121 and no sm_121a or soft build has been run there; L4/GH200 could only cover the soft path."
+    },
+    {
+      "id": "disabled.ep.tests.mxfp8-block-test.cu",
+      "sources": [
+        "ep/tests/mxfp8_block_test.cu"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "ep/**"
+      ],
+      "requires": [
+        "cuda",
+        "blackwell"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "reason": "ep/tests/Makefile builds this with FP4_CUDAFLAGS, default sm_120a (hardware UE8M0/E2M1 cvt path; a soft-cvt build is also supported). Not yet validated on a CI target: GB10 is sm_121 and no sm_121a or soft build has been run there; L4/GH200 could only cover the soft path."
+    },
+    {
+      "id": "disabled.ep.tests.ll-block-scaled-test.cu",
+      "sources": [
+        "ep/tests/ll_block_scaled_test.cu"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "ep/**"
+      ],
+      "requires": [
+        "cuda",
+        "blackwell",
+        "multigpu"
+      ],
+      "nodes": 1,
+      "gpus": 2,
+      "timeout": 180,
+      "reason": "Single-process two-rank LL check: exits 3 unless exactly two peer-accessible GPUs are visible. GB10/GH200 have one GPU per available node and L4 has four; not yet validated on a CI target."
+    },
+    {
       "id": "collective.multi_process_groups",
       "sources": [
         "collective/examples/multi_pg_test.py"
