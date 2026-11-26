@@ -58,9 +58,9 @@ class EQDSPacerTest : public ::testing::TestWithParam<size_t> {
 
 TEST_P(EQDSPacerTest, GrantsEachIdleSenderOncePerPass) {
   auto count = GetParam();
-  RegisterIdleSenders(count);
   RestoreBuffers();
   auto available = pool_.size();
+  RegisterIdleSenders(count);
 
   pacer_.handle_grant_credit();
   for (size_t i = 0; i < count; ++i) {
