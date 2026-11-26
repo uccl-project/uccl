@@ -5,6 +5,10 @@
 #include "ep_util.hpp"
 #include "ep_utils.cuh"
 #include "internode_ll.cuh"
+#if !defined(__HIP_PLATFORM_AMD__) && !defined(__HIPCC__)
+#define UCCL_EP_ENABLE_FP4 1
+#include "fp4_utils.cuh"
+#endif
 #include "uccl_transfer_device.cuh"
 #include <iostream>
 #include <vector>
@@ -58,7 +62,12 @@ void clean_low_latency_buffer(int* clean_0, int num_clean_int_0, int* clean_1,
 #undef CLEAN_LL_LAUNCH_CASE
 }
 
-template <bool kUseFP8, bool kUseUE8M0, int kHidden, bool kUseAggressiveAtomic>
+// kFP4: 0 = off, 1 = NVFP4, 2 = MXFP4 (see fp4_utils.cuh).  FP4 messages are
+// [int4 header | hidden/2 bytes of E2M1 | one scale byte per block | pad to
+// 16].  Header .x is the source token index; for NVFP4 header .y holds the
+// per-token FP32 decode scale.
+template <bool kUseFP8, bool kUseUE8M0, int kHidden, bool kUseAggressiveAtomic,
+          int kFP4 = 0, bool kUseMXFP8 = false>
 __global__ __launch_bounds__(1024, 1) void dispatch(
     void* packed_recv_x, void* packed_recv_x_scales, int* packed_recv_src_info,
     int64_t* packed_recv_layout_range, int* packed_recv_count,
@@ -75,7 +84,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     void** ipc_rdma_base_ptrs = nullptr, void* rdma_buffer_ptr = nullptr,
     void* atomic_buffer_ptr = nullptr,
     int64_t* rdma_recv_count_internode = nullptr,
-    int* grid_sync_barrier_ptr = nullptr) {
+    int* grid_sync_barrier_ptr = nullptr, float* packed_recv_x_gs = nullptr) {
   auto const sm_id = static_cast<int>(blockIdx.x);
   auto const thread_id = static_cast<int>(threadIdx.x);
   auto const warp_id = thread_id / WARP_SIZE, lane_id = get_lane_id();
@@ -92,24 +101,41 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
   EP_STATIC_ASSERT(sizeof(packed_t) % sizeof(scale_t) == 0,
                    "Invalid vector length");
 
-  // FP8 staffs
-  constexpr int kNumPerChannels = 128;
-  int const num_scales = kHidden / kNumPerChannels;
+  constexpr bool kIsFP4 = kFP4 != 0;
+  EP_STATIC_ASSERT(not(kIsFP4 and kUseFP8), "FP4 and FP8 are exclusive");
+  EP_STATIC_ASSERT(!kUseMXFP8 || (kUseFP8 && !kUseUE8M0), "Invalid MXFP8 mode");
+  constexpr int kScaleBlockSize =
+      kUseMXFP8 || kFP4 == 2 ? 32 : (kFP4 == 1 ? 16 : 128);
+  constexpr int num_scales = kHidden / kScaleBlockSize;
+  constexpr int kFP4NumScales = kIsFP4 ? num_scales : 0;
+  EP_STATIC_ASSERT(not kIsFP4 or kHidden % 32 == 0, "Invalid FP4 hidden");
+#ifndef UCCL_EP_ENABLE_FP4
+  EP_STATIC_ASSERT(not kIsFP4, "FP4 dispatch is CUDA-only");
+#endif
+
   size_t const hidden_bytes =
-      kHidden * (kUseFP8 ? sizeof(__nv_fp8_storage_t) : sizeof(nv_bfloat16));
+      kIsFP4 ? kHidden / 2
+             : kHidden *
+                   (kUseFP8 ? sizeof(__nv_fp8_storage_t) : sizeof(nv_bfloat16));
   size_t const hidden_int4 = hidden_bytes / sizeof(int4);
 
   // Message package: hidden data, FP8 scales, index at source
-  // NOTES: currently we have 3 reserved int fields for future use
+  // NOTES: currently we have 3 reserved int fields for future use (FP4 uses
+  // the second one for the NVFP4 token scale)
   using vec_t = typename std::conditional<kUseFP8, int2, int4>::type;
   size_t const num_bytes_per_msg =
-      sizeof(int4) + (kUseFP8 ? (kHidden + num_scales * sizeof(float))
-                              : (kHidden * sizeof(nv_bfloat16)));
+      sizeof(int4) +
+      (kIsFP4 ? (kHidden / 2 + kFP4NumScales + 15) / 16 * 16
+              : (kUseFP8 ? (kHidden + num_scales * (kUseMXFP8 ? sizeof(uint8_t)
+                                                              : sizeof(float)))
+                         : (kHidden * sizeof(nv_bfloat16))));
   size_t const num_int4_per_msg = num_bytes_per_msg / sizeof(int4);
   EP_DEVICE_ASSERT(num_bytes_per_msg % sizeof(int4) == 0);
 
   // Expert counts
   __shared__ int shared_num_tokens_sent_per_expert[kNumMaxWarpGroups];
+  // Per-warp partial token amax for NVFP4
+  __shared__ float shared_fp4_token_amax[kNumMaxWarpGroups];
 
 #ifdef PER_EXPERT_BATCHING
   // Global counter slots used for batching sends to each top-k destination.
@@ -140,8 +166,10 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     constexpr int kNumElemsPerRead = sizeof(int4) / sizeof(nv_bfloat16);
     EP_STATIC_ASSERT(kHidden % (WARP_SIZE * kNumElemsPerRead) == 0,
                      "Invalid hidden");
-    EP_STATIC_ASSERT(kNumElemsPerRead * WARP_SIZE % kNumPerChannels == 0,
-                     "Invalid vectorization");
+    constexpr int kLanesPerScale = kScaleBlockSize / kNumElemsPerRead;
+    EP_STATIC_ASSERT(kScaleBlockSize % kNumElemsPerRead == 0 &&
+                         WARP_SIZE % kLanesPerScale == 0,
+                     "Invalid scale block vectorization");
     auto const num_threads = (num_warps - 1) * WARP_SIZE;
     size_t const hidden_bf16_int4 = kHidden / kNumElemsPerRead;
 
@@ -161,6 +189,35 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                                    topk_idx + token_idx * num_topk + warp_id))
                              : -1;
       thread_id == 0 ? (*rdma_x_src_idx = token_idx) : 0;
+
+#ifdef UCCL_EP_ENABLE_FP4
+      // NVFP4: per-token amax -> FP32 decode scale, written into header .y.
+      // The shared slots are re-written only after the barrier that ends the
+      // cast loop below, which every reader has passed.
+      float fp4_gs = 1.0f;
+      if constexpr (kFP4 == fp4::kNVFP4) {
+        float tamax = 0.0f;
+        for (int i = thread_id; i < hidden_bf16_int4; i += num_threads) {
+          auto v = __ldg(x_int4 + i);
+          auto b = reinterpret_cast<nv_bfloat16 const*>(&v);
+#pragma unroll
+          for (int j = 0; j < kNumElemsPerRead; ++j)
+            tamax = fmaxf(tamax, fabsf(static_cast<float>(b[j])));
+        }
+        tamax = warp_reduce_max(tamax);
+        if (lane_id == 0) shared_fp4_token_amax[warp_id] = tamax;
+        sync_barrier_1(num_threads);
+        tamax = 0.0f;
+        for (int w = 0; w < num_warps - 1; ++w)
+          tamax = fmaxf(tamax, shared_fp4_token_amax[w]);
+        fp4_gs = fp4::nv_token_scale(tamax);
+        if (thread_id == 0) rdma_x_src_idx[1] = __float_as_int(fp4_gs);
+      }
+      auto const fp4_data = reinterpret_cast<uint32_t*>(
+          reinterpret_cast<uint8_t*>(rdma_x_src_idx) + sizeof(int4));
+      auto const fp4_scales =
+          reinterpret_cast<uint8_t*>(fp4_data) + kHidden / 2;
+#endif
 
 #ifdef PER_EXPERT_BATCHING
       // Allocate per-expert send slots for top-k destinations.
@@ -189,7 +246,8 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
           // Calculate local amax
           auto bf16_values = reinterpret_cast<nv_bfloat16*>(&int4_value);
           float fp32_values[kNumElemsPerRead];
-          float amax = kFP8Margin, scale, scale_inv;
+          float amax = kUseMXFP8 ? 0.0f : kFP8Margin;
+          float scale, scale_inv;
 #pragma unroll
           for (int j = 0; j < kNumElemsPerRead; ++j) {
             fp32_values[j] = static_cast<float>(bf16_values[j]);
@@ -198,20 +256,21 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
 
           // Reduce amax and scale
 
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-          EP_STATIC_ASSERT(kNumElemsPerRead * WARP_SIZE / kNumPerChannels == 4,
-                           "Invalid vectorization");
-          amax = warp_reduce_max<16>(amax);
-          calculate_fp8_scales(amax, scale, scale_inv, round_scale);
-          if (lane_id % 16 == 0)
-#else
-          EP_STATIC_ASSERT(kNumElemsPerRead * WARP_SIZE / kNumPerChannels == 2,
-                           "Invalid vectorization");
-          amax = warp_reduce_max<16>(amax);
-          calculate_fp8_scales(amax, scale, scale_inv, round_scale);
-          if (lane_id == 0 or lane_id == 16)
+          amax = warp_reduce_max<kLanesPerScale>(amax);
+#ifdef UCCL_EP_ENABLE_FP4
+          if constexpr (kUseMXFP8) {
+            auto const code = mx::mxfp8_scale(amax);
+            scale = mx::ue8m0_to_inv_f32(code);
+            if (lane_id % kLanesPerScale == 0)
+              reinterpret_cast<uint8_t*>(rdma_x_scales)[i / kLanesPerScale] =
+                  code;
+          } else
 #endif
-            rdma_x_scales[i * kNumElemsPerRead / 128] = scale_inv;
+          {
+            calculate_fp8_scales(amax, scale, scale_inv, round_scale);
+            if (lane_id % kLanesPerScale == 0)
+              rdma_x_scales[i / kLanesPerScale] = scale_inv;
+          }
 
           // Cast into send buffer
           vec_t int2_value;
@@ -221,20 +280,53 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
           for (int j = 0; j < kNumElemsPerRead; j += 2) {
             float2 fp32x2 = {fp32_values[j] * scale,
                              fp32_values[j + 1] * scale};
-            fp8x2_values[j / 2] =
-                __nv_cvt_float2_to_fp8x2(fp32x2, __NV_SATFINITE,
+#ifdef UCCL_EP_ENABLE_FP4
+            if constexpr (kUseMXFP8)
+              fp8x2_values[j / 2] = mx::e4m3x2_rn(fp32x2.x, fp32x2.y);
+            else
+#endif
+              fp8x2_values[j / 2] =
+                  __nv_cvt_float2_to_fp8x2(fp32x2, __NV_SATFINITE,
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
 #if defined(__gfx942__)
-                                         __HIP_E4M3_FNUZ
+                                           __HIP_E4M3_FNUZ
 #else
-                                         __HIP_E4M3
+                                           __HIP_E4M3
 #endif
 #else
                                          __NV_E4M3
 #endif
-                );
+                  );
           }
           rdma_x_vec[i] = int2_value;
+#ifdef UCCL_EP_ENABLE_FP4
+        } else if constexpr (kIsFP4) {
+          // One int4 = 8 BF16 -> 8 E2M1 nibbles.  A block is 2 (NVFP4) or 4
+          // (MXFP4) consecutive int4s, i.e. aligned groups of lanes, since
+          // `num_threads` is a multiple of the warp size.
+          auto bf16_values = reinterpret_cast<nv_bfloat16*>(&int4_value);
+          float fp32_values[kNumElemsPerRead];
+          float amax = 0.0f;
+#pragma unroll
+          for (int j = 0; j < kNumElemsPerRead; ++j) {
+            fp32_values[j] = static_cast<float>(bf16_values[j]);
+            amax = fmaxf(amax, fabsf(fp32_values[j]));
+          }
+          amax = warp_reduce_max<kLanesPerScale>(amax);
+          float inv_scale;
+          uint8_t scale_byte;
+          if constexpr (kFP4 == fp4::kNVFP4)
+            scale_byte = fp4::nv_block_scale(amax, fp4_gs, inv_scale);
+          else
+            scale_byte = fp4::mx_block_scale(amax, inv_scale);
+#pragma unroll
+          for (int j = 0; j < kNumElemsPerRead; ++j)
+            fp32_values[j] *= inv_scale;
+          fp4_data[i] = fp4::pack8_e2m1(fp32_values);
+          if (lane_id % kLanesPerScale == 0)
+            fp4_scales[i / kLanesPerScale] = scale_byte;
+          (void)fp4_gs;
+#endif
         } else {
           // Reinterpret-cast is for C++14 compatibility
           rdma_x_vec[i] = *reinterpret_cast<vec_t*>(&int4_value);
@@ -254,7 +346,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
         auto const src_ptr = reinterpret_cast<uint64_t>(rdma_x_src_idx);
         auto const dst_ptr =
             reinterpret_cast<uint64_t>(rdma_recv_x) +
-            dst_expert_local_idx * num_ranks *
+            static_cast<size_t>(dst_expert_local_idx) * num_ranks *
                 num_max_dispatch_tokens_per_rank * num_bytes_per_msg +
             rank * num_max_dispatch_tokens_per_rank * num_bytes_per_msg +
             slot_idx * num_bytes_per_msg;
@@ -394,7 +486,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
         // Destination: start of this expert's recv buffer on remote rank
         auto const dst_ptr =
             reinterpret_cast<uint64_t>(rdma_recv_x) +
-            dst_expert_local_idx * num_ranks *
+            static_cast<size_t>(dst_expert_local_idx) * num_ranks *
                 num_max_dispatch_tokens_per_rank * num_bytes_per_msg +
             rank * num_max_dispatch_tokens_per_rank * num_bytes_per_msg;
         // Total bytes: all tokens for this expert
@@ -491,8 +583,8 @@ LOW_LATENCY_DISPATCH_RECV:
     auto const local_expert_idx = responsible_expert_idx % num_local_experts;
     auto const rdma_recv_x_uint8 =
         static_cast<uint8_t*>(rdma_recv_x) +
-        local_expert_idx * num_ranks * num_max_dispatch_tokens_per_rank *
-            num_bytes_per_msg +
+        static_cast<size_t>(local_expert_idx) * num_ranks *
+            num_max_dispatch_tokens_per_rank * num_bytes_per_msg +
         src_rank * num_max_dispatch_tokens_per_rank * num_bytes_per_msg;
     auto const recv_x_int4 = static_cast<int4*>(packed_recv_x) +
                              local_expert_idx * num_ranks *
@@ -504,10 +596,8 @@ LOW_LATENCY_DISPATCH_RECV:
         packed_recv_layout_range + local_expert_idx * num_ranks;
     auto const num_aligned_scales =
         align<int>(num_scales, sizeof(float) / sizeof(scale_t));
-    auto const recv_x_scales = static_cast<scale_t*>(packed_recv_x_scales) +
-                               local_expert_idx * num_ranks *
-                                   num_max_dispatch_tokens_per_rank *
-                                   num_aligned_scales;
+    auto const expert_row = static_cast<size_t>(local_expert_idx) * num_ranks *
+                            num_max_dispatch_tokens_per_rank;
 
     // Shared between sub-warps in warp groups
     __shared__ int shared_num_recv_tokens[kNumMaxWarpGroups],
@@ -603,7 +693,9 @@ LOW_LATENCY_DISPATCH_RECV:
     recv_token_begin_idx = shared_recv_token_begin_idx[warp_group_id];
 
     // Copy tokens
-    EP_DEVICE_ASSERT(num_scales <= 64);
+    if constexpr (kUseFP8 && !kUseMXFP8) {
+      EP_STATIC_ASSERT(num_scales <= 2 * WARP_SIZE, "Legacy FP8 scale copy");
+    }
     for (int i = sub_warp_id; i < num_recv_tokens; i += num_warps_per_group) {
       // Copy source info
       auto const src_src_idx =
@@ -621,8 +713,46 @@ LOW_LATENCY_DISPATCH_RECV:
       UNROLLED_WARP_COPY(7, lane_id, hidden_int4, dst_data, src_data,
                          ld_nc_global, st_na_global);
 
-      // Copy scales
-      if constexpr (kUseFP8) {
+#ifdef UCCL_EP_ENABLE_FP4
+      // FP4: row-major uint8 scales `[E, R * T, kFP4NumScales]` and, for
+      // NVFP4, FP32 token scales `[E, R * T]`
+      if constexpr (kIsFP4) {
+        EP_STATIC_ASSERT(kFP4NumScales % sizeof(int4) == 0,
+                         "FP4 scales must be int4 aligned");
+        auto const token_idx =
+            local_expert_idx * num_ranks * num_max_dispatch_tokens_per_rank +
+            recv_token_begin_idx + i;
+        auto const src_fp4_scales = reinterpret_cast<int4 const*>(
+            reinterpret_cast<uint8_t*>(src_data) + hidden_bytes);
+        auto const dst_fp4_scales = reinterpret_cast<int4*>(
+            static_cast<uint8_t*>(packed_recv_x_scales) +
+            static_cast<size_t>(token_idx) * kFP4NumScales);
+        for (int k = lane_id;
+             k < kFP4NumScales / static_cast<int>(sizeof(int4)); k += WARP_SIZE)
+          st_na_global(dst_fp4_scales + k, ld_nc_global(src_fp4_scales + k));
+        if constexpr (kFP4 == fp4::kNVFP4) {
+          if (lane_id == 0)
+            packed_recv_x_gs[token_idx] =
+                __int_as_float(ld_nc_global(src_src_idx + 1));
+        }
+      }
+#endif
+
+      // Copy MXFP8 scales as contiguous rows. The legacy FP8 layout is
+      // transposed for column-major consumers.
+      if constexpr (kUseMXFP8) {
+        EP_STATIC_ASSERT(num_scales % sizeof(int4) == 0, "Unaligned MXFP8 row");
+        auto const src_scales = reinterpret_cast<int4 const*>(
+            reinterpret_cast<uint8_t*>(src_data) + hidden_bytes);
+        auto const dst_scales = reinterpret_cast<int4*>(
+            static_cast<uint8_t*>(packed_recv_x_scales) +
+            (expert_row + recv_token_begin_idx + i) * num_scales);
+        for (int k = lane_id; k < num_scales / static_cast<int>(sizeof(int4));
+             k += WARP_SIZE)
+          st_na_global(dst_scales + k, ld_nc_global(src_scales + k));
+      } else if constexpr (kUseFP8) {
+        auto const recv_x_scales = static_cast<scale_t*>(packed_recv_x_scales) +
+                                   expert_row * num_aligned_scales;
         // Equivalent CuTe layout:
         //   (num_tokens, (num_packed, num_elems_per_pack)):(num_elems_per_pack,
         //   (num_tokens * num_elems_per_pack, 1))
@@ -671,7 +801,8 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
               uint64_t const* d2h_channel_addrs, int num_d2h_channel_addrs,
               int max_nvl_peers, int low_latency_buffer_idx,
               void** ipc_rdma_base_ptrs, void* rdma_buffer_ptr,
-              void* atomic_buffer_ptr, int64_t* rdma_recv_count_internode) {
+              void* atomic_buffer_ptr, int64_t* rdma_recv_count_internode,
+              int fp4_mode, float* packed_recv_x_gs, bool use_mxfp8) {
   constexpr int kNumMaxTopK = 16;
   int const num_warp_groups = ceil_div(num_experts, num_device_sms);
   int const num_warps_per_group = kNumMaxWarpGroups / num_warp_groups;
@@ -702,36 +833,74 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
   if (use_ue8m0)
     EP_HOST_ASSERT(round_scale and "UE8M0 SF requires `round_scale=True`");
 
+  if (use_mxfp8) {
+#ifndef UCCL_EP_ENABLE_FP4
+    EP_HOST_ASSERT(false and "MXFP8 dispatch is CUDA-only");
+#endif
+    EP_HOST_ASSERT(use_fp8 && !use_ue8m0 && !round_scale && fp4_mode == 0);
+    EP_HOST_ASSERT(hidden % 512 == 0 && packed_recv_x_scales != nullptr);
+  }
+
+  // FP4 checks
+  EP_HOST_ASSERT(fp4_mode >= 0 and fp4_mode <= 2);
+  if (fp4_mode != 0) {
+#ifndef UCCL_EP_ENABLE_FP4
+    EP_HOST_ASSERT(false and "FP4 dispatch is CUDA-only");
+#endif
+    EP_HOST_ASSERT(not use_fp8 and "FP4 and FP8 are exclusive");
+    EP_HOST_ASSERT(hidden % 512 == 0);
+    EP_HOST_ASSERT(packed_recv_x_scales != nullptr);
+    if (fp4_mode == 1) EP_HOST_ASSERT(packed_recv_x_gs != nullptr);
+  }
+
   static bool const aggressive_atomic_enabled = get_aggressive_atomic_enabled();
 
-#define DISPATCH_LAUNCH_CASE(hidden)                                       \
-  {                                                                        \
-    auto dispatch_func = aggressive_atomic_enabled                         \
-                             ? dispatch<false, false, hidden, true>        \
-                             : dispatch<false, false, hidden, false>;      \
-    if (use_fp8 and not use_ue8m0)                                         \
-      dispatch_func = aggressive_atomic_enabled                            \
-                          ? dispatch<true, false, hidden, true>            \
-                          : dispatch<true, false, hidden, false>;          \
-    if (use_fp8 and use_ue8m0)                                             \
-      dispatch_func = aggressive_atomic_enabled                            \
-                          ? dispatch<true, true, hidden, true>             \
-                          : dispatch<true, true, hidden, false>;           \
-    LAUNCH_KERNEL(                                                         \
-        &cfg, dispatch_func, packed_recv_x, packed_recv_x_scales,          \
-        packed_recv_src_info, packed_recv_layout_range, packed_recv_count, \
-        cumulative_local_expert_recv_stats, dispatch_wait_recv_cost_stats, \
-        rdma_recv_x, rdma_recv_count, rdma_x, x, topk_idx,                 \
-        atomic_counter_per_expert, atomic_finish_counter_per_expert,       \
-        atomic_send_counter_per_expert, next_clean, next_clean_second,     \
-        num_next_clean_int, num_tokens, num_max_dispatch_tokens_per_rank,  \
-        num_topk, num_experts, rank, num_ranks, num_warp_groups,           \
-        num_warps_per_group, round_scale, phases, d2h_channel_addrs,       \
-        num_d2h_channel_addrs, max_nvl_peers, low_latency_buffer_idx,      \
-        ipc_rdma_base_ptrs, rdma_buffer_ptr, atomic_buffer_ptr,            \
-        rdma_recv_count_internode, grid_sync_barrier_ptr);                 \
-  }                                                                        \
+#define DISPATCH_LAUNCH_CASE(hidden)                                         \
+  {                                                                          \
+    auto dispatch_func = aggressive_atomic_enabled                           \
+                             ? dispatch<false, false, hidden, true>          \
+                             : dispatch<false, false, hidden, false>;        \
+    if (use_fp8 and not use_ue8m0)                                           \
+      dispatch_func = aggressive_atomic_enabled                              \
+                          ? dispatch<true, false, hidden, true>              \
+                          : dispatch<true, false, hidden, false>;            \
+    if (use_fp8 and use_ue8m0)                                               \
+      dispatch_func = aggressive_atomic_enabled                              \
+                          ? dispatch<true, true, hidden, true>               \
+                          : dispatch<true, true, hidden, false>;             \
+    DISPATCH_BLOCK_SCALED_CASES(hidden);                                     \
+    LAUNCH_KERNEL(                                                           \
+        &cfg, dispatch_func, packed_recv_x, packed_recv_x_scales,            \
+        packed_recv_src_info, packed_recv_layout_range, packed_recv_count,   \
+        cumulative_local_expert_recv_stats, dispatch_wait_recv_cost_stats,   \
+        rdma_recv_x, rdma_recv_count, rdma_x, x, topk_idx,                   \
+        atomic_counter_per_expert, atomic_finish_counter_per_expert,         \
+        atomic_send_counter_per_expert, next_clean, next_clean_second,       \
+        num_next_clean_int, num_tokens, num_max_dispatch_tokens_per_rank,    \
+        num_topk, num_experts, rank, num_ranks, num_warp_groups,             \
+        num_warps_per_group, round_scale, phases, d2h_channel_addrs,         \
+        num_d2h_channel_addrs, max_nvl_peers, low_latency_buffer_idx,        \
+        ipc_rdma_base_ptrs, rdma_buffer_ptr, atomic_buffer_ptr,              \
+        rdma_recv_count_internode, grid_sync_barrier_ptr, packed_recv_x_gs); \
+  }                                                                          \
   break
+#ifdef UCCL_EP_ENABLE_FP4
+#define DISPATCH_BLOCK_SCALED_CASES(hidden)                              \
+  if (use_mxfp8)                                                         \
+    dispatch_func = aggressive_atomic_enabled                            \
+                        ? dispatch<true, false, hidden, true, 0, true>   \
+                        : dispatch<true, false, hidden, false, 0, true>; \
+  if (fp4_mode == 1)                                                     \
+    dispatch_func = aggressive_atomic_enabled                            \
+                        ? dispatch<false, false, hidden, true, 1>        \
+                        : dispatch<false, false, hidden, false, 1>;      \
+  if (fp4_mode == 2)                                                     \
+  dispatch_func = aggressive_atomic_enabled                              \
+                      ? dispatch<false, false, hidden, true, 2>          \
+                      : dispatch<false, false, hidden, false, 2>
+#else
+#define DISPATCH_BLOCK_SCALED_CASES(hidden) (void)0
+#endif
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
   EP_HOST_ASSERT(num_warps * WARP_SIZE <= MAX_NTHREADS);
 #endif
@@ -745,10 +914,99 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
   }
 
 #undef DISPATCH_LAUNCH_CASE
+#undef DISPATCH_BLOCK_SCALED_CASES
 }
 
+#ifdef UCCL_EP_ENABLE_FP4
+// FP4 combine message (one row of kHidden elements, 16-byte aligned):
+//   [kHidden/2 B E2M1 data][block scales][NVFP4 only: FP32 token scale]
+// using the dispatch packing (fp4_utils.cuh).  One warp quantizes one row;
+// each lane owns 32 consecutive elements per pass, so a pass covers 1024
+// elements.  The host requires hidden % 512 == 0, which keeps every 4-byte
+// scale word either fully inside or fully outside the row.
+template <int kFP4, int kHidden>
+__device__ __forceinline__ void combine_quant_fp4_row(int4 const* x,
+                                                      uint8_t* dst,
+                                                      int lane_id) {
+  constexpr int kBlock = kFP4 == fp4::kNVFP4 ? 16 : 32;
+  constexpr int kNumScales = kHidden / kBlock;
+  constexpr int kNumPasses = (kHidden + 32 * WARP_SIZE - 1) / (32 * WARP_SIZE);
+  EP_STATIC_ASSERT(kHidden % 32 == 0, "Invalid hidden for FP4");
+  uint8_t* scales = dst + kHidden / 2;
+
+  float gs = 1.0f;
+  if constexpr (kFP4 == fp4::kNVFP4) {
+    float a = 0.0f;
+    for (int i = lane_id; i < kHidden / 8; i += WARP_SIZE) {
+      auto v = ld_nc_global(x + i);
+      auto const b = reinterpret_cast<nv_bfloat16 const*>(&v);
+#pragma unroll
+      for (int j = 0; j < 8; ++j) a = fmaxf(a, fabsf(__bfloat162float(b[j])));
+    }
+    gs = fp4::nv_token_scale(warp_reduce_max(a));
+    if (lane_id == 0) *reinterpret_cast<float*>(scales + kNumScales) = gs;
+  }
+
+#pragma unroll
+  for (int pass = 0; pass < kNumPasses; ++pass) {
+    int const e0 = (pass * WARP_SIZE + lane_id) * 32;
+    bool const valid = e0 < kHidden;
+    float f[32];
+#pragma unroll
+    for (int k = 0; k < 4; ++k) {
+      int4 v = valid ? ld_nc_global(x + e0 / 8 + k) : make_int4(0, 0, 0, 0);
+      auto const b = reinterpret_cast<nv_bfloat16 const*>(&v);
+#pragma unroll
+      for (int j = 0; j < 8; ++j) f[k * 8 + j] = __bfloat162float(b[j]);
+    }
+    uint32_t w[4];
+    uint32_t sc = 0;
+#pragma unroll
+    for (int h = 0; h < 32 / kBlock; ++h) {
+      float amax = 0.0f;
+#pragma unroll
+      for (int j = 0; j < kBlock; ++j)
+        amax = fmaxf(amax, fabsf(f[h * kBlock + j]));
+      float inv;
+      uint8_t const s = kFP4 == fp4::kNVFP4 ? fp4::nv_block_scale(amax, gs, inv)
+                                            : fp4::mx_block_scale(amax, inv);
+      sc |= static_cast<uint32_t>(s) << (8 * h);
+#pragma unroll
+      for (int k = 0; k < kBlock / 8; ++k) {
+        float v8[8];
+#pragma unroll
+        for (int j = 0; j < 8; ++j) v8[j] = f[h * kBlock + k * 8 + j] * inv;
+        w[h * (kBlock / 8) + k] = fp4::pack8_e2m1(v8);
+      }
+    }
+    if (valid)
+      *reinterpret_cast<int4*>(dst + e0 / 2) =
+          make_int4(static_cast<int>(w[0]), static_cast<int>(w[1]),
+                    static_cast<int>(w[2]), static_cast<int>(w[3]));
+    // Gather the per-lane scale bytes into 4-byte words before storing.
+    uint32_t word;
+    int src;
+    if constexpr (kFP4 == fp4::kMXFP4) {
+      src = (lane_id & 7) * 4;
+      word = 0;
+#pragma unroll
+      for (int k = 0; k < 4; ++k)
+        word |= (__shfl_sync(WARP_MASK, sc, src + k) & 0xffu) << (8 * k);
+    } else {
+      src = (lane_id & 15) * 2;
+      word = (__shfl_sync(WARP_MASK, sc, src) & 0xffffu) |
+             (__shfl_sync(WARP_MASK, sc, src + 1) << 16);
+    }
+    constexpr int kNumWordLanes = kFP4 == fp4::kMXFP4 ? 8 : 16;
+    if (lane_id < kNumWordLanes and (pass * WARP_SIZE + src) * 32 < kHidden)
+      *reinterpret_cast<uint32_t*>(scales + pass * (32 * WARP_SIZE / kBlock) +
+                                   lane_id * 4) = word;
+  }
+}
+#endif
+
 template <bool kUseLogFMT, int kHidden, int kNumMaxTopk,
-          bool kUseAggressiveAtomic>
+          bool kUseAggressiveAtomic, int kFP4 = 0>
 __global__ __launch_bounds__(1024, 1) void combine(
     void* combined_x, void* rdma_recv_x, int* rdma_recv_flag, void* rdma_send_x,
     void const* x, int64_t const* topk_idx, float const* topk_weights,
@@ -787,6 +1045,20 @@ __global__ __launch_bounds__(1024, 1) void combine(
   constexpr size_t num_bytes_per_slot = kHidden * sizeof(nv_bfloat16);
   EP_STATIC_ASSERT(num_bytes_per_slot % sizeof(int4) == 0,
                    "Invalid vectorization");
+
+  // FP4: the message is written at the start of the BF16-sized slot, so the
+  // buffer layout is unchanged; only `kFP4MsgBytes` are copied or put.
+  constexpr bool kIsFP4 = kFP4 != 0;
+#ifdef UCCL_EP_ENABLE_FP4
+  constexpr int kFP4Block = kFP4 == 1 ? 16 : 32;
+  constexpr int kFP4NumScales = kHidden / kFP4Block;
+  constexpr size_t kFP4MsgBytes =
+      kIsFP4 ? fp4::row_bytes(kFP4, kHidden, true) : 0;
+  EP_STATIC_ASSERT(not(kIsFP4 and kUseLogFMT), "FP4 excludes LogFMT");
+  EP_STATIC_ASSERT(kFP4MsgBytes <= num_bytes_per_slot, "FP4 message too large");
+#else
+  EP_STATIC_ASSERT(not kIsFP4, "FP4 combine is CUDA-only");
+#endif
 
   // Sending phase
   if ((phases & LOW_LATENCY_SEND_PHASE) == 0) goto LOW_LATENCY_COMBINE_RECV;
@@ -902,7 +1174,18 @@ __global__ __launch_bounds__(1024, 1) void combine(
                                       dst_rank, max_nvl_peers, 0)
               : 0;
 
-      if (not zero_copy or dst_p2p_ptr != 0) {
+#ifdef UCCL_EP_ENABLE_FP4
+      if constexpr (kIsFP4) {
+        // Quantize straight into the peer's slot (IPC) or the send buffer.
+        combine_quant_fp4_row<kFP4, kHidden>(
+            x_int4,
+            dst_p2p_ptr == 0 ? reinterpret_cast<uint8_t*>(buf_ptr)
+                             : reinterpret_cast<uint8_t*>(dst_p2p_ptr),
+            lane_id);
+        __syncwarp();
+      } else
+#endif
+          if (not zero_copy or dst_p2p_ptr != 0) {
         // Read from `cpy_src_int4_ptr` and copy into `cpy_dst_int4_ptr`
         auto const cpy_src_int4_ptr =
             zero_copy ? reinterpret_cast<int4*>(buf_ptr) : x_int4;
@@ -1046,7 +1329,12 @@ __global__ __launch_bounds__(1024, 1) void combine(
         put_nbi_warp(
             dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
             buf_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
-            hidden * sizeof(nv_bfloat16), dst_rank,
+#ifdef UCCL_EP_ENABLE_FP4
+            kIsFP4 ? kFP4MsgBytes : hidden * sizeof(nv_bfloat16),
+#else
+            hidden * sizeof(nv_bfloat16),
+#endif
+            dst_rank,
             /*warp_id=*/global_expert_idx,  // NOTE(Yang): for selecting rb.
             // NOTE(Ziming): this is global_expert_idx because destination is
             // indexed by global_expert_idx
@@ -1201,6 +1489,27 @@ LOW_LATENCY_COMBINE_RECV:
           auto rdma_buffer_row =
               reinterpret_cast<uint8_t const*>(rdma_buffer_type);
 
+#ifdef UCCL_EP_ENABLE_FP4
+          if constexpr (kIsFP4) {
+            // 8 elements = one 4-byte data word; all 8 share a block scale.
+            auto const w = static_cast<uint32_t>(ld_nc_global(
+                reinterpret_cast<int const*>(rdma_buffer_row) + hidden_idx));
+            auto const sb = ld_nc_global(rdma_buffer_row + kHidden / 2 +
+                                         hidden_idx * 8 / kFP4Block);
+            float scale;
+            if constexpr (kFP4 == 1)
+              scale = fp4::e4m3_to_float(sb) *
+                      ld_nc_global(reinterpret_cast<float const*>(
+                          rdma_buffer_row + kHidden / 2 + kFP4NumScales));
+            else
+              scale = fp4::mx_decode_scale(sb);
+            scale *= reg_topk_weights[i];
+#pragma unroll
+            for (int j = 0; j < kNumElemsPerInt4; ++j)
+              combined_values[j] += fp4::e2m1_decode(w >> (4 * j)) * scale;
+            continue;
+          }
+#endif
           // Reduce
           auto x_vec = ld_nc_global(
               reinterpret_cast<int4 const*>(rdma_buffer_row) + hidden_idx);
@@ -1239,7 +1548,7 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
              int num_d2h_channel_addrs, int max_nvl_peers,
              int low_latency_buffer_idx, void** ipc_rdma_base_ptrs,
              void* rdma_buffer_ptr, void* atomic_buffer_ptr,
-             int64_t* rdma_recv_flag_internode) {
+             int64_t* rdma_recv_flag_internode, int fp4_mode) {
   constexpr int kNumMaxTopk = 16;
   int const num_warp_groups = ceil_div(num_experts, num_device_sms);
   int const num_warps_per_group = kNumMaxWarpGroups / num_warp_groups;
@@ -1256,6 +1565,14 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
 
   // Online cast cannot use zero-copy
   EP_HOST_ASSERT(not(zero_copy and use_logfmt));
+  EP_HOST_ASSERT(fp4_mode >= 0 and fp4_mode <= 2);
+  if (fp4_mode != 0) {
+#ifndef UCCL_EP_ENABLE_FP4
+    EP_HOST_ASSERT(false and "FP4 combine is CUDA-only");
+#endif
+    EP_HOST_ASSERT(not use_logfmt and not zero_copy);
+    EP_HOST_ASSERT(hidden % 512 == 0);
+  }
 
   constexpr int kNumTMABytesPerWarp = 12 * (512 + 16);
   int num_warps_launch = num_warps;
@@ -1298,6 +1615,7 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
                           : combine<false, hidden, kNumMaxTopk, true>)       \
             : (use_logfmt ? combine<true, hidden, kNumMaxTopk, false>        \
                           : combine<false, hidden, kNumMaxTopk, false>);     \
+    COMBINE_FP4_CASES(hidden);                                               \
     SET_SHARED_MEMORY_FOR_TMA(combine_func);                                 \
     LAUNCH_KERNEL(                                                           \
         &cfg, combine_func, combined_x, rdma_recv_x, rdma_recv_flag,         \
@@ -1312,6 +1630,19 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
   }                                                                          \
   break
 
+#ifdef UCCL_EP_ENABLE_FP4
+#define COMBINE_FP4_CASES(hidden)                                       \
+  if (fp4_mode == 1)                                                    \
+    combine_func = aggressive_atomic_enabled                            \
+                       ? combine<false, hidden, kNumMaxTopk, true, 1>   \
+                       : combine<false, hidden, kNumMaxTopk, false, 1>; \
+  if (fp4_mode == 2)                                                    \
+  combine_func = aggressive_atomic_enabled                              \
+                     ? combine<false, hidden, kNumMaxTopk, true, 2>     \
+                     : combine<false, hidden, kNumMaxTopk, false, 2>
+#else
+#define COMBINE_FP4_CASES(hidden) (void)0
+#endif
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
   EP_HOST_ASSERT(num_warps_launch * WARP_SIZE <= MAX_NTHREADS);
 #endif
@@ -1324,6 +1655,7 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
     fflush(stdout);
   }
 #undef COMBINE_LAUNCH_CASE
+#undef COMBINE_FP4_CASES
 }
 
 }  // namespace internode_ll

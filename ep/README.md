@@ -90,6 +90,40 @@ proxies, workers = initialize_uccl(scratch, num_rdma_bytes, rank, num_ranks, gro
 destroy_uccl(proxies, workers)
 ```
 
+### Block-scaled low-latency buffers on CUDA
+
+All ranks in the low-latency group must use the same dispatch format. The
+existing FP8-128 and BF16 formats remain the defaults of their respective paths.
+
+| Dispatch option | Return value for the received tensor |
+| --- | --- |
+| `use_mxfp8=True` | E4M3 data and row-major UE8M0 scale bytes, one per 32 elements |
+| `use_fp8=False, use_fp4="nvfp4"` | Packed E2M1 data, one row-major E4M3 scale byte per 16 elements, and one FP32 scale per token |
+| `use_fp8=False, use_fp4="mxfp4"` | Packed E2M1 data and row-major UE8M0 scale bytes, one per 32 elements |
+
+These options require a supported hidden size divisible by 512. When using
+MXFP8, leave the legacy `round_scale` and `use_ue8m0` flags disabled. The FP4
+options also support optional inline quantization of BF16 expert outputs in
+`low_latency_combine`. FP4 combine requires the standard combine path with
+log-format and zero-copy disabled.
+
+The component checks below compile the production LL kernels and test
+in-process dispatch/combine with CUDA peer access. Use two visible P2P GPUs for
+`ll_block_scaled_test`. The conversion tests can use one visible GPU.
+
+```sh
+cd ep/tests
+make FP4_CUDAFLAGS='-gencode arch=compute_103a,code=sm_103a' \
+  fp4_cvt_test mx_cvt_test mxfp8_block_test ll_block_scaled_test
+./fp4_cvt_test
+./mx_cvt_test
+./mxfp8_block_test
+./ll_block_scaled_test
+```
+
+For a Blackwell GPU with compute capability 12.0, use
+`-gencode arch=compute_120a,code=sm_120a`.
+
 ## Benchmark
 In `ep` folder, the benchmark can be run with `torchrun`. 
 

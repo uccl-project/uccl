@@ -500,6 +500,9 @@ class Buffer {
     cudaDeviceProp prop{};
     CUDA_CHECK(cudaGetDeviceProperties(&prop, device_index));
     num_device_sms = prop.multiProcessorCount;
+#ifndef DISABLE_SM90_FEATURES
+    shared_mem_per_block_optin = prop.sharedMemPerBlockOptin;
+#endif
 
     if (num_nvl_bytes > 0) {
       size_t total_bytes = static_cast<size_t>(num_nvl_bytes) +
@@ -887,7 +890,7 @@ class Buffer {
         num_experts, num_scales, scale_token_stride, scale_hidden_stride,
         buffer_ptrs_gpu, rank, num_ranks, comm_stream, config.num_sms,
         config.num_max_nvl_chunked_send_tokens,
-        config.num_max_nvl_chunked_recv_tokens);
+        config.num_max_nvl_chunked_recv_tokens, shared_mem_per_block_optin);
 
     std::optional<EventHandle> event;
     if (async) {
@@ -1332,7 +1335,8 @@ class Buffer {
                        std::uintptr_t compute_stream_ptr,
                        int num_max_dispatch_tokens_per_rank, int num_experts,
                        bool use_fp8, bool round_scale, bool use_ue8m0,
-                       bool async, bool return_recv_hook) {
+                       bool async, bool return_recv_hook, int fp4_mode,
+                       std::uintptr_t packed_recv_x_gs_ptr, bool use_mxfp8) {
     EP_HOST_ASSERT(low_latency_mode);
     EP_HOST_ASSERT(x_rows == 0 || (x_ptr != 0 && topk_idx_ptr != 0));
     EP_HOST_ASSERT(packed_recv_x_ptr != 0 && packed_recv_count_ptr != 0);
@@ -1349,6 +1353,22 @@ class Buffer {
       EP_HOST_ASSERT(packed_recv_x_scales_ptr != 0);
       EP_HOST_ASSERT(x_cols % 512 == 0);
       if (use_ue8m0) EP_HOST_ASSERT(round_scale);
+    }
+    if (use_mxfp8) {
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__) || defined(USE_ROCM)
+      EP_HOST_ASSERT(false && "MXFP8 dispatch is CUDA-only");
+#endif
+      EP_HOST_ASSERT(use_fp8 && !use_ue8m0 && !round_scale && fp4_mode == 0);
+    }
+    // FP4 (1 = NVFP4, 2 = MXFP4): packed_recv_x is uint8 [E, R*T, hidden/2],
+    // scales are uint8 [E, R*T, hidden/block] (row-major), and NVFP4 also
+    // returns FP32 per-token decode scales [E, R*T].
+    EP_HOST_ASSERT(fp4_mode >= 0 && fp4_mode <= 2);
+    if (fp4_mode != 0) {
+      EP_HOST_ASSERT(!use_fp8 && "FP4 and FP8 are exclusive");
+      EP_HOST_ASSERT(packed_recv_x_scales_ptr != 0);
+      EP_HOST_ASSERT(x_cols % 512 == 0);
+      if (fp4_mode == 1) EP_HOST_ASSERT(packed_recv_x_gs_ptr != 0);
     }
 
     auto num_tokens = x_rows;
@@ -1404,7 +1424,8 @@ class Buffer {
           use_ue8m0, workspace, ll_num_sms(), launch_stream, phases, d_handles,
           num_d2h_channel_addrs, max_nvl_peers, low_latency_buffer_idx_used,
           d_ipc_rdma_base_ptrs, rdma_buffer_ptr, atomic_buffer_ptr,
-          buffer.dispatch_rdma_recv_count_buffer_internode);
+          buffer.dispatch_rdma_recv_count_buffer_internode, fp4_mode,
+          reinterpret_cast<float*>(packed_recv_x_gs_ptr), use_mxfp8);
     };
     launcher(return_recv_hook
                  ? LOW_LATENCY_SEND_PHASE
@@ -1443,8 +1464,12 @@ class Buffer {
       std::uintptr_t packed_recv_count_ptr = 0,
       std::uintptr_t comp_signal_ptr = 0, int block_m = 64, int threshold = 0,
       int num_sms = 0, std::uintptr_t src_signals_ptr = 0,
-      int src_signal_expect_value = 0) {
+      int src_signal_expect_value = 0, int fp4_mode = 0) {
     EP_HOST_ASSERT(low_latency_mode);
+    // fp4_mode 1 = NVFP4, 2 = MXFP4: the expert output is quantized inline
+    // before the send and dequantized in the reduce (BF16 in, BF16 out).
+    EP_HOST_ASSERT(fp4_mode >= 0 and fp4_mode <= 2);
+    EP_HOST_ASSERT(fp4_mode == 0 or (not use_logfmt and not zero_copy));
     EP_HOST_ASSERT(topk_rows == 0 ||
                    (x_ptr != 0 && topk_idx_ptr != 0 && topk_weights_ptr != 0));
     EP_HOST_ASSERT(topk_rows == 0 ||
@@ -1519,7 +1544,7 @@ class Buffer {
           ll_num_sms(), launch_stream, phases, zero_copy, d_handles,
           num_d2h_channel_addrs, max_nvl_peers, low_latency_buffer_idx_used,
           d_ipc_rdma_base_ptrs, rdma_buffer_ptr, atomic_buffer_ptr,
-          buffer.combine_rdma_recv_flag_buffer_internode);
+          buffer.combine_rdma_recv_flag_buffer_internode, fp4_mode);
     };
     launcher(return_recv_hook
                  ? LOW_LATENCY_SEND_PHASE
@@ -2084,6 +2109,7 @@ class Buffer {
   int rdma_rank{0}, nvl_rank{0};
   int num_rdma_ranks{1}, num_nvl_ranks{1};
   int num_device_sms{0};
+  std::size_t shared_mem_per_block_optin{0};
   // Copy-engine dispatch: one stream per peer and fork / join events
   std::vector<cudaStream_t> ce_streams;
   std::vector<cudaEvent_t> ce_join_events;
@@ -2414,7 +2440,9 @@ NB_MODULE(ep, m) {
            nb::arg("num_max_dispatch_tokens_per_rank") = 0,
            nb::arg("num_experts") = 1, nb::arg("use_fp8") = true,
            nb::arg("round_scale") = false, nb::arg("use_ue8m0") = false,
-           nb::arg("is_async") = false, nb::arg("return_recv_hook") = false)
+           nb::arg("is_async") = false, nb::arg("return_recv_hook") = false,
+           nb::arg("fp4_mode") = 0, nb::arg("packed_recv_x_gs_ptr") = 0,
+           nb::arg("use_mxfp8") = false)
       .def("get_local_device_id", &Buffer::get_local_device_id)
       .def("get_local_ipc_handle", &Buffer::get_local_ipc_handle)
       .def("get_local_rdma_ipc_handle", &Buffer::get_local_rdma_ipc_handle)
@@ -2778,7 +2806,7 @@ NB_MODULE(ep, m) {
            nb::arg("comp_signal_ptr") = 0, nb::arg("block_m") = 64,
            nb::arg("threshold") = 0, nb::arg("num_sms") = 0,
            nb::arg("src_signals_ptr") = 0,
-           nb::arg("src_signal_expect_value") = 0);
+           nb::arg("src_signal_expect_value") = 0, nb::arg("fp4_mode") = 0);
   m.def("alloc_cmd_ring", &alloc_cmd_ring);
   m.def("free_cmd_ring", &free_cmd_ring);
   m.def("launch_gpu_issue_kernel", [](int blocks, int threads_per_block,

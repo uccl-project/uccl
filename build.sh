@@ -109,6 +109,9 @@ if [[ "$BUILD_TYPE" =~ (ep|all|p2p) ]]; then
   if [[ "$TARGET" == cu* ]] && command -v nvidia-smi &>/dev/null; then
     DETECTED_GPU_ARCH="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1 | tr -d ' ' || true)"
 
+    case "$DETECTED_GPU_ARCH" in
+      10.3|12.0) DETECTED_GPU_ARCH="${DETECTED_GPU_ARCH}a" ;;
+    esac
     if [[ -n "$DETECTED_GPU_ARCH" ]]; then
       msg_info "Auto-detected CUDA compute capability: ${DETECTED_GPU_ARCH}"
     fi

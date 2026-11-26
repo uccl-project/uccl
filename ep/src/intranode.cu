@@ -4,6 +4,8 @@
 #include "ep_launch.cuh"
 #include "ep_utils.cuh"
 #include "exception.cuh"
+#include "intranode.cuh"
+#include <type_traits>
 namespace uccl {
 
 namespace intranode {
@@ -604,16 +606,14 @@ void dispatch(void* recv_x, float* recv_x_scales, int* recv_src_idx,
               int num_experts, int num_scales, int scale_token_stride,
               int scale_hidden_stride, void** buffer_ptrs, int rank,
               int num_ranks, cudaStream_t stream, int num_sms,
-              int num_max_send_tokens, int num_recv_buffer_tokens) {
+              int num_max_send_tokens, int num_recv_buffer_tokens,
+              std::size_t shared_mem_per_block_optin) {
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  constexpr int kNumThreads = 1024;
+  constexpr int kDefaultThreads = 1024;
 #else
-  constexpr int kNumThreads = 768;
+  constexpr int kDefaultThreads = 768;
 #endif
   constexpr int kNumTMABytesPerWarp = 8192;
-#ifndef DISABLE_SM90_FEATURES
-  constexpr int smem_size = kNumTMABytesPerWarp * (kNumThreads / WARP_SIZE);
-#endif
 
   // Make sure never OOB
   EP_HOST_ASSERT(static_cast<int64_t>(num_scales) * scale_hidden_stride <
@@ -638,9 +638,36 @@ void dispatch(void* recv_x, float* recv_x_scales, int* recv_src_idx,
 
   // Even-numbered blocks for sending, odd-numbered blocks for receiving.
   EP_HOST_ASSERT(num_sms % 2 == 0);
-  SETUP_LAUNCH_CONFIG(num_sms, kNumThreads, stream);
-  SWITCH_RANKS(DISPATCH_LAUNCH_CASE);
+  auto launch = [&](auto threads) {
+    constexpr int kNumThreads = decltype(threads)::value;
+#ifndef DISABLE_SM90_FEATURES
+    constexpr int smem_size = kNumTMABytesPerWarp * (kNumThreads / WARP_SIZE);
+#endif
+    SETUP_LAUNCH_CONFIG(num_sms, kNumThreads, stream);
+    SWITCH_RANKS(DISPATCH_LAUNCH_CASE);
+  };
 #undef DISPATCH_LAUNCH_CASE
+
+#ifndef DISABLE_SM90_FEATURES
+  if (shared_mem_per_block_optin == 0) {
+    int device = 0;
+    int shared_mem = 0;
+    CUDA_CHECK(cudaGetDevice(&device));
+    CUDA_CHECK(cudaDeviceGetAttribute(
+        &shared_mem, cudaDevAttrMaxSharedMemoryPerBlockOptin, device));
+    shared_mem_per_block_optin = shared_mem;
+  }
+  // Allow room for the static queue-tail data and the 1 KiB-aligned TMA buffer.
+  constexpr std::size_t kFullBlockSharedMem =
+      kNumTMABytesPerWarp * (kDefaultThreads / WARP_SIZE) + 1024;
+  if (shared_mem_per_block_optin < kFullBlockSharedMem) {
+    // Eight warps fit in 64 KiB of dynamic shared memory and divide evenly
+    // between all supported rank counts (2, 4, and 8).
+    launch(std::integral_constant<int, 256>{});
+    return;
+  }
+#endif
+  launch(std::integral_constant<int, kDefaultThreads>{});
 }
 
 template <int kNumRanks>

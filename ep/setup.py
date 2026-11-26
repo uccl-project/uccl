@@ -305,7 +305,11 @@ if __name__ == "__main__":
 
         # Use auto-detected compute capability if available
         if detected_compute_cap:
-            default_arch = detected_compute_cap
+            default_arch = (
+                detected_compute_cap + "a"
+                if detected_compute_cap in {"10.3", "12.0"}
+                else detected_compute_cap
+            )
         else:
             # Fallback to 9.0 if detection failed
             default_arch = "9.0"
@@ -337,11 +341,11 @@ if __name__ == "__main__":
             nvcc_flags.append("-DDISABLE_SM90_FEATURES")
         else:
             # For SM90 and above, add register usage optimization
-            if float(default_arch) >= 9.0:
+            if target_versions and min(target_versions) >= 9.0:
                 nvcc_flags.extend(["--ptxas-options=--register-usage-level=10"])
 
         # Set architecture environment variable before creating CUDAExtension
-        device_arch = os.getenv("TORCH_CUDA_ARCH_LIST", default_arch)
+        device_arch = os.getenv("TORCH_CUDA_ARCH_LIST") or default_arch
         os.environ["TORCH_CUDA_ARCH_LIST"] = device_arch
     else:
         # AMD GPU Architecture Detection.
@@ -452,9 +456,13 @@ if __name__ == "__main__":
 
     # Disable LD/ST tricks, as some CUDA version does not support `.L1::no_allocate`
     # Only enable aggressive PTX instructions for SM 9.0+ (H100/H800/B200)
+    # TORCH_CUDA_ARCH_LIST may carry suffixes or several targets ("12.0a",
+    # "9.0;12.0+PTX"); float() rejects those and used to turn the tricks off.
     try:
-        arch_version = float(device_arch.strip())
-        if arch_version < 9.0:
+        arch_versions = _cuda_arch_versions(device_arch)
+        if not arch_versions:
+            raise ValueError(device_arch)
+        if min(arch_versions) < 9.0:
             os.environ["DISABLE_AGGRESSIVE_PTX_INSTRS"] = "1"
         else:
             # Enable aggressive PTX instructions for SM 9.0+

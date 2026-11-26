@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #if __CUDA_ARCH__
 #include <cuda_bf16.h>
@@ -35,7 +36,8 @@ void dispatch(void* recv_x, float* recv_x_scales, int* recv_src_idx,
               int num_experts, int num_scales, int scale_token_stride,
               int scale_hidden_stride, void** buffer_ptrs, int rank,
               int num_ranks, cudaStream_t stream, int num_sms,
-              int num_max_send_tokens, int num_recv_buffer_tokens);
+              int num_max_send_tokens, int num_recv_buffer_tokens,
+              std::size_t shared_mem_per_block_optin = 0);
 
 void cached_notify_combine(void** buffer_ptrs, int* send_head, int num_channels,
                            int num_recv_tokens, int num_memset_int,
