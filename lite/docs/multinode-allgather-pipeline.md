@@ -82,7 +82,7 @@ GPU count, and does not introduce a CPU-router policy entry.
 ## Reproduce
 
 Build and stage identical binaries and libraries on both hosts as described in
-[the measurement record](../benchmarks/data/ag_pipeline_2x4l4_20261115/README.md).
+[the measurement record](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/ag_pipeline_2x4l4_20261115/README.md).
 For an explicit 4 MiB-piece CE experiment:
 
 ```bash

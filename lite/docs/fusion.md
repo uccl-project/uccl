@@ -9,7 +9,7 @@ measure GEMM + AllReduce, GEMM + ReduceScatter, and AllGather + GEMM
 on the two-NUMA host. The refreshed four-GPU direct-peer results
 below use a different testbed and timing scope.
 
-The [November 15 eight-L4 review](../benchmarks/data/fusion_review_8l4_20261115/README.md)
+The [November 15 eight-L4 review](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/fusion_review_8l4_20261115/README.md)
 adds fresh sequential controls using the optimized standalone collective
 schedule. Historical fusion figures do not validate those later changes or
 establish a gain over the new sequential control. GPU progress and host-ring RS
@@ -38,8 +38,8 @@ selected path is faster at 19 of 24 measured dense operation/shape pairs;
 the five losses remain in the full sweep. These counts are descriptive, not
 significance tests. The
 [per-shape summary](../benchmarks/data/refresh_20261110/fusion_dense_summary.csv),
-[all variant samples](../benchmarks/data/refresh_20261110/fusion_dense_samples.csv),
-and [24 complete run logs](../benchmarks/data/refresh_20261110/fusion_dense_l40/)
+[all variant samples](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110/fusion_dense_samples.csv),
+and [24 complete run logs](https://github.com/zhongjiechen/uccl-zhongjie-dev/tree/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110/fusion_dense_l40)
 record the other paths and negative results.
 
 The BF16 full-layer MoE refresh uses the same host, CUDA and NCCL versions.
@@ -56,9 +56,9 @@ rank; all smaller measured batches lose to the complete-layer baseline.
 
 ![Fresh complete-layer latency bars for every measured MoE token count](assets/moe-fusion-4l4-refresh.svg)
 
-The [round samples](../benchmarks/data/refresh_20261110/fusion_moe_samples.csv),
+The [round samples](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110/fusion_moe_samples.csv),
 [full summary](../benchmarks/data/refresh_20261110/fusion_moe_summary.csv), and
-[complete log](../benchmarks/data/refresh_20261110/fusion_moe_l40.log) retain
+[complete log](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110/fusion_moe_l40.log) retain
 all small-batch regressions and the unfused UCCL Lite control. The older
 tables below remain historical measurements and are not substituted for this
 refresh.
@@ -84,13 +84,13 @@ and their cuBLAS+NCCL controls in one executable.
 | GEMM + RS, `(4096,12288,49152)` | 22.954 ms | 18.461 ms | 4.493 ms |
 | GEMM + AR, `(4096,12288,49152)` | 25.658 ms | 19.774 ms | 5.884 ms |
 
-![Paired latency bars for dense fusion and cuBLAS plus NCCL across eight model shapes per operation](assets/dense-fusion-shapes.svg)
+[Archived figure: Paired latency bars for dense fusion and cuBLAS plus NCCL across eight model shapes per operation](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/assets/dense-fusion-shapes.svg)
 
 The paired bars show absolute latency for every shape. The two columns use
 different labeled linear ranges so the sub-millisecond cases remain legible;
 longer bars mean slower operations. The large reference shapes are favorable,
 not averages. The retained
-[shape sweep](../benchmarks/data/dense_fusion.txt) includes regressions, including
+[shape sweep](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/dense_fusion.txt) includes regressions, including
 small GEMM+AllReduce cases. Flux uses a separate harness with different timing
 aggregation; approximately 1–2% differences should be treated as ties.
 
@@ -126,7 +126,7 @@ versus **8.241 ms** for NCCL + grouped cuBLAS; at 32,768 tokens/rank it takes
 token counts, grouped scheduling overhead exceeds
 the communication that can be hidden and fusion loses.
 
-![Paired full-layer latency bars for expert-parallel MoE at each recorded token count](assets/moe-fusion.svg)
+[Archived figure: Paired full-layer latency bars for expert-parallel MoE at each recorded token count](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/assets/moe-fusion.svg)
 
 The standalone harness constructs routing metadata outside primary timing.
 It is a kernel/layer benchmark, not complete model execution. The separate

@@ -1,25 +1,0 @@
-WARNING: Device-side CUDA Event completion trace is currently enabled.
-         This may increase runtime overhead and the likelihood of false
-         dependencies across CUDA Streams. If you wish to avoid this, please
-         disable the feature with --cuda-event-trace=false.
-Collecting data...
-# two-node host-RDMA AllGather; FP32; 4 GPUs/node; 2 MPI groups/node; 2 IB rails; chunk=262144 B; slots=3; download=packed-dma
-# host network=remote-multicast local_input=self gpu_workers=0 early_consume=1 progress=ready upload=dma lean_context=0 consume_threads=256 local_exchange=shared delay_rank=-1
-# timing=host enqueue+completion, slowest of 4 groups/8 GPUs; warmups=5 iterations=10 repeats=1; every output checked
-# packed schedule=three-slot pipeline; direct receive into eight source rows; 2D H2D copy or SM scatter per phase
-collective,bytes,backend,median_us,min_us,max_us
-# sample,allgather,16777216,host-rdma-multicast,1,1,734.929,0
-# sample,allgather,16777216,host-rdma-multicast,1,2,733.487,0
-# sample,allgather,16777216,host-rdma-multicast,1,3,734.158,0
-# sample,allgather,16777216,host-rdma-multicast,1,4,733.746,0
-# sample,allgather,16777216,host-rdma-multicast,1,5,734.142,0
-# sample,allgather,16777216,host-rdma-multicast,1,6,734.635,0
-# sample,allgather,16777216,host-rdma-multicast,1,7,1519.122,0
-# sample,allgather,16777216,host-rdma-multicast,1,8,748.632,0
-# sample,allgather,16777216,host-rdma-multicast,1,9,737.269,0
-# sample,allgather,16777216,host-rdma-multicast,1,10,732.919,0
-allgather,16777216,host-rdma-multicast,814.304,814.304,814.304
-Generating '/tmp/nsys-report-5598.qdstrm'
-[1/1] [0%                          ] packed_fixed_trace.nsys-rep[1/1] [0%                          ] packed_fixed_trace.nsys-rep[1/1] [5%                          ] packed_fixed_trace.nsys-rep[1/1] [================71%         ] packed_fixed_trace.nsys-rep[1/1] [=================74%        ] packed_fixed_trace.nsys-rep[1/1] [==================77%       ] packed_fixed_trace.nsys-rep[1/1] [========================100%] packed_fixed_trace.nsys-rep[1/1] [========================100%] packed_fixed_trace.nsys-rep
-Generated:
-	/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/ag_packed_fixed_20261117/packed_fixed_trace.nsys-rep

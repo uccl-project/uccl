@@ -1,5 +1,8 @@
 # NCCL memcpy tuning with ascending-size sweeps
 
+> This directory retains only inputs and metadata needed by current figures or checks. [Complete original experiment](https://github.com/zhongjiechen/uccl-zhongjie-dev/tree/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_ascending_pro6000_20261115) includes raw runs, removed scripts and source snapshots. Historical commands below require that archive.
+
+
 This follow-up uses the requested **small-to-large** test order for all three
 collectives. Every process creates its own communicator, starts at 1 KiB,
 and visits every power of two through 1 GiB while retaining that communicator.
@@ -42,7 +45,7 @@ the composite reference curve as one runtime-switching communicator.
 All six complete selection traces passed coverage checks. Tuned bulk paths
 log `P2P/CUMEM/CE`, while default paths use direct P2P. Large collectives still
 use Ring/Simple GPU kernels: this is the P2P transport's memcpy path, not
-the separate zero-CTA collective API. See [transport.json](transport.json).
+the separate zero-CTA collective API. See [transport.json](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_ascending_pro6000_20261115/transport.json).
 
 At 1 GiB the new NCCL values are comparable to the previously recorded UCCL
 peer reference. UCCL was not rerun in this measurement window, so small
@@ -87,19 +90,19 @@ The plotted reference is a calibrated default/memcpy comparison assembled
 from these full sweeps. It is not an online environment-variable switch or
 a claim that a newly created large-only communicator will work. The complete
 fixed-memcpy results, including small-message slowdowns, are retained separately
-in [fixed_config_cases.csv](fixed_config_cases.csv).
+in [fixed_config_cases.csv](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_ascending_pro6000_20261115/fixed_config_cases.csv).
 
 ## Artifacts
 
-- [run.py](run.py): calibration, final measurement and ascending transport traces.
-- [select.py](select.py): freezes configurations and per-size default fallback.
-- [analyze.py](analyze.py): reconstructs medians and verifies ascending sample order.
-- [check_traces.py](check_traces.py): verifies full size coverage and actual
+- [run.py](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_ascending_pro6000_20261115/run.py): calibration, final measurement and ascending transport traces.
+- [select.py](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_ascending_pro6000_20261115/select.py): freezes configurations and per-size default fallback.
+- [analyze.py](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_ascending_pro6000_20261115/analyze.py): reconstructs medians and verifies ascending sample order.
+- [check_traces.py](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_ascending_pro6000_20261115/check_traces.py): verifies full size coverage and actual
   default/memcpy transport selection.
-- [candidates.json](candidates.json), [schedule.json](schedule.json), and
-  [selection.json](selection.json): settings, decisions and freeze timestamp/hash.
+- [candidates.json](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_ascending_pro6000_20261115/candidates.json), [schedule.json](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_ascending_pro6000_20261115/schedule.json), and
+  [selection.json](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_ascending_pro6000_20261115/selection.json): settings, decisions and freeze timestamp/hash.
 - [cases.csv](cases.csv): plotted reference and fresh default bandwidths.
-- [fixed_config_cases.csv](fixed_config_cases.csv): full chosen memcpy curves.
+- [fixed_config_cases.csv](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_ascending_pro6000_20261115/fixed_config_cases.csv): full chosen memcpy curves.
 - `*_runs.json` and `*_hashes.json`: commands, settings, timestamps, outcomes
   and executable/source/library identity. The shared node lock is held and
   GPU occupancy is checked before every process.
@@ -112,7 +115,7 @@ Remote outputs are under
 Historical UCCL numbers are not rerun or substituted into these fresh NCCL results.
 
 Raw calibration, final samples and transport traces are packaged in
-[measurements.tar.gz](measurements.tar.gz). To verify offline, copy this
+[measurements.tar.gz](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_ascending_pro6000_20261115/measurements.tar.gz). To verify offline, copy this
 directory to a temporary location, extract the archive there, then run
 `python3 analyze.py` and `python3 check_traces.py`. The directly reviewable
 run manifests record exact commands and outcomes. [checksums.json](checksums.json)

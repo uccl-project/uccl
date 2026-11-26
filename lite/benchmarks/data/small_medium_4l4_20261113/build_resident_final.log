@@ -1,7 +1,0 @@
-/usr/local/cuda/bin/nvcc -O3 -arch=sm_89 -MMD -MP  -std=c++17 -I/home/zhongjie/third_party/mscclpp/include -I/home/zhongjie/third_party/mscclpp/build/include -I/home/zhongjie/third_party/nccl/build/include src/collectives/resident_collectives.cu -o build/uccl_lite_resident_collectives -L/home/zhongjie/third_party/nccl/build/lib -lnccl -Xlinker -rpath=/home/zhongjie/third_party/nccl/build/lib
-src/collectives/peer_ag_rs.cu(446): warning #177-D: variable "cross" was declared but never referenced
-      int local = rank ^ 1, cross = rank ^ 2;
-                            ^
-
-Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
-

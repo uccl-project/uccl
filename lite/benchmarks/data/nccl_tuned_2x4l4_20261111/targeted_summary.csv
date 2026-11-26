@@ -1,9 +1,0 @@
-collective,bytes,uccl_path,uccl_min_us,uccl_median_us,uccl_max_us,nccl_min_us,nccl_median_us,nccl_max_us,speedup,nccl_config,source
-allreduce,262144,serial-local,73.2778,74.3255,75.2524,135.042,135.8001,220.2371,1.827099716786298,RING+SIMPLE,paired_tuned/allreduce_262144
-allreduce,524288,serial-local,114.2894,114.7619,115.2038,154.3943,155.5115,208.4495,1.3550795168082788,RING+SIMPLE,paired_tuned/allreduce_524288
-allreduce,1048576,serial-local,194.702,206.2426,220.7547,204.7715,247.6296,452.7133,1.200671442272353,RING+SIMPLE,paired_tuned/allreduce_1048576
-allgather,262144,serial-local,43.2684,43.3806,43.8401,89.12,89.6768,114.2886,2.0672097665776867,RING+SIMPLE,paired_tuned/allgather_262144
-allgather,524288,serial-local,57.9896,59.7917,60.3649,99.3808,100.961,101.2209,1.6885454001140627,RING+SIMPLE,paired_tuned/allgather_524288
-reducescatter,131072,serial-local,36.2882,36.814099999999996,37.5062,77.8177,77.9495,141.9232,2.1173816553983396,RING+SIMPLE,paired_tuned/reducescatter_131072
-reducescatter,262144,serial-local,45.6392,47.5319,47.9744,81.2056,81.96809999999999,82.6868,1.724486081978629,RING+SIMPLE,paired_tuned/reducescatter_262144
-reducescatter,524288,serial-local,64.0666,66.859,67.50110000000001,90.2377,92.2274,157.4383,1.37943134058242,RING+SIMPLE,paired_tuned/reducescatter_524288

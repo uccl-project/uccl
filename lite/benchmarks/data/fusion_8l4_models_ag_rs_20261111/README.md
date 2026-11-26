@@ -1,5 +1,8 @@
 # Eight-L4 model-size AG+GEMM and GEMM+RS sweep (2026-11-11)
 
+> This directory retains only inputs and metadata needed by current figures or checks. [Complete original experiment](https://github.com/zhongjiechen/uccl-zhongjie-dev/tree/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/fusion_8l4_models_ag_rs_20261111) includes raw runs, removed scripts and source snapshots. Historical commands below require that archive.
+
+
 This sweep reuses the four model-derived `N,K` pairs from the
 [GEMM+AR sweep](../fusion_8l4_models_20261111/README.md) to compare fusion
 operations at the same tensor dimensions. These isolated operations are not
@@ -44,12 +47,12 @@ values across models.
 
 | Operation | Run 1 | Run 2 | Summary | Decode chart | Prefill chart |
 | --- | --- | --- | --- | --- | --- |
-| GEMM + RS | [CSV](samples_gemm_rs_run1.csv) | [CSV](samples_gemm_rs_run2.csv) | [CSV](summary_gemm_rs.csv) | [SVG](../../../docs/assets/fusion-8l4-model-gemm-rs-decode-labeled-bars.svg) | [SVG](../../../docs/assets/fusion-8l4-model-gemm-rs-prefill-labeled-bars.svg) |
-| AG + GEMM | [CSV](samples_ag_gemm_run1.csv) | [CSV](samples_ag_gemm_run2.csv) | [CSV](summary_ag_gemm.csv) | [SVG](../../../docs/assets/fusion-8l4-model-ag-gemm-decode-labeled-bars.svg) | [SVG](../../../docs/assets/fusion-8l4-model-ag-gemm-prefill-labeled-bars.svg) |
+| GEMM + RS | [CSV](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/fusion_8l4_models_ag_rs_20261111/samples_gemm_rs_run1.csv) | [CSV](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/fusion_8l4_models_ag_rs_20261111/samples_gemm_rs_run2.csv) | [CSV](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/fusion_8l4_models_ag_rs_20261111/summary_gemm_rs.csv) | [SVG](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/assets/fusion-8l4-model-gemm-rs-decode-labeled-bars.svg) | [SVG](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/assets/fusion-8l4-model-gemm-rs-prefill-labeled-bars.svg) |
+| AG + GEMM | [CSV](samples_ag_gemm_run1.csv) | [CSV](samples_ag_gemm_run2.csv) | [CSV](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/fusion_8l4_models_ag_rs_20261111/summary_ag_gemm.csv) | [SVG](../../../docs/assets/fusion-8l4-model-ag-gemm-decode-labeled-bars.svg) | [SVG](../../../docs/assets/fusion-8l4-model-ag-gemm-prefill-labeled-bars.svg) |
 
 The run logs record each exact command and the benchmark output:
-[RS run 1](gemm_rs_run1.log), [RS run 2](gemm_rs_run2.log),
-[AG run 1](ag_gemm_run1.log), [AG run 2](ag_gemm_run2.log).
+[RS run 1](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/fusion_8l4_models_ag_rs_20261111/gemm_rs_run1.log), [RS run 2](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/fusion_8l4_models_ag_rs_20261111/gemm_rs_run2.log),
+[AG run 1](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/fusion_8l4_models_ag_rs_20261111/ag_gemm_run1.log), [AG run 2](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/fusion_8l4_models_ag_rs_20261111/ag_gemm_run2.log).
 
 ## Reproduce
 

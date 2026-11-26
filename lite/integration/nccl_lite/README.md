@@ -61,16 +61,16 @@ requests, 256 input and 32 output tokens each; 32 running requests maximum.
 Three-run median whole-batch latency: **UCCL-Lite 14.72 s vs NCCL 15.84 s
 (7.1% lower)**. This workload includes queueing.
 
-![Whole-batch latency bar chart](../../docs/assets/sglang-e2e-latency-8l4.svg)
+[Archived figure: Whole-batch latency bar chart](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/assets/sglang-e2e-latency-8l4.svg)
 
-The [AG+gate integration report](fusion_ag_rs_8l4_20261112.md#integration-boundary-and-initial-probe)
+The [AG+gate integration report](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/integration/nccl_lite/fusion_ag_rs_8l4_20261112.md#integration-boundary-and-initial-probe)
 records the SGLang fusion boundary and initial standalone probe.
-The opt-in [MoE epilogue plus RS experiment](fusion_rs_8l4_20261112.md)
+The opt-in [MoE epilogue plus RS experiment](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/integration/nccl_lite/fusion_rs_8l4_20261112.md)
 adds the routed and shared BF16 outputs during packet RS upload. On the
 measured GLM-4.5-Air-FP8 EP8 server, its optimized variant reduced three-run
 median whole-batch time by 1.5%–3.2% for an 8-request short batch and
 2.5%–2.7% for a 32-request longer batch against before/after packet controls.
-The newer [AG+gate GEMM and RS integration](fusion_ag_rs_8l4_20261112.md)
+The newer [AG+gate GEMM and RS integration](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/integration/nccl_lite/fusion_ag_rs_8l4_20261112.md)
 adds an eight-rank decode AG+gate path. Its numerically matching cuBLAS
 configuration lowered the 8-request whole-batch median by 3.0% against
 packet mode, and a separate 256-output-token eight-request batch by
@@ -78,7 +78,7 @@ packet mode, and a separate 256-output-token eight-request batch by
 the measured 32- and 64-request workloads.
 The single-kernel AG+GEMM backend remains experimental because some gate
 BF16 logits differ from SGLang's original linear projection.
-The newer opt-in [row-ready MoE combine plus RS path](fusion_ready_rs_8l4_20261112.md)
+The newer opt-in [row-ready MoE combine plus RS path](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/integration/nccl_lite/fusion_ready_rs_8l4_20261112.md)
 lets a separate packet stream consume completed BF16 token rows. On an
 8-request, 256-output-token batch its three-run median was 35.314 s versus
 37.052/37.427 s for before/after packet controls (4.7%/5.6% lower) on the
@@ -92,7 +92,7 @@ size.
 Its 64-request result was a tentative 1.9% lower than packet; that control
 included one slow outlier. The recommended ready-combine path does not overlap
 the FP8 down GEMM itself.
-An [opt-in down GEMM readiness prototype](fusion_down_gemm_rs_8l4_20261112.md)
+An [opt-in down GEMM readiness prototype](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/integration/nccl_lite/fusion_down_gemm_rs_8l4_20261112.md)
 adds completion counters to the installed Triton FP8 kernel and passed its
 measured decode-shape numerical checks, but did not improve end-to-end time
 over the simpler ready-combine path.
@@ -155,7 +155,7 @@ AG/RS/AR measured 5.24/5.28/8.95 ms, versus 5.45/5.55/9.03 ms for the
 standalone router. The standalone benchmark owns all GPUs in one process;
 the proxy uses eight processes. These measurements do not establish
 performance equivalence on other hosts, CUDA versions, or call patterns.
-The [48-point CSV](perf_8l4_20261112.csv) contains every measured size.
+The [48-point CSV](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/integration/nccl_lite/perf_8l4_20261112.csv) contains every measured size.
 Both curves use one fixed size-adaptive configuration, rather than selecting
 the best separately measured variant at each point.
 
@@ -185,7 +185,7 @@ measurement. The prompts are synthetic incident-summary text repeated to reach
 the requested lengths, so these results establish performance for the listed
 shapes, not for a production prompt distribution. The two 512-token input
 cases have slightly better batch-tail TPOT with NCCL even though packet mode
-has lower TTFT and whole-batch time. The [raw 36-run CSV](e2e_workloads_20261112.csv)
+has lower TTFT and whole-batch time. The [raw 36-run CSV](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/integration/nccl_lite/e2e_workloads_20261112.csv)
 and [client](bench_e2e_workloads.py) are provided for reproduction. `batch_tail_tpot_ms`
 is `(last completion - last first token) / (output tokens - 1)`; the CSV also
 contains median per-request TTFT and TPOT.
@@ -228,8 +228,8 @@ packet mode improves p50 TTFT by 7.3% and p50 E2E by 1.2%, while NCCL
 finishes the final request 3.3% sooner. In the 31-request long-input
 window, packet mode improves p50 TTFT by 5.9%, p50 TPOT by 3.7%, and p50
 E2E by 5.2%. The replay client's maximum dispatch lag was below 4 ms in
-all runs. The [selected trace rows](burstgpt_windows_20261112.tsv),
-[18-run result file](burstgpt_trace_results_20261112.tsv), and
+all runs. The [selected trace rows](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/integration/nccl_lite/burstgpt_windows_20261112.tsv),
+[18-run result file](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/integration/nccl_lite/burstgpt_trace_results_20261112.tsv), and
 [replay client](bench_burstgpt_trace.py) retain the underlying measurements.
 
 To reproduce the prompt corpus prefix, fetch bytes `0-10485759` from the

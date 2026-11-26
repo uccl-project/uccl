@@ -1,5 +1,8 @@
 # Combined AllGather on latest uccl-lite, 2026-11-17
 
+> This directory retains only inputs and metadata needed by current figures or checks. [Complete original experiment](https://github.com/zhongjiechen/uccl-zhongjie-dev/tree/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/ag_combined_latest_2x4l4_20261117) includes raw runs, removed scripts and source snapshots. Historical commands below require that archive.
+
+
 The combined CE/SM implementation was ported onto **f9665eaead1eb13180628bf3861d004eebbda63e**,
 the latest `origin/uccl-lite` revision at validation time. It lives in that branch's
 `src/collectives/multinode_host_allgather.cu`, preserving its existing helpers and
@@ -71,7 +74,7 @@ in this record for both panels**: latency at 1 KiB–1 MiB and bus bandwidth at 
 Bus bandwidth is computed as `7N/(8t)` in decimal GB/s; it is not raw link bandwidth.
 
 All 66 plotted NCCL values are retained numerically unchanged from
-[the recorded figure inputs](../ag_latency_2x4l4_20261116/figure_inputs.csv).
+[the recorded figure inputs](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/ag_latency_2x4l4_20261116/figure_inputs.csv).
 Their latency controls come from the November 16 latency/recheck record; their
 throughput controls retain the original sources identified in that file and the
 [November 16 reference record](../nccl_tuned_2x4l4_20261116/README.md).
@@ -115,7 +118,7 @@ Positive latency change is slower; negative is faster. All times are microsecond
 | 512 MiB | shared-self-ce | 21410.208 | 20909.473 | -2.34% |
 | 1 GiB | shared-self-ce | 42808.707 | 41809.472 | -2.33% |
 
-![Fresh latest-branch combined-mode comparison](results.png)
+[Archived figure: Fresh latest-branch combined-mode comparison](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/ag_combined_latest_2x4l4_20261117/results.png)
 
 ## Reproduction
 

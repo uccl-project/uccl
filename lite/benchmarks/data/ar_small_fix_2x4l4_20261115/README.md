@@ -1,5 +1,8 @@
 # Restore small-message AllReduce latency, November 15
 
+> This directory retains only inputs and metadata needed by current figures or checks. [Complete original experiment](https://github.com/zhongjiechen/uccl-zhongjie-dev/tree/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/ar_small_fix_2x4l4_20261115) includes raw runs, removed scripts and source snapshots. Historical commands below require that archive.
+
+
 The explicit `--host-gather 1` AllReduce path now uses the existing single-CTA
 GPU AllReduce through **256 KiB**, followed by GPU ReduceScatter + host-packet
 AllGather from **512 KiB** upward. The measured 256-KiB cutoff avoids the
@@ -35,7 +38,7 @@ with the **unchanged recorded NCCL** rows from the preceding figure. No NCCL
 benchmark is run for this fix. NCCL error bars remain omitted; ranges remain
 in the CSV. Historical results are preserved separately.
 
-![Fixed AllReduce, small-message latency and full-range throughput](results.svg)
+[Archived figure: Fixed AllReduce, small-message latency and full-range throughput](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/ar_small_fix_2x4l4_20261115/results.svg)
 
 ## Results
 

@@ -50,7 +50,7 @@ NCCL curves are separate measurement windows, not fresh paired UCCL runs.
 
 For the documented two four-L4 FP32 eager setup, select
 `--host-gather 1 --host-oneshot 1` at the measured 1/2/4/8/16-KiB sizes.
-The [November 17 comparison](../benchmarks/data/host_oneshot_small_2x4l4_20261117/README.md)
+The [November 17 comparison](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/host_oneshot_small_2x4l4_20261117/README.md)
 measures 27.32 µs at 1 KiB versus 36.22 µs for the existing hierarchy, and
 32.43 versus 35.99 µs at 8 KiB. The 16-KiB median speedup is only 1.04x;
 at 32 KiB, host one-shot loses, 42.11 versus 39.63 µs. Omit `--host-oneshot`
@@ -68,7 +68,7 @@ Historical full-range figures below remain tied to their original sources.
 
 ## Historical AllReduce: full-range hybrid sweep
 
-![Current two-node FP32 AllReduce: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput](assets/collectives-2x4l4-allreduce-nccl-tuned.svg)
+[Archived figure: Current two-node FP32 AllReduce: 1 KiB–1 MiB latency and 1 MiB–1 GiB bus throughput](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/assets/collectives-2x4l4-allreduce-nccl-tuned.svg)
 
 The UCCL Lite curve in both panels uses the [small-message fix measurements](../benchmarks/data/ar_small_fix_2x4l4_20261115/README.md).
 The explicit path uses single-CTA GPU AllReduce through 256 KiB and GPU
@@ -83,25 +83,25 @@ Raw samples, ranges, hashes and reproduction commands remain in the record.
 
 ## Historical AllGather: NUMA host router
 
-![Two-node FP32 AllGather: CPU-router latency and throughput with prior and tuned NCCL](assets/collectives-2x4l4-allgather-nccl-tuned.svg)
+[Archived figure: Two-node FP32 AllGather: CPU-router latency and throughput with prior and tuned NCCL](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/assets/collectives-2x4l4-allgather-nccl-tuned.svg)
 
-The **1 KiB–1 MiB latency panel** uses the [fresh checked sweep](../benchmarks/data/ag_latency_2x4l4_20261116/README.md)
+The **1 KiB–1 MiB latency panel** uses the [fresh checked sweep](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/ag_latency_2x4l4_20261116/README.md)
 from current source: FP32, two four-L4 hosts, four MPI processes/two GPUs each,
 slowest-process host enqueue-to-completion timing. Three independent rounds use
 20 warmups/50 calls for UCCL and CE, and 100 warmups/200 calls for the
-[rechecked default/SM curves](../benchmarks/data/ag_latency_2x4l4_20261116/README.md#nccl-spike-recheck), checking every output. The host router keeps 256-KiB
+[rechecked default/SM curves](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/ag_latency_2x4l4_20261116/README.md#nccl-spike-recheck), checking every output. The host router keeps 256-KiB
 chunks. Default LL-path spikes remain measured; the latency SM tuned curve
 now uses fixed SIMPLE at all sizes. Points are medians of round
 means, not a best-variant-per-size selection.
 
-The **1 MiB–1 GiB throughput panel** retains the [November 15 host-router sweep](../benchmarks/data/ag_host_router_2x4l4_20261115/README.md)
+The **1 MiB–1 GiB throughput panel** retains the [November 15 host-router sweep](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/ag_host_router_2x4l4_20261115/README.md)
 and previously recorded tuned NCCL curves. These historical values do not
 validate the refreshed source. Regenerate the combined figure with
 `python3 benchmarks/data/ag_latency_2x4l4_20261116/plot.py`.
 
 ## Historical ReduceScatter: direct medium-message ring
 
-![Current two-node FP32 ReduceScatter latency and bus throughput](assets/collectives-2x4l4-reducescatter-nccl-tuned.svg)
+[Archived figure: Current two-node FP32 ReduceScatter latency and bus throughput](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/assets/collectives-2x4l4-reducescatter-nccl-tuned.svg)
 
 The [full-range paired measurements](../benchmarks/data/rs_direct_medium_2x4l4_20261115/README.md)
 compare the candidate against the actual 96-CTA/512-thread/8-MiB-target tuned
@@ -110,12 +110,12 @@ direct-ring piece. Other sizes and hybrid AllReduce's RS selection are preserved
 Both controls use eight L4 GPUs, eight MPI ranks, FP32 input bytes per GPU,
 slowest-rank host timing, and three alternating rounds of ten warmups plus ten
 checked calls. The figure's prior NCCL curve retains the historical November 11 data. The rule is fixed, not a measured variant envelope.
-The [exploratory screen](../benchmarks/data/rs_full_screen_2x4l4_20261115/README.md)
+The [exploratory screen](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/rs_full_screen_2x4l4_20261115/README.md)
 preserves the rejected launch, larger-piece and fused-forwarding results.
 
 ## Historical direct local schedules (November 11)
 
-The [November 11 two-node paired sweep](../benchmarks/data/multinode_serial_20261111/README.md)
+The [November 11 two-node paired sweep](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/multinode_serial_20261111/README.md)
 uses one CTA per GPU to visit the three local CUDA-IPC peers sequentially.
 GPU semaphores complete the local phases while the IB PortChannel remains
 independent. AllReduce uses direct local ReduceScatter, IB exchange, and
@@ -126,11 +126,11 @@ host multicast candidate through 256 KiB and resumes the direct candidate at
 ReduceScatter uses direct local writes and reduction through 1 MiB. Larger
 sizes retain the previously measured ring and packed paths.
 
-![Two-node AllReduce latency and bus throughput](assets/collectives-2x4l4-allreduce-optimized.svg)
+[Archived figure: Two-node AllReduce latency and bus throughput](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/assets/collectives-2x4l4-allreduce-optimized.svg)
 
-![Two-node AllGather: host multicast at 1–256 KiB](assets/collectives-2x4l4-allgather-host-multicast.svg)
+[Archived figure: Two-node AllGather: host multicast at 1–256 KiB](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/assets/collectives-2x4l4-allgather-host-multicast.svg)
 
-![Two-node ReduceScatter latency and bus throughput](assets/collectives-2x4l4-reducescatter-optimized.svg)
+[Archived figure: Two-node ReduceScatter latency and bus throughput](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/assets/collectives-2x4l4-reducescatter-optimized.svg)
 
 These November 11 figures match eight FP32 GPUs, full bytes per GPU,
 slowest-process host enqueue+completion timing, 20 warmups, three alternating
@@ -140,14 +140,14 @@ their paired NCCL 2.28.7 controls **69.57/60.62/42.61 µs**. AllGather's
 selected point uses four MPI processes; AR/RS use eight. At 1 KiB, AR loses;
 the host-multicast AG median wins, with a retained outlier round. AR/RS and
 the larger AG points use the
-[tuned NCCL protocol policy](../benchmarks/data/nccl_tuned_2x4l4_20261111/README.md).
+[tuned NCCL protocol policy](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_tuned_2x4l4_20261111/README.md).
 The host-multicast AG points use default NCCL through 64 KiB and RING+SIMPLE
 at 128/256 KiB. Every selected point has its own paired NCCL control.
 The latency panels retain the same linear style as the eight-L4 figures.
-The [selected AllGather data](../benchmarks/data/host_multicast_selected_2x4l4_20261111/README.md)
+The [selected AllGather data](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/host_multicast_selected_2x4l4_20261111/README.md)
 records the four-process host path through 256 KiB and the eight-process
 direct path after that threshold, each with a same-harness paired NCCL control.
-The [targeted NCCL diagnosis](../benchmarks/data/nccl_spike_2x4l4_20261111/README.md)
+The [targeted NCCL diagnosis](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_spike_2x4l4_20261111/README.md)
 shows that default `RING + LL` causes the spike on this topology; forcing
 `SIMPLE` while keeping the ring and two channels removes it. The exact
 internal LL wait remains unisolated.
@@ -174,8 +174,8 @@ than NCCL; the later large-message crossover remains visible in the
 recorded CSVs. The NCCL AR 1-MiB timing anomaly is retained separately and is
 not treated as a stable gain.
 
-[Complete optimized summary](../benchmarks/data/optimization_20261110/multinode_summary.csv) ·
-[raw logs, per-call samples and ablations](../benchmarks/data/optimization_20261110/README.md).
+[Complete optimized summary](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/optimization_20261110/multinode_summary.csv) ·
+[raw logs, per-call samples and ablations](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/optimization_20261110/README.md).
 
 ## Timing correction for the earlier peer sweep
 
@@ -204,11 +204,11 @@ Each warmup and timed call's complete output is checked. The custom NCCL
 AR/AG/RS control uses the same rank layout, `ibp55s0f0` bootstrap interface,
 and `mlx5_0,mlx5_1` rails; P2P/GDR use NCCL defaults.
 
-![Fresh two-node AllReduce latency and bus throughput](assets/collectives-2x4l4-allreduce-refresh.svg)
+[Archived figure: Fresh two-node AllReduce latency and bus throughput](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/assets/collectives-2x4l4-allreduce-refresh.svg)
 
-![Fresh two-node AllGather latency and bus throughput](assets/collectives-2x4l4-allgather-refresh.svg)
+[Archived figure: Fresh two-node AllGather latency and bus throughput](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/assets/collectives-2x4l4-allgather-refresh.svg)
 
-![Fresh two-node ReduceScatter latency and bus throughput](assets/collectives-2x4l4-reducescatter-refresh.svg)
+[Archived figure: Fresh two-node ReduceScatter latency and bus throughput](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/assets/collectives-2x4l4-reducescatter-refresh.svg)
 
 | Complete bytes/rank | AR UCCL / NCCL (ms) | AG UCCL / NCCL (ms) | RS UCCL / NCCL (ms) |
 | ---: | ---: | ---: | ---: |
@@ -220,7 +220,7 @@ All three UCCL paths lose at 1 KiB. NCCL AR at 1 MiB has a repeated,
 highly variable delay; the targeted recheck and raw samples are retained.
 No stable 1-MiB gain is claimed from that point.
 
-[AR/AG/RS full summary](../benchmarks/data/refresh_20261110/multinode_paired_summary.csv) ·
+[AR/AG/RS full summary](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110/multinode_paired_summary.csv) ·
 [raw logs, per-call samples and topology](../benchmarks/data/refresh_20261110/README.md).
 
 All network benchmarks use two nodes with four L4 GPUs each. Local ranks 0/1
@@ -249,7 +249,7 @@ The reference sweep searches 1/2/4/8 MiB pieces (`-k`) and pipeline distances
 number cannot establish a speedup from this archive. Small UCCL messages
 incur an approximately 80 µs floor from dependent proxy phases.
 
-A historical [fixed-configuration sweep](../benchmarks/data/multinode_peer_20261110/summary_ar.csv)
+A historical [fixed-configuration sweep](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/multinode_peer_20261110/summary_ar.csv)
 records in-place AllReduce with the same UCCL Lite path at every size. Its
 mixed-timer NCCL ratios are diagnostic only and are excluded from the new
 comparison. This fixed-path archive is separate from the older
@@ -284,7 +284,7 @@ experiments remain archived but are excluded from the final comparison.
 The older AG/RS/AR sweep used three alternating repetitions, five warmups,
 and ten calls per repetition on eight FP32 ranks. UCCL Lite reported
 CUDA-event time, while MPI-enabled `nccl-tests` 2.19.7 with NCCL 2.28.7
-reported host time. The [complete raw logs and mixed-timer figures](../benchmarks/data/multinode_peer_20261110/README.md)
+reported host time. The [complete raw logs and mixed-timer figures](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/multinode_peer_20261110/README.md)
 remain available to inspect transport behavior, regressions, and the anomalous
 512-KiB NCCL point. They are excluded from the refreshed README comparison.
 
@@ -298,7 +298,7 @@ the other local group's shards. Two GPUs per group read the shared packet
 through mapped host memory. Three slots overlap upload, UCX/IB transfer,
 and GPU multicast, with sender and reader completions guarding reuse.
 
-The [checked small/medium comparison and raw data](../benchmarks/data/host_rdma_multicast_2x4l4_20261111/README.md)
+The [checked small/medium comparison and raw data](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/host_rdma_multicast_2x4l4_20261111/README.md)
 separates UCX automatic transport from forced `put_zcopy` RDMA WRITE. In
 three-way alternating rechecks, the automatic eager path takes 24.97 µs at
 1 KiB versus direct UCCL 30.66 µs and NCCL 32.53 µs. At 2 MiB, forced
@@ -308,7 +308,7 @@ UCCL and loses to NCCL; the 1-GiB path is slower. These candidate runs
 use four MPI processes controlling eight GPUs, while the direct path and
 the previous main NCCL control use eight processes. The path remains opt-in
 at runtime. The historical AllGather figure selected its UCX-auto variant
-through 256 KiB; the [selection record](../benchmarks/data/host_multicast_selected_2x4l4_20261111/README.md)
+through 256 KiB; the [selection record](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/host_multicast_selected_2x4l4_20261111/README.md)
 documents the MPI layout change and the 256-KiB regression versus direct UCCL.
 
 ## Pinned-host CPU router

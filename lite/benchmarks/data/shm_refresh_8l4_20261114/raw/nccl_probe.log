@@ -1,4 +1,0 @@
-# 8xL4 SHM: 24 physically accessible directed peer links disabled by benchmark policy; NCCL P2P disabled and SHM enabled
-all_reduce 1024: CPU-router disabled by caller
-all_gather 1024: CPU-router disabled by caller
-reduce_scatter 1024: CPU-router disabled by caller

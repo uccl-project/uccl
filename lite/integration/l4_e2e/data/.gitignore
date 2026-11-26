@@ -1,3 +1,0 @@
-# Retain benchmark evidence despite the repository-wide JSON/log ignores.
-!*.json
-!*.log

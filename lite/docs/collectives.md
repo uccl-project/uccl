@@ -26,7 +26,7 @@ order; each has five warmups and ten timed calls. Every warmup and timed
 call's complete output is checked. The UCCL path is selected by the lowest
 correct three-run median at each size, independently of NCCL's time.
 
-![Fresh four-L4 AllReduce latency and bus throughput versus NCCL](assets/collectives-4l4-allreduce-refresh.svg)
+[Archived figure: Fresh four-L4 AllReduce latency and bus throughput versus NCCL](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/assets/collectives-4l4-allreduce-refresh.svg)
 
 | Complete bytes/rank | UCCL path | UCCL / NCCL (µs) |
 | ---: | --- | ---: |
@@ -36,10 +36,10 @@ correct three-run median at each size, independently of NCCL's time.
 | 1 GiB | A3-ring-ce | 80373.248 / 88315.409 |
 
 The selected path wins at 18 of 21 sizes; all three losses remain in the
-[candidate table](../benchmarks/data/refresh_20261110/single_native_candidates.csv).
-The [full selected summary](../benchmarks/data/refresh_20261110/single_native_summary.csv),
-[per-call samples](../benchmarks/data/refresh_20261110/single_native_samples.csv),
-and [paired raw logs](../benchmarks/data/refresh_20261110/single_native_l40/)
+[candidate table](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110/single_native_candidates.csv).
+The [full selected summary](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110/single_native_summary.csv),
+[per-call samples](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110/single_native_samples.csv),
+and [paired raw logs](https://github.com/zhongjiechen/uccl-zhongjie-dev/tree/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110/single_native_l40)
 retain every size. This host-clock curve is separate from the peer AG/RS
 CUDA-event sweep and the eight-L4 BF16 CPU router.
 
@@ -78,7 +78,7 @@ ranks, bus bandwidth is algorithm bandwidth multiplied by `2*(4-1)/4 = 1.5`.
 Single-CTA serial peer-write AllReduce prototypes were checked on both
 four-L4 hosts. They did not give a repeatable gain over A1/A2, especially
 above 32 KiB, so the selected AllReduce algorithms and figure are unchanged.
-The [source and negative measurements](../benchmarks/data/rs_ar_serial_4l4_20261111/README.md)
+The [source and negative measurements](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/rs_ar_serial_4l4_20261111/README.md)
 are retained separately from the NCCL-paired result.
 
 ## All-to-All
@@ -127,7 +127,7 @@ eight inputs to pinned host buffers, reduces BF16 values with CPU workers,
 and uploads the result. Larger reductions use peer-group GPU partials and
 host staging. It does not link NCCL or MSCCL++.
 
-The [paired eight-L4 calibration](../benchmarks/data/local_fallback_8l4_20261110_v3/README.md)
+The [paired eight-L4 calibration](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/local_fallback_8l4_20261110_v3/README.md)
 retains local AllGather at 1 GiB under the selection margin. The local AR/RS
 paths are slower and remain explicit negative results; the measurement-gated
 dispatcher chooses the router for them on this host. With 128 KiB packets
@@ -143,7 +143,7 @@ compares two project-owned out-of-place paths on the same two-NUMA topology:
 NUMA-pinned host staging for every nonself chunk, and local CUDA peer copies
 with host staging across the NUMA groups. Both exchange equal rank-ordered
 chunks and check every output element on all eight GPUs. The external control
-uses grouped NCCL send/recv pairs. The [full 1 MiB–1 GiB record](../benchmarks/data/alltoall_8l4_20261110/README.md)
+uses grouped NCCL send/recv pairs. The [full 1 MiB–1 GiB record](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/alltoall_8l4_20261110/README.md)
 finds host staging the faster UCCL Lite candidate at all 11 sizes, while
 NCCL wins all 11. This is a standalone eager benchmark, not a runtime
 All-to-All selector.

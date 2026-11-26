@@ -1,5 +1,0 @@
-{
-  "decision": "Repeat the entire second AllReduce ABBA round, irrespective of its recovered performance ratios; preserve original logs. Retain the completed first AllReduce round and both completed AG/RS rounds.",
-  "reason": "Candidate job 6 completed with valid numerical/route/conclusion logs, but its process exit status was lost when the controller session ended. Completion requires observed successful exits.",
-  "time_utc": "2026-11-17T23:12:51.293602+00:00"
-}

@@ -1,5 +1,8 @@
 # Qualified strict UCCL Lite NCCL replacement
 
+> This directory retains only inputs and metadata needed by current figures or checks. [Complete original experiment](https://github.com/zhongjiechen/uccl-zhongjie-dev/tree/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/uccl_reference_gap_20261118/reference_protocol/qualified_release) includes raw runs, removed scripts and source snapshots. Historical commands below require that archive.
+
+
 **All 126/126 aligned size/layout points pass the zero-slowdown criterion versus
 the frozen original README UCCL Lite implementations.** All 9 unchanged nccl-tests
 sweeps pass numerical, route and native-absence checks. The default Makefile policy
@@ -34,7 +37,7 @@ Both hosts have no active nsys sessions before or after the campaign.
 | AR | 42/42 | 0.963631707 |
 | RS | 42/42 | 0.999463772 |
 
-![Full paired comparison](../graph512_full/paired_ratios.png)
+[Archived figure: Full paired comparison](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/uccl_reference_gap_20261118/reference_protocol/graph512_full/paired_ratios.png)
 
 The 9 stock nccl-tests jobs use 20 warmups, 30 timed iterations and 3 repetitions per
 operation, covering both layouts. Their batch timing comparison is diagnostic;
@@ -99,10 +102,10 @@ and concurrent communicators are outside this qualification.
 
 [Build, launcher and API scope](../../../../../integration/nccl_lite/MSCCLPP.md)
 are documented separately. Full measurement logs and exact commands are in the
-[fixed-library report](../graph512_full/README.md); the machine-readable
-[completion audit](completion_audit.json), default ABI/smoke logs, policy-build
+[fixed-library report](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/uccl_reference_gap_20261118/reference_protocol/graph512_full/README.md); the machine-readable
+[completion audit](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/uccl_reference_gap_20261118/reference_protocol/qualified_release/completion_audit.json), default ABI/smoke logs, policy-build
 records and local build-input snapshot are included here. External SDK and
 MSCCL++ dependencies are hashed, not vendored.
 
-[Per-size stock nccl-tests tables versus the old standalone measurements](nccl_tests_vs_old.md)
+[Per-size stock nccl-tests tables versus the old standalone measurements](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/uccl_reference_gap_20261118/reference_protocol/qualified_release/nccl_tests_vs_old.md)
 explicitly separate the two timing protocols; both layouts are included.

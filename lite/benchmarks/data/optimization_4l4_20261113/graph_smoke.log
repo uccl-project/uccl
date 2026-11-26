@@ -1,8 +1,0 @@
-peer AG/RS: operation not permitted when stream is capturing
-# four L4 peer AG/RS, float32; NCCL version=22807; warmups=2 iterations=3 repeats=3
-# full bytes per rank; slowest-rank per-call CUDA-event microseconds; median of run-level means; every warmup and timed output checked
-# direct peer-read path eligible through 32768 bytes
-# compact peer completion through AG 262144 B, RS 65536 B
-# RS direct self contribution at 256 KiB, 1-8 MiB, and >=32 MiB
-# execution=graph-replay; rs-ring-chunk=8388608 B
-collective,bytes,backend,median_us,min_us,max_us

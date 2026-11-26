@@ -1,5 +1,0 @@
-bytes,source_bytes,packet_bytes_per_source,tiles,gpu0_ready0_us,gpu0_copy0_us,gpu0_total_us,slowest_profiled_gpu_total_us,paired_router_us,paired_peer_us,source
-4194304,1048576,524288,2,64.5,66.6,218.1,222.2,298.544,241.8304,profile_4m.log
-8388608,2097152,1048576,2,93.2,131.1,360.4,376.8,479.072,407.6448,profile_8m.log
-16777216,4194304,1048576,4,81.9,141.3,656.4,681.0,783.232,739.9264,profile_16m.log
-33554432,8388608,1048576,8,88.1,130.0,1242.1,1248.3,1356.5376,1474.5792000000001,profile_32m.log

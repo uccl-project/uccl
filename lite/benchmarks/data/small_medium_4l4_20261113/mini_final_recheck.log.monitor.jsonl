@@ -1,9 +1,0 @@
-{"time": "2026-11-13T21:23:10.061390+00:00", "event": "availability", "pids": []}
-{"time": "2026-11-13T21:23:10.606694+00:00", "event": "start", "command": ["./build/uccl_lite_peer_ag_rs", "--ag-only", "--mini-host-max-bytes", "16777216", "--push-grid-blocks", "16", "-b", "1048576", "-e", "16777216", "-w", "20", "-n", "10", "-r", "3"]}
-{"time": "2026-11-13T21:23:10.767563+00:00", "event": "sample", "child": 1517312, "pids": [], "foreign": []}
-{"time": "2026-11-13T21:23:11.333468+00:00", "event": "sample", "child": 1517312, "pids": [1517312], "foreign": []}
-{"time": "2026-11-13T21:23:11.880141+00:00", "event": "sample", "child": 1517312, "pids": [1517312], "foreign": []}
-{"time": "2026-11-13T21:23:12.424053+00:00", "event": "sample", "child": 1517312, "pids": [1517312], "foreign": []}
-{"time": "2026-11-13T21:23:12.979184+00:00", "event": "sample", "child": 1517312, "pids": [1517312], "foreign": []}
-{"time": "2026-11-13T21:23:13.520498+00:00", "event": "sample", "child": 1517312, "pids": [], "foreign": []}
-{"time": "2026-11-13T21:23:13.520636+00:00", "event": "finish", "status": 0, "contaminated": false}

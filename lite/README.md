@@ -11,7 +11,7 @@
 
 The topology-driven runtime's organization and current limits are described in
 [the current capability audit](docs/topology-runtime-status.md), with detailed
-evidence in [the migration record](docs/topology-runtime-refactor.md). The common
+evidence in [the migration record](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/topology-runtime-refactor.md). The common
 `nccl-runtime` entry point now offers
 [collective prepared peer/host selection](docs/prepared-local-runtime.md)
 for BF16/FP32 single-host workloads. The core also supports
@@ -128,7 +128,7 @@ DP2 × shard4; global batch doubles with GPU count (weak scaling).
   </tr>
 </table>
 
-[Experiment setup, numerical checks and raw data](integration/l4_e2e/README.md).
+[Experiment setup, numerical checks and retained summaries](integration/l4_e2e/README.md).
 
 #### Testbed 4
 
@@ -312,9 +312,9 @@ The `Process (CPU)` operators can be used in different collectives:
 - [Fusion design and workloads](docs/fusion.md)
 - [NCCL drop-in and SGLang integration](integration/nccl_lite/README.md)
 - [Strict eight-L4 NCCL `.so` replacement and nccl-tests validation](integration/nccl_lite/LOCAL8.md)
-- [Full measurement files](benchmarks/README.md) and [validation limits](docs/validation.md)
+- [Retained measurement inputs](benchmarks/README.md) and [validation limits](docs/validation.md)
 
 UCCL Lite provides specialized research kernels and benchmarks, with an
 experimental NCCL compatibility layer and SGLang hooks under `integration/`.
-The project follows the repository [license](../../LICENSE); the adapted CUTLASS wrapper retains
+The project follows the repository [license](../LICENSE); the adapted CUTLASS wrapper retains
 its [upstream notice](NOTICE.md).

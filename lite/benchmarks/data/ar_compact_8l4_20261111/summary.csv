@@ -1,3 +1,0 @@
-bytes,uccl_run1_us,uccl_run2_us,uccl_median_us,local_median_us,nccl_median_us,speedup_vs_nccl
-131072,203.264,201.728,202.496,242.816,216.576,1.0695
-262144,229.888,233.984,231.936,320.536,308.224,1.3289

@@ -1,4 +1,0 @@
-workers=0 chunk=128 local=self
-workers=0 chunk=256 local=self
-workers=1 chunk=128 local=self
-workers=1 chunk=256 local=self

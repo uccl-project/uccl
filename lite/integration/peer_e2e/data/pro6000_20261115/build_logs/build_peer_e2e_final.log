@@ -1,6 +1,0 @@
-make: Entering directory '/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/integration/peer_e2e'
-/opt/pytorch/cuda/bin/nvcc -shared -arch=sm_120 ../../build/peer_e2e/bridge.o ../../build/peer_e2e/peer.o ../../build/cpu_router/libuccl_lite_cpu_router.a -L/home/xinze/dev/FreeToken-dev/.venv/lib/python3.12/site-packages/nvidia/nccl/lib -lnccl -L/opt/pytorch/cuda/lib -lcudart -Xcompiler=-pthread -ldl -Xlinker=-rpath,/home/xinze/dev/FreeToken-dev/.venv/lib/python3.12/site-packages/nvidia/nccl/lib -Xlinker=-rpath,/opt/pytorch/cuda/lib -o ../../build/peer_e2e/libuccl_lite_peer_e2e.so
-/usr/bin/ld: cannot find -lnccl: No such file or directory
-collect2: error: ld returned 1 exit status
-make: *** [Makefile:21: ../../build/peer_e2e/libuccl_lite_peer_e2e.so] Error 1
-make: Leaving directory '/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/integration/peer_e2e'

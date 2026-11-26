@@ -1,5 +1,8 @@
 # FP32 collectives with default and tuned SM/CE NCCL on eight RTX PRO 6000 GPUs
 
+> This directory retains only inputs and metadata needed by current figures or checks. [Complete original experiment](https://github.com/zhongjiechen/uccl-zhongjie-dev/tree/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/pro6000_nccl_baselines_cpp_20261116) includes raw runs, removed scripts and source snapshots. Historical commands below require that archive.
+
+
 All three figures compare **UCCL Lite**, **NCCL (tuned SM/CE)**, and
 **NCCL (default)** using fresh five-round measurements. AllReduce's NCCL
 baseline is newly calibrated across SM and CE configurations. The earlier
@@ -9,8 +12,8 @@ records; their timings do not enter these figures.
 
 [AllReduce samples](allreduce.csv) ·
 [AllGather samples](allgather.csv) · [ReduceScatter samples](reducescatter.csv) ·
-[frozen policy](policy.json) · [configuration catalog](configurations.json) ·
-[raw evidence](measurements.tar.gz) · [provenance](provenance.json)
+[frozen policy](policy.json) · [configuration catalog](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/pro6000_nccl_baselines_cpp_20261116/configurations.json) ·
+[raw evidence](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/pro6000_nccl_baselines_cpp_20261116/measurements.tar.gz) · [provenance](provenance.json)
 
 | Operation | Lite median wins vs tuned | Lite median wins vs default | Sizes where tuned NCCL matches or beats Lite |
 | --- | ---: | ---: | --- |

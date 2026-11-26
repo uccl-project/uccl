@@ -1,8 +1,0 @@
-name, driver_version
-NVIDIA L4, 580.178.04
-NVIDIA L4, 580.178.04
-NVIDIA L4, 580.178.04
-NVIDIA L4, 580.178.04
-721a5a6b2ddf63e3ca923a2252a0a8c923ef2599aa98808679f0c29653c89b25  /home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/multinode_pull_20261115/uccl_lite_multinode_allreduce
-596d650299d33b86fb18f68d9394ce01996ee45e0181f68c6e5e9069189bfe70  /home/zhongjie/third_party/mscclpp/build-ib-pcieccl/lib/libmscclpp.so
-ad951367f06580b8b4597ef97772a1eda6bf7c0162967bcfef7efdc127ac5449  /home/zhongjie/third_party/nccl/build/lib/libnccl.so

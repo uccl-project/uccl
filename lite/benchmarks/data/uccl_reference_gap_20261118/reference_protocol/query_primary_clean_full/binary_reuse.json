@@ -1,6 +1,0 @@
-{
-  "source": "build/uccl_query_primary",
-  "sha256": "0adc90877552af4d3585b08591b950aaedc38bb8849835649e7be57be9213f53",
-  "rebuilt": false,
-  "reason": "full repeat after stopping orphaned UCCL profiling sessions; same binary, original reference and protocol"
-}

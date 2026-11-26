@@ -1,1 +1,0 @@
-/usr/local/cuda/bin/nvcc -O3 -arch=sm_89 -MMD -MP  -std=c++20 -I/home/zhongjie/third_party/mscclpp/include -I/home/zhongjie/third_party/mscclpp/build/include src/collectives/allreduce.cu -o build/uccl_lite_allreduce -L/home/zhongjie/third_party/mscclpp/build/lib -lmscclpp -Xlinker -rpath=/home/zhongjie/third_party/mscclpp/build/lib -lcudart -lpthread

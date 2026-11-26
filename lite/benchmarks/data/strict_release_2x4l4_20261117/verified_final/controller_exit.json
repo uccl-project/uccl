@@ -1,9 +1,0 @@
-{
-  "exit_code": 0,
-  "job_exit_codes": {
-    "all_reduce_4_native": 0,
-    "all_reduce_5_candidate": 0,
-    "all_reduce_6_candidate": 0,
-    "all_reduce_7_native": 0
-  }
-}

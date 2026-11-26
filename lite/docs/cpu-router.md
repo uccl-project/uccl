@@ -3,7 +3,7 @@
 The opt-in [reduction-placement experiment](reduction-placement.md) adds
 destination-GPU arithmetic and interleaved scatter packets to the C++ module.
 Existing CPU defaults and measurement-gated fallback behavior are retained.
-The subsequent [GPU progress experiment and baseline comparison](baseline-comparison.md)
+The subsequent [GPU progress experiment and baseline comparison](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/baseline-comparison.md)
 remove CPU packet-routing workers in an explicit GPU-reduction configuration.
 
 CPU-router is an independent component for routing BF16 collective traffic
@@ -81,7 +81,7 @@ AllGather outputs of at least 4 MiB. On 8xL4 GPU, the benchmark sets it to
 `--large-ag-packet-bytes 2097152`. This packet setting is also included in
 the profile identity.
 
-A [NUMA-local cache probe](../benchmarks/data/ddio_8l4_20261111/README.md)
+A [NUMA-local cache probe](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/ddio_8l4_20261111/README.md)
 measured the same CPU BF16 reduction after GPU writes to mapped host memory.
 Evicting those writes increased reduction time at packet-sized working sets.
 The probe establishes cache sensitivity, but this virtualized host does not
@@ -108,20 +108,20 @@ evidence, it stays on its existing backend and does not allocate router buffers
 or start workers. Local evidence can opt in on any supported topology if it
 actually demonstrates a stable gain; four GPUs are not categorically forbidden.
 
-The [November 11 four-L4 calibration](../benchmarks/data/cpu_router_4l4_apply_20261111/README.md)
+The [November 11 four-L4 calibration](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/cpu_router_4l4_apply_20261111/README.md)
 provides local BF16 evidence on `mibura-sky-test-02`. Its NCCL-backed
-automatic replay was a diagnostic experiment. The [archived BF16 figures](../benchmarks/data/cpu_router_4l4_figures_20261111/README.md)
+automatic replay was a diagnostic experiment. The [archived BF16 figures](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/cpu_router_4l4_figures_20261111/README.md)
 run the UCCL Lite CPU router at **all sizes** for AR, AG, and RS, including
 losses; NCCL is only an external paired control. This machine has peer
 access between all four GPUs, but the 8×L4 compact AR and GPU-progress RS
 variants did not yield stable gains.
-An [NCCL transport trace](../benchmarks/data/cpu_router_4l4_workers_20261111/README.md)
+An [NCCL transport trace](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/cpu_router_4l4_workers_20261111/README.md)
 shows `SHM/direct/direct` on every Ring edge here, even though CUDA reports
 peer capability. The transport distinction is host-packet upload-once fan-out
 versus repeated SHM Ring hops, not router host traffic versus NCCL direct
 GPU P2P.
 
-The [worker-count follow-up](../benchmarks/data/cpu_router_4l4_workers_20261111/README.md)
+The [worker-count follow-up](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/cpu_router_4l4_workers_20261111/README.md)
 shows why the eight-L4 default of 23 workers per NUMA is not a suitable
 resource default for this four-L4 host: it occupies nearly all 24 logical
 CPUs per node, while large AllGather is equally fast with eight workers
@@ -129,7 +129,7 @@ on distinct physical cores. The new **AllGather-only** eight-worker profile
 had seven stable AG sizes in either placement under the older auto-policy
 diagnostic. Fewer workers did not rescue AR/RS and made large AR slower,
 so this host-specific profile does not change the module's global default.
-The subsequent [AllGather transport-geometry sweep](../benchmarks/data/cpu_router_ag_4l4_geometry_20261111/README.md)
+The subsequent [AllGather transport-geometry sweep](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/cpu_router_ag_4l4_geometry_20261111/README.md)
 finds that the original 64-block grid and small per-source tiles limit the
 four-L4 large-message path. A machine-specific 248-block upper bound
 (180 actual blocks at 1 GiB), 4-MiB-cap profile
@@ -137,7 +137,7 @@ cuts out-of-place 1-GiB AG from about 42.8 to 37.6 ms in separate checked
 paired windows, with NCCL near 48.1 ms in both. The historical auto-policy
 replay would have chosen its NCCL control at 4/8 MiB, where the larger grid
 regresses. Those losses remain visible in the archived BF16 router-only
-figure. The [current FP32 AllGather figure](../benchmarks/data/fp32_packet_ag_per_source_4l4_20261111/README.md)
+figure. The [current FP32 AllGather figure](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/fp32_packet_ag_per_source_4l4_20261111/README.md)
 uses direct GPU paths through 8 MiB, then a per-source GPU-progress
 host-packet variant from 16 MiB onward, with no NCCL fallback in the
 UCCL curve.
@@ -146,11 +146,11 @@ own system-release `uploaded` flag. Consumer blocks assigned to that source
 wait only for that flag and start copying its tile immediately; one leader
 then fans out readiness through GPU-local memory. A final consumer barrier
 precedes reader-credit publication, so the two packet slots remain safe to
-reuse. The [four-L4 FP32 ablation](../benchmarks/data/fp32_packet_ag_per_source_4l4_20261111/README.md)
+reuse. The [four-L4 FP32 ablation](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/fp32_packet_ag_per_source_4l4_20261111/README.md)
 records both the per-source path and the older all-sources-ready GPU path.
 The standalone benchmark's `--router-only` mode forces the CPU router at
 every size without constructing NCCL or another fallback. Its fresh
-[four-L4 BF16 figures and replay logs](../benchmarks/data/cpu_router_4l4_figures_20261111/README.md)
+[four-L4 BF16 figures and replay logs](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/cpu_router_4l4_figures_20261111/README.md)
 use NCCL only as a separately timed external control.
 
 `off` always retains the existing backend. `force` is a diagnostic override;
@@ -349,9 +349,9 @@ The recommended candidate for fresh calibration is
 direct result writes remain experiments: neither consistently improves this
 candidate over 1 KiB--1 MiB, and direct result writes regress at larger sizes.
 All configurations and negative results are retained in the
-[measurement record](../benchmarks/data/rs_opt_8l4_20261113/provenance.json),
-[screening summary](../benchmarks/data/rs_opt_8l4_20261113/performance_summary.csv)
-and [independent confirmation](../benchmarks/data/rs_opt_8l4_20261113/confirmation_summary.csv).
+[measurement record](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/rs_opt_8l4_20261113/provenance.json),
+[screening summary](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/rs_opt_8l4_20261113/performance_summary.csv)
+and [independent confirmation](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/rs_opt_8l4_20261113/confirmation_summary.csv).
 
 The test host has eight NVIDIA L4s, ranks 0--3 on NUMA node 0 and 4--7 on node 1,
 driver 580.178.04, CUDA 12.9, and NCCL 2.28.9. These are BF16 out-of-place,
@@ -395,7 +395,7 @@ These measurements do not establish SGLang or multiprocess drop-in speedups.
 Validation includes mixed eager operations on 4/8/3 GPUs, a one-NUMA subset,
 delayed ranks, masks, misalignment and tails, independent randomized numerical
 and guard checks, graph queue wrap and the existing C-API graph path. The
-[check manifest](../benchmarks/data/rs_opt_8l4_20261113/correctness.json) records
+[check manifest](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/rs_opt_8l4_20261113/correctness.json) records
 commands and outcomes. Native CPU queue tests cover credit exhaustion, sleeping
 workers and concurrent producers. ThreadSanitizer could not start on this host
 because of an unexpected memory mapping; its failure logs are retained.
@@ -429,7 +429,7 @@ The dispatcher also delegates eager capture validation to the pipeline instead
 of repeating the same per-device CUDA checks. The pipeline checks the correct
 current device for each stream before publishing any commands or CPU jobs.
 
-The [follow-up record](../benchmarks/data/rs_submit_8l4_20261113/provenance.json)
+The [follow-up record](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/rs_submit_8l4_20261113/provenance.json)
 uses the same eight L4s, BF16 out-of-place data, CUDA 12.9 and NCCL 2.28.9.
 The submitting CPU is 47 in every configuration, including the frozen previous
 binary. Each configuration has ten warmups and five alternating paired repeats
@@ -449,9 +449,9 @@ unchanged. Calls have no deliberate idle interval.
 | 512 KiB | 211.7 us | 211.2 us | 207.4 us | 1.27x |
 | 1 MiB | 307.7 us | 307.7 us | 306.2 us | 1.13x |
 
-The [full confirmation](../benchmarks/data/rs_submit_8l4_20261113/final_summary.csv)
+The [full confirmation](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/rs_submit_8l4_20261113/final_summary.csv)
 also retains serial-current and parallel-only controls, run ranges, and the
-2/4-MiB points; the [plot](../benchmarks/data/rs_submit_8l4_20261113/summary.svg)
+2/4-MiB points; the [plot](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/rs_submit_8l4_20261113/summary.svg)
 shows the combined configuration and its paired NCCL control through 1 MiB.
 Each fixed configuration has its own paired NCCL control. No
 additional 1-MiB improvement is established. Instrumented traces reduce the
@@ -476,7 +476,7 @@ CPUs, separately calibrate a new profile with
 `--gpu-launch-workers-per-node 4`. Choose new output paths for each variant;
 archived profiles require their exact recorded binary and configuration.
 
-The [validation manifest](../benchmarks/data/rs_submit_8l4_20261113/correctness.json)
+The [validation manifest](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/rs_submit_8l4_20261113/correctness.json)
 records 17 passing checks: policy/dispatcher/executor/BF16 checks, 4,392 queued
 mixed eager operations on 1/3/4/8 GPUs, 3,000 graph calls including the C wrapper,
 and independent CPU/GPU scalar and guard oracles. The new
@@ -520,7 +520,7 @@ even with identical packet geometry. Parallel submission retains its extra CPU
 reservation, 2-ms spin and sensitivity to call spacing; it is opt-in. The C
 wrapper and multiprocess NCCL drop-in expose no new controls in this change.
 
-The [eight-L4 transfer report](../benchmarks/data/ar_ag_transfer_8l4_20261113/README.md)
+The [eight-L4 transfer report](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/ar_ag_transfer_8l4_20261113/README.md)
 records fixed-configuration paired measurements, slower candidates and
 correctness checks separately from the historical overview figures.
 
@@ -540,8 +540,8 @@ correctness checks separately from the historical overview figures.
 ```
 
 See [validation](validation.md) for the four-L4 checks and the current eight-L4
-rerun. The [paired local/router calibration](../benchmarks/data/local_fallback_8l4_20261110_v3/README.md)
+rerun. The [paired local/router calibration](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/local_fallback_8l4_20261110_v3/README.md)
 uses this port, a UCCL Lite fallback, and fresh automatic-selection replays.
-The [NCCL comparison](../benchmarks/data/cpu_router_8l4_20261110/README.md)
+The [NCCL comparison](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/cpu_router_8l4_20261110/README.md)
 is retained as a separate control; its profiles cannot select a backend against
 the new fallback. Both differ from the older no-P2P primitive archive.

@@ -1,5 +1,8 @@
 # Multi-node NCCL SM/CE references, November 16
 
+> This directory retains only inputs and metadata needed by current figures or checks. [Complete original experiment](https://github.com/zhongjiechen/uccl-zhongjie-dev/tree/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_tuned_2x4l4_20261116) includes raw runs, removed scripts and source snapshots. Historical commands below require that archive.
+
+
 This record adds **NCCL SM (tuned)** and **NCCL CE (tuned)** to AllReduce,
 AllGather and ReduceScatter. **UCCL Lite is not rerun.** The figures
 preserve all original UCCL Lite and prior-NCCL points, loaded from their existing
@@ -98,7 +101,7 @@ runs; they do not revalidate that code or establish a simultaneous paired
 speedup. The previous orange control also remains historical:
 
 - [UCCL AR and its prior NCCL control](../ar_small_fix_2x4l4_20261115/README.md).
-- [UCCL AG and its four-process Ring+Simple control](../ag_host_router_2x4l4_20261115/README.md).
+- [UCCL AG and its four-process Ring+Simple control](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/ag_host_router_2x4l4_20261115/README.md).
 - [UCCL RS and its prior NCCL control](../rs_direct_medium_2x4l4_20261115/README.md).
 
 ## Validated results
@@ -119,16 +122,16 @@ At **1 GiB complete tensor per GPU**, selected NCCL bus throughput is:
 
 CE is slower than SM at 1 GiB for all three collectives and also has a worse
 calibration-wide geometric mean. All CE curves are retained in full. The
-[complete CSV](summary.csv) preserve all sizes, run ranges and
+[complete CSV](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_tuned_2x4l4_20261116/summary.csv) preserve all sizes, run ranges and
 regressions. No claim is made that every tuned point beats its prior control.
 
 ## Figures
 
-![AllReduce](allreduce.svg)
+[Archived figure: AllReduce](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_tuned_2x4l4_20261116/allreduce.svg)
 
-![AllGather](allgather.svg)
+[Archived figure: AllGather](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_tuned_2x4l4_20261116/allgather.svg)
 
-![ReduceScatter](reducescatter.svg)
+[Archived figure: ReduceScatter](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_tuned_2x4l4_20261116/reducescatter.svg)
 
 ## Reproduction
 

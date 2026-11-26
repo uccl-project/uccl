@@ -63,7 +63,7 @@ streams. The following percentages are medians of the three diagnostic calls:
 A separate follow-up checks the largest cases shown in the figures, after the
 formal repetitions. It uses the same event protocol; NCCL INFO logging is
 enabled only in this diagnostic, and its timings are excluded from the figures.
-The [NCCL log](data/pro6000_20261115/profile_best_nccl.log) verifies
+The [NCCL log](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/integration/peer_e2e/data/pro6000_20261115/profile_best_nccl.log) verifies
 `P2P/direct pointer` channels and RING/SIMPLE AG/RS, channels 0–3.
 
 | Workload | Backend | GPU 0 communication / total stream time | GPU 1 communication / total stream time |
@@ -87,8 +87,8 @@ and 340.81 ms (peer); the peer event-instrumented calls take 362–368 ms.
 **No instrumented or pilot sample enters either figure.** The fractions select
 a communication-heavy workload; the fresh uninstrumented comparison below
 measures its actual benefit. The two
-[diagnostic JSON files](data/pro6000_20261115/profile_large_correct_nccl.json)
-([peer](data/pro6000_20261115/profile_large_correct_peer.json)) retain AG/RS
+[diagnostic JSON files](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/integration/peer_e2e/data/pro6000_20261115/profile_large_correct_nccl.json)
+([peer](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/integration/peer_e2e/data/pro6000_20261115/profile_large_correct_peer.json)) retain AG/RS
 components, per-rank totals, all repetitions and instrumentation controls.
 
 ## Adapter and timing scope
@@ -186,10 +186,10 @@ fresh job per backend. At 2 × 32 × 16, HTTP serving is **106.59 ms NCCL versus
 112.02 ms UCCL Lite (5.1% slower)**. Training batch 2 × 32 is **20.596 versus
 20.656 ms (0.3% slower)**. Generated tokens, losses and complete trained
 parameters match across backends. These single-job negative controls are
-retained in [small_control/](data/pro6000_20261115/small_control/), not mixed
+retained in [small_control/](https://github.com/zhongjiechen/uccl-zhongjie-dev/tree/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/integration/peer_e2e/data/pro6000_20261115/small_control), not mixed
 with the two-job GPT-2-large figures. Message size in the target range alone
 does not guarantee an application benefit. Its separate
-[NCCL communication diagnostic](data/pro6000_20261115/profile_small_nccl.json)
+[NCCL communication diagnostic](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/integration/peer_e2e/data/pro6000_20261115/profile_small_nccl.json)
 measures only **54.2%/53.2%** of serving stream time and
 **39.2%/38.8%** of training stream time inside AG/RS,
 well below the larger model's fractions.
@@ -197,7 +197,7 @@ well below the larger model's fractions.
 `large_screen/` retains the preliminary five-repeat GPT-2-large comparison;
 it contributes no formal sample. Development attempts and the smaller-model
 negative control are retained separately with their status recorded in the
-[data index](data/pro6000_20261115/experiments.json). Early prototype timings
+[data index](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/integration/peer_e2e/data/pro6000_20261115/experiments.json). Early prototype timings
 preceding the Transformers reference checks are not valid GPT-2 results:
 that prototype packed unused causal-mask buffers and used different BF16
 GELU/bias rounding. Reference-check failures are preserved. The final adapter
@@ -253,7 +253,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 integration/peer_e2e/plot.py \
   --summary build/peer_e2e_summary.json --preview
 ```
 
-The [manifest](data/pro6000_20261115/final_abba/manifest.json), hardware/software
+The [manifest](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/integration/peer_e2e/data/pro6000_20261115/final_abba/manifest.json), hardware/software
 records and raw JSON/log files retain every sample. The offline summarizer
 rejects incomplete or mislabeled trials, changed configurations, missing AG/RS
 evidence and mismatched numerical results. `checksums.json` covers the retained

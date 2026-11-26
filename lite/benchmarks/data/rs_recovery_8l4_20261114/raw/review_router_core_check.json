@@ -1,9 +1,0 @@
-{
-  "command": [
-    "/home/wxzheng/uccl-zhongjie-dev/experimental/lite/build/rs_recovery_8l4_20261114/uccl_lite_router_core_check"
-  ],
-  "binary_sha256": "890db7cb871980cec6f58363c6d7a3371ecefc76678823ab3c02d6b9fbb77687",
-  "returncode": 0,
-  "utc": "2026-11-14T08:01:01.924218+00:00",
-  "scope": "host-only; no GPU initialization; GPU performance job from another user active"
-}

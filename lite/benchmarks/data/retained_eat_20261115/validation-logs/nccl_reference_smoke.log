@@ -1,7 +1,0 @@
-operation,bytes,backend,selected_backend,minimum_us,median_us,maximum_us,correct
-CONFIG backend=nccl ranks=4 dtype=bf16 placement=outofplace warmup=2 repeats=1 iterations=2 seed=20261114 source= profile=
-NCCL_IDENTITY nccl:22809;config-v1=c65b387f16fc81c3
-allreduce,1024,nccl,nccl_shm,68.60800087,68.60800087,68.60800087,1
-allgather,1024,nccl,nccl_shm,59.39199962,59.39199962,59.39199962,1
-reducescatter,1024,nccl,nccl_shm,59.90399979,59.90399979,59.90399979,1
-# correctness: PASS (every invocation, full output/input/guards)

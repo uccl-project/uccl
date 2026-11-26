@@ -1,5 +1,8 @@
 # Strict eight-L4 NCCL drop-in qualification
 
+> This directory retains only inputs and metadata needed by current figures or checks. [Complete original experiment](https://github.com/zhongjiechen/uccl-zhongjie-dev/tree/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_local8_strict_20261119) includes raw runs, removed scripts and source snapshots. Historical commands below require that archive.
+
+
 **Qualified on the recorded `wxz-l4` configuration:** all **126/126** points
 meet the zero-slowdown gate against freshly rerun original README UCCL Lite
 binaries. The candidate runs unmodified MPI nccl-tests with no native NCCL
@@ -18,7 +21,7 @@ individual call. **Native NCCL remains faster at 25/126 points**, with a worst
 candidate/native ratio of 1.58285. The acceptance baseline follows the
 multi-node port: the original UCCL implementations. No native-NCCL parity claim
 is made. [Full original-UCCL comparison](comparison.csv),
-[native comparison](native_comparison.json), and [gate result](verdict.json).
+[native comparison](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_local8_strict_20261119/native_comparison.json), and [gate result](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_local8_strict_20261119/verdict.json).
 
 ## Hardware, software and timing
 
@@ -47,8 +50,8 @@ is made. [Full original-UCCL comparison](comparison.csv),
   the profiler plugin disabled. This batch timing is not substituted for the
   original-UCCL per-call gate.
 
-[Hardware and identity](hardware.json), [provenance](provenance.json),
-[source hashes](source_hashes.json), and [ELF dependencies](elf_dynamic.txt)
+[Hardware and identity](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_local8_strict_20261119/hardware.json), [provenance](provenance.json),
+[source hashes](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_local8_strict_20261119/source_hashes.json), and [ELF dependencies](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_local8_strict_20261119/elf_dynamic.txt)
 identify the measured configuration. The replacement library SHA-256 is
 `a613c4f85541aaf39c5e08b4db2d12ee817b29942cbd0cb8dde423df0cb854c7`.
 
@@ -80,7 +83,7 @@ and ten timed calls; points aggregate repetition medians, then run medians.
 The tuned NCCL settings were selected per size on calibration data and frozen
 before independent validation. No best-per-size selection is applied to UCCL.
 The matched native nccl-tests batch comparison remains in
-[native_comparison.json](native_comparison.json); it is not used in these
+[native_comparison.json](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_local8_strict_20261119/native_comparison.json); it is not used in these
 per-call figures.
 
 The panels show 1-KiB–1-MiB latency and 1-MiB–1-GiB bus throughput. Size is
@@ -133,7 +136,7 @@ to its archived binary; this report qualifies the local eight-L4 replacement.
 
 ## Failed candidates and the worker-isolation fix
 
-The [experiment index](experiments.json) and raw archive preserve slower
+The [experiment index](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_local8_strict_20261119/experiments.json) and raw archive preserve slower
 candidates. The initial port failed 29/126 screening points. A larger 2-MiB
 packet trial failed 41/126. The first complete qualification failed 5/126,
 including repeated 32-KiB AR stalls; a later complete campaign failed 3/126,
@@ -166,7 +169,7 @@ before CUDA contexts appear and waits briefly for their NVML teardown.
 ## Reproduce and audit
 
 See [build and API scope](../../../integration/nccl_lite/LOCAL8.md). On the
-recorded host, the supplied [profile](profile.tsv) is bound to the exact library,
+recorded host, the supplied [profile](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_local8_strict_20261119/profile.tsv) is bound to the exact library,
 launcher, software, environment, CPU topology and GPU UUIDs. Changing these
 requires a new profile and qualification.
 
@@ -179,13 +182,13 @@ python3 -B tests/nccl_mscclpp/audit_local8.py \
   --library build/nccl_local8/libuccl_lite_nccl_local8.so
 ```
 
-The [independent audit output](audit.txt) records 12 full nccl-tests sweeps,
+The [independent audit output](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_local8_strict_20261119/audit.txt) records 12 full nccl-tests sweeps,
 18 paired jobs and **0/126** zero-regression failures. It also checks ABI,
 queue, rejection, loader and affinity evidence. Frozen executables and the
 full Nsight reports remain under `build/`.
 
-[measurements.tar.gz](measurements.tar.gz) contains raw logs, manifests, source
+[measurements.tar.gz](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_local8_strict_20261119/measurements.tar.gz) contains raw logs, manifests, source
 snapshots, checks, negative campaigns and diagnostic traces; it contains no
-compiled libraries or executables. [raw_checksums.json](raw_checksums.json)
+compiled libraries or executables. [raw_checksums.json](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_local8_strict_20261119/raw_checksums.json)
 authenticates its members. Existing historical figures and measurements are
 unchanged.

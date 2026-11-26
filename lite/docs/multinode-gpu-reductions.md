@@ -54,7 +54,7 @@ hide more of the final IB piece; finer pieces may lose that benefit to extra
 notifications. The option requires matched ReduceScatter and defaults off.
 The more aggressive experiment that splits *both* local stages was rejected
 and retained only as a patch in the
-[early-send measurement record](../benchmarks/data/gpu_early_2x4l4_20261115/README.md).
+[early-send measurement record](archived-experiments.md#local-only-records).
 
 ## Pieces and lifetime
 
@@ -76,7 +76,7 @@ No extra payload allocation is needed for lookahead: all piece ranges already
 have separate positions in the full-shard staging buffers. This is an eager,
 bounded software pipeline, not graph replay. Progress and notifications remain
 part of measured latency, including the cost of finer pieces. See the
-[lookahead measurements](../benchmarks/data/gpu_overlap_2x4l4_20261115/README.md).
+[lookahead measurements](archived-experiments.md#local-only-records).
 
 Network receives use two alternating slots sized from the maximum configured
 message. A partner cannot reach invocation i+2 without receiving invocation
@@ -106,7 +106,7 @@ Stage the same binary and libraries at the same paths on both hosts first.
 Use `--op allreduce` to include the reverse paired gather. Numeric aliases 1
 and 2 select CE and SM for the archived pilot scripts.
 
-See the [measurements and validation record](../benchmarks/data/gpu_reduce_2x4l4_20261115/README.md).
+See the [measurements and validation record](archived-experiments.md#local-only-records).
 The earlier GPU peer-read/host-staging trial was rejected: GPU arithmetic alone
 did not make its staging and peer-access schedule competitive. Its patch and
 negative measurements are retained with the record, not selected by this path.

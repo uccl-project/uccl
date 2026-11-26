@@ -63,9 +63,9 @@ explicit SM transport, with no internal NCCL fallback or per-size backend switch
 
 ## Reading the figures
 
-![Historical eight-L4 AllGather small-message latency and large-message bus bandwidth](assets/allgather.svg)
+[Archived figure: Historical eight-L4 AllGather small-message latency and large-message bus bandwidth](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/assets/allgather.svg)
 
-![Historical eight-L4 ReduceScatter small-message latency and large-message bus bandwidth](assets/reducescatter.svg)
+[Archived figure: Historical eight-L4 ReduceScatter small-message latency and large-message bus bandwidth](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/assets/reducescatter.svg)
 
 For both operations, decimal bus bandwidth is algorithm bandwidth × `7/8`.
 AllGather's byte count is the complete output on each rank; ReduceScatter's

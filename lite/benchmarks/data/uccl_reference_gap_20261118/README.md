@@ -1,5 +1,8 @@
 # UCCL Lite reference preservation: active requirement
 
+> This directory retains only inputs and metadata needed by current figures or checks. [Complete original experiment](https://github.com/zhongjiechen/uccl-zhongjie-dev/tree/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/uccl_reference_gap_20261118) includes raw runs, removed scripts and source snapshots. Historical commands below require that archive.
+
+
 The acceptance baseline is the README UCCL Lite multi-node implementation,
 not native NCCL. The target is zero latency regression at every 1-KiB–1-GiB
 AG/AR/RS size and both NCCL layouts, while the replacement executes only UCCL
@@ -33,11 +36,11 @@ required and must retain the fast UCCL paths.
 The goal is active and unfulfilled. Experimental shared-host/CE AG, cooperative
 medium AG and hybrid AR paths now exist and pass the stated correctness checks.
 They are not admitted as zero-regression replacements. The latest complete
-[single-library diagnostic](cooperative_rs8_candidate/README.md) still has
+[single-library diagnostic](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/uccl_reference_gap_20261118/cooperative_rs8_candidate/README.md) still has
 51/126 slower rows (AG 16, AR 22, RS 13); its cross-harness comparison is not
 matched admission. Native-NCCL-relative success is not a substitute.
 
-[Active implementation and validation work](../../../docs/uccl-reference-no-regression.md).
+[Active implementation and validation work](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/uccl-reference-no-regression.md).
 
 ## Fresh reference and first component
 
@@ -48,36 +51,36 @@ lifetimes on both four-GPU hosts; see `shared_packets/`. Network exchange,
 stream integration and the no-regression gate are not established by that check.
 
 
-The subsequent [hybrid producer correction](hybrid_graph_rs8/README.md)
+The subsequent [hybrid producer correction](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/uccl_reference_gap_20261118/hybrid_graph_rs8/README.md)
 passes mixed ABI and a full AR-only timing follow-up. It improves 8-MiB AR
 but does not meet the UCCL target, and has no new full-matrix admission.
 
 
-The newest complete [persistent candidate](ar512_persistent/uccl_persistent_consumers16/README.md)
+The newest complete [persistent candidate](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/uccl_reference_gap_20261118/ar512_persistent/uccl_persistent_consumers16/README.md)
 passes all nine nccl-tests jobs with one binary, and improves 1-GiB AG/AR over
 the fresh UCCL reference. Its diagnostic still has 22/126 slower rows (5/6/11
 for AG/AR/RS), and matched admission remains unproven. The goal is still active.
 
 
-The newest [fused combined candidate](ar512_persistent/uccl_fused_combined/README.md)
+The newest [fused combined candidate](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/uccl_reference_gap_20261118/ar512_persistent/uccl_fused_combined/README.md)
 passes all nine full nccl-tests jobs with one binary. Its diagnostic has seven
 slower rows (AG 5, AR 2, RS 0). This supersedes the older full-matrix counts as
 progress evidence, but zero-regression and matched admission remain unfulfilled.
 
 
-The latest [384-thread AR candidate](ar512_persistent/uccl_ar256_threads384/README.md)
+The latest [384-thread AR candidate](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/uccl_reference_gap_20261118/ar512_persistent/uccl_ar256_threads384/README.md)
 has a complete fixed-binary matrix with six slower AG diagnostic rows and none
 for AR or RS. Correctness/native-absence checks pass; matched zero-regression
 admission and the remaining AG work are still unfulfilled.
 
 
-The latest [warp-publisher candidate](ar512_persistent/uccl_warp_publisher/README.md)
+The latest [warp-publisher candidate](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/uccl_reference_gap_20261118/ar512_persistent/uccl_warp_publisher/README.md)
 has four slower diagnostic rows, all AG at 8/16 MiB. All 84 AR/RS rows are no
 higher than reference in this complete fixed-binary matrix. Correctness checks
 pass, but remaining AG work and matched zero-regression admission are unfinished.
 
 
-The [GPU readiness-gate candidate](ar512_persistent/uccl_gpu_gates8m/README.md)
+The [GPU readiness-gate candidate](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/uccl_reference_gap_20261118/ar512_persistent/uccl_gpu_gates8m/README.md)
 passes all 126 batch-timing diagnostic medians. Final admission remains unproven:
 the aligned per-call/full-retirement comparison is underway and already exposes
 small-message latency gaps. The original goal is still active, not complete.

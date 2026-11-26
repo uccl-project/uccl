@@ -3,7 +3,7 @@
 `--host-gather 1 --op allreduce` is an explicit eager AllReduce path for the
 documented two four-L4 hosts. Reduction arithmetic executes entirely on GPUs.
 It composes the existing tuned GPU ReduceScatter with the shared-host packet
-AllGather techniques. The [measured combined operation](../benchmarks/data/hybrid_ar_2x4l4_20261115/README.md)
+AllGather techniques. The [measured combined operation](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/hybrid_ar_2x4l4_20261115/README.md)
 improves median latency across the tested 1-MiB–1-GiB range. Default GPU policies
 and the optional CPU-router dispatcher are unchanged.
 

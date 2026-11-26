@@ -107,7 +107,7 @@ $(BUILD)/uccl_lite_cutlass_gemm_probe: benchmarks/probes/cutlass_gemm_probe.cu |
 $(BUILD)/uccl_lite_hardware_profiler: benchmarks/probes/hardware_profiler.cu | $(BUILD)
 	$(NVCC) $(NVCC_FLAGS) -std=c++17 $< -o $@ -Xcompiler=-pthread
 
-$(BUILD)/host_memory_bw_4l4_20261111/stream_triad: benchmarks/data/host_memory_bw_4l4_20261111/stream_triad.cc | $(BUILD)
+$(BUILD)/host_memory_bw_4l4_20261111/stream_triad: benchmarks/probes/host_memory_triad.cc | $(BUILD)
 	mkdir -p $(@D)
 	$(CXX) -O3 -march=native -fopenmp -std=c++17 $< -o $@
 
@@ -276,45 +276,6 @@ $(BUILD)/nccl_lite/mscclpp_control_check: tests/nccl_dropin/host_control.cc inte
 
 # Historical serving data verification and README-style SVGs; no GPU required.
 PYTHON ?= python3
-.PHONY: vllm-pcie-figures
-vllm-pcie-figures:
-	$(PYTHON) integration/vllm_pcie/plot.py --preview
-
-.PHONY: vllm-pcie-collective-figures
-vllm-pcie-collective-figures:
-	$(PYTHON) integration/vllm_pcie/plot_collectives.py --preview
-
-# Byte-identical historical PRO5000 harness, with artifacts kept in build/.
-.PHONY: pcieccl-original-latency
-pcieccl-original-latency: $(BUILD)/uccl_lite_pcieccl_original_latency
-$(BUILD)/uccl_lite_pcieccl_original_latency: benchmarks/data/pro6000_original_cpp_latency_20261116/measured_source/mscclpp_allreduce.cu | $(BUILD)
-	$(NVCC) -O3 -std=c++20 -arch=$(CUDA_ARCH) -I$(MSCCLPP_HOME)/include -o $@ $< -L$(MSCCLPP_HOME)/lib -lmscclpp -lcudart -lpthread -Xlinker -rpath=$(MSCCLPP_HOME)/lib
-
-.PHONY: pcieccl-original-latency-summary
-pcieccl-original-latency-summary:
-	$(PYTHON) -B benchmarks/data/pro6000_original_cpp_latency_20261116/summarize.py
-
-.PHONY: nccl-sm-cpp-latency
-nccl-sm-cpp-latency: $(BUILD)/uccl_lite_nccl_sm_cpp_latency
-$(BUILD)/uccl_lite_nccl_sm_cpp_latency: benchmarks/data/pro6000_nccl_sm_cpp_latency_20261116/nccl_sm_latency.cu | $(BUILD)
-	$(NVCC) -O3 -std=c++20 -arch=$(CUDA_ARCH) -I$(MSCCLPP_HOME)/include -I$(NCCL_HOME)/include $< -o $@ -L$(MSCCLPP_HOME)/lib -lmscclpp -L$(NCCL_HOME)/lib -l:libnccl.so.2 -lcudart -lpthread -Xlinker -rpath=$(MSCCLPP_HOME)/lib -Xlinker -rpath=$(NCCL_HOME)/lib
-
-.PHONY: nccl-sm-cpp-latency-summary
-nccl-sm-cpp-latency-summary:
-	$(PYTHON) -B benchmarks/data/pro6000_nccl_sm_cpp_latency_20261116/summarize.py
-
-.PHONY: nccl-sm-cpp-latency-figures
-nccl-sm-cpp-latency-figures:
-	$(PYTHON) -B benchmarks/data/pro6000_nccl_sm_cpp_latency_20261116/plot.py --preview
-
-# Host-only Python binding to the same out-of-place NCCL AllReduce API.
-PYBIND11_INC ?= $(shell $(PYTHON) -c 'import torch; print(torch.__path__[0] + "/include")')
-PYTHON_INC = $(shell $(PYTHON) -c 'import sysconfig; print(sysconfig.get_path("include"))')
-.PHONY: vllm-pcie-nccl-reference
-vllm-pcie-nccl-reference: $(BUILD)/_uccl_lite_nccl_reference.so
-$(BUILD)/_uccl_lite_nccl_reference.so: integration/vllm_pcie/nccl_reference.cpp | $(BUILD)
-	$(CXX) -O3 -std=c++17 -shared -fPIC -I$(PYBIND11_INC) -I$(PYTHON_INC) -I$(CUDA_HOME)/include -I$(NCCL_HOME)/include $< -o $@ -L$(NCCL_HOME)/lib -l:libnccl.so.2 -Wl,-rpath,$(NCCL_HOME)/lib
-
 .PHONY: peer-ring-check
 peer-ring-check: $(BUILD)/uccl_lite_peer_ring_check
 $(BUILD)/uccl_lite_peer_ring_check: tests/collectives/peer_ring_check.cu src/collectives/peer_ag_rs.cu | $(BUILD)
@@ -359,17 +320,6 @@ $(BUILD)/uccl_lite_joint_bench: benchmarks/joint/joint_bench.cu $(JOINT_OBJECTS)
 $(BUILD)/uccl_lite_joint_nccl_reference: benchmarks/joint/joint_bench.cu benchmarks/cpu_router/nccl_identity.hpp | $(BUILD)
 	$(NVCC) $(NVCC_FLAGS) -std=c++17 -DNCCL_REFERENCE_ONLY -I$(NCCL_HOME)/include $< -L$(NCCL_HOME)/lib -lnccl -Xlinker -rpath=$(NCCL_HOME)/lib -o $@
 
-# Frozen four/eight-rank router fixtures from the retained SHM experiment.
-.PHONY: joint-router-four joint-router-eight
-joint-router-four: $(BUILD)/uccl_lite_router_four_bench $(BUILD)/uccl_lite_router_four_nccl_reference $(BUILD)/uccl_lite_router_four_mixed
-joint-router-eight: $(BUILD)/uccl_lite_router_eight_bench $(BUILD)/uccl_lite_router_eight_nccl_reference $(BUILD)/uccl_lite_router_eight_mixed
-$(BUILD)/uccl_lite_router_%_bench: benchmarks/joint/focused/%_aligned.cu $(JOINT_OBJECTS) $(ROUTER_STATIC) | $(BUILD)
-	$(NVCC) $(NVCC_FLAGS) -std=c++17 $(ROUTER_INC) -Ibenchmarks/joint -I$(NCCL_HOME)/include $< $(JOINT_OBJECTS) $(ROUTER_STATIC) -L$(NCCL_HOME)/lib -lnccl -Xlinker -rpath=$(NCCL_HOME)/lib -Xcompiler=-pthread -ldl -o $@
-$(BUILD)/uccl_lite_router_%_mixed: benchmarks/joint/focused/%_mixed_alignment.cu $(JOINT_OBJECTS) $(ROUTER_STATIC) | $(BUILD)
-	$(NVCC) $(NVCC_FLAGS) -std=c++17 $(ROUTER_INC) -Ibenchmarks/joint -I$(NCCL_HOME)/include $< $(JOINT_OBJECTS) $(ROUTER_STATIC) -L$(NCCL_HOME)/lib -lnccl -Xlinker -rpath=$(NCCL_HOME)/lib -Xcompiler=-pthread -ldl -o $@
-$(BUILD)/uccl_lite_router_%_nccl_reference: benchmarks/joint/focused/%_aligned.cu benchmarks/cpu_router/nccl_identity.hpp | $(BUILD)
-	$(NVCC) $(NVCC_FLAGS) -std=c++17 -DNCCL_REFERENCE_ONLY -Ibenchmarks/joint -I$(NCCL_HOME)/include $< -L$(NCCL_HOME)/lib -lnccl -Xlinker -rpath=$(NCCL_HOME)/lib -o $@
-
 .PHONY: joint-peer-check
 joint-peer-check: $(BUILD)/uccl_lite_joint_peer_check
 $(BUILD)/uccl_lite_joint_peer_check: tests/collectives/joint_peer_check.cu tests/planner/peer_fixture.hpp benchmarks/joint/joint_bench.cu $(JOINT_OBJECTS) $(ROUTER_STATIC) | $(BUILD)
@@ -394,24 +344,9 @@ $(BUILD)/uccl_lite_pro6000_ar: src/collectives/pro6000_allreduce.cu include/uccl
 $(BUILD)/uccl_lite_pro6000_ar_nccl: src/collectives/pro6000_allreduce.cu include/uccl_lite/allreduce_validation.cuh | $(BUILD)
 	$(NVCC) $(NVCC_FLAGS) -std=c++20 -DUCCL_LITE_NCCL_REFERENCE -Iinclude -I$(MSCCLPP_HOME)/include -I$(NCCL_HOME)/include $< -o $@ -L$(MSCCLPP_HOME)/lib -lmscclpp -L$(NCCL_HOME)/lib -l:libnccl.so.2 -lcudart -lpthread -Xlinker -rpath=$(MSCCLPP_HOME)/lib -Xlinker -rpath=$(NCCL_HOME)/lib
 
-.PHONY: pro6000-ar-evidence-check pro6000-ar-summary pro6000-ar-figures
+.PHONY: pro6000-ar-evidence-check
 pro6000-ar-evidence-check:
 	$(PYTHON) -B -m unittest discover -s tests -p test_pro6000_allreduce_evidence.py -v
-pro6000-ar-summary:
-	$(PYTHON) -B scripts/summarize_pro6000_allreduce.py --input benchmarks/data/pro6000_allreduce_ce_cpp_20261116/measurements.tar.gz --output $(BUILD)/pro6000-ar-report
-pro6000-ar-figures: pro6000-ar-summary
-	MPLCONFIGDIR=$(abspath $(BUILD)/mplconfig) $(PYTHON) -B scripts/plot_pro6000_allreduce.py --summary $(BUILD)/pro6000-ar-report/summary.csv --preview
-
-.PHONY: pro6000-ar-large-summary pro6000-ar-large-traces pro6000-ar-large-figures
-pro6000-ar-large-summary:
-	$(PYTHON) -B scripts/summarize_pro6000_allreduce.py --input benchmarks/data/pro6000_allreduce_ce_ring_cpp_20261116/measurements.tar.gz --output $(BUILD)/pro6000-ar-large-report
-pro6000-ar-large-traces: pro6000-ar-large-summary
-	$(PYTHON) -B scripts/audit_pro6000_profiles.py --input $(BUILD)/pro6000-ar-large-report/extracted
-	$(PYTHON) -B scripts/summarize_pro6000_allreduce.py --input $(BUILD)/pro6000-ar-large-report/extracted/previous-epoch --output $(BUILD)/pro6000-ar-large-report/previous-epoch
-pro6000-ar-large-figures: pro6000-ar-large-traces
-	MPLCONFIGDIR=$(abspath $(BUILD)/mplconfig) $(PYTHON) -B scripts/plot_pro6000_allreduce.py --summary $(BUILD)/pro6000-ar-large-report/summary.csv --name collectives-pro6000x8-allreduce-fp32-ce-ring --preview
-	MPLCONFIGDIR=$(abspath $(BUILD)/mplconfig) $(PYTHON) -B scripts/plot_pro6000_bottleneck.py --staged $(BUILD)/pro6000-ar-large-report/extracted/profiles/profile-final-staged/compact-analysis.json --ring $(BUILD)/pro6000-ar-large-report/extracted/profiles/profile-final-ring/compact-analysis.json --preview
-
 $(BUILD)/nccl_lite/host_packet_transport_check: tests/multinode/host_packet_transport.cu src/multinode/host_packet_transport.h src/multinode/shared_host_packets.h
 	mkdir -p $(@D)
 	$(NVCC) $(NVCC_FLAGS) -std=c++20 $(IB_INC) $(MPI_INC) $< -o $@ $(IB_LIB) $(MPI_LIB) -lcudart -lpthread
@@ -508,10 +443,6 @@ $(BUILD)/nccl_local/standalone_completion_probe: tests/nccl_mscclpp/standalone_c
 $(BUILD)/nccl_local/ring4_queue_check: tests/nccl_mscclpp/local_queue.cu
 	mkdir -p $(@D)
 	$(NVCC) $(NVCC_FLAGS) -std=c++17 -DUCCL_LITE_LOCAL_RING_QUEUE -DUCCL_LITE_LOCAL_RING4_QUEUE -I$(NCCL_HOME)/include $(MPI_INC) $< -o $@ -L$(NCCL_HOME)/lib -lnccl -Xlinker -rpath=$(NCCL_HOME)/lib $(MPI_LIB) -lcudart
-
-$(BUILD)/local_ring_topology_probe: benchmarks/collectives/local_ring_topology.cu
-	mkdir -p $(@D)
-	$(NVCC) $(NVCC_FLAGS) -std=c++17 $< -o $@
 
 # Medium-AG epoch range: changing 16/32/64/128/256-KiB calls and streams.
 $(BUILD)/nccl_local/gather_range_queue_check: tests/nccl_mscclpp/local_queue.cu

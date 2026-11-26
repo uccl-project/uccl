@@ -1,25 +1,0 @@
-WARNING: Device-side CUDA Event completion trace is currently enabled.
-         This may increase runtime overhead and the likelihood of false
-         dependencies across CUDA Streams. If you wish to avoid this, please
-         disable the feature with --cuda-event-trace=false.
-Collecting data...
-# two-node host-RDMA AllGather; FP32; 4 GPUs/node; 2 MPI groups/node; 2 IB rails; chunk=262144 B; slots=3; download=packed-dma
-# host network=remote-multicast local_input=host gpu_workers=0 early_consume=0 progress=ready upload=dma lean_context=0 consume_threads=256 local_exchange=copy delay_rank=-1
-# timing=host enqueue+completion, slowest of 4 groups/8 GPUs; warmups=5 iterations=10 repeats=1; every output checked
-# packed schedule=three-slot pipeline; direct receive into eight source rows; 2D H2D copy or SM scatter per phase
-collective,bytes,backend,median_us,min_us,max_us
-# sample,allgather,16777216,host-rdma-multicast,1,1,853.288,0
-# sample,allgather,16777216,host-rdma-multicast,1,2,861.332,0
-# sample,allgather,16777216,host-rdma-multicast,1,3,871.928,0
-# sample,allgather,16777216,host-rdma-multicast,1,4,881.322,0
-# sample,allgather,16777216,host-rdma-multicast,1,5,848.981,0
-# sample,allgather,16777216,host-rdma-multicast,1,6,857.675,0
-# sample,allgather,16777216,host-rdma-multicast,1,7,845.737,0
-# sample,allgather,16777216,host-rdma-multicast,1,8,857.284,0
-# sample,allgather,16777216,host-rdma-multicast,1,9,852.853,0
-# sample,allgather,16777216,host-rdma-multicast,1,10,853.103,0
-allgather,16777216,host-rdma-multicast,858.350,858.350,858.350
-Generating '/tmp/nsys-report-d976.qdstrm'
-[1/1] [0%                          ] packed_dma_trace.nsys-rep[1/1] [0%                          ] packed_dma_trace.nsys-rep[1/1] [6%                          ] packed_dma_trace.nsys-rep[1/1] [9%                          ] packed_dma_trace.nsys-rep[1/1] [================68%         ] packed_dma_trace.nsys-rep[1/1] [==================77%       ] packed_dma_trace.nsys-rep[1/1] [========================100%] packed_dma_trace.nsys-rep[1/1] [========================100%] packed_dma_trace.nsys-rep
-Generated:
-	/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/ag_packed_pipeline_20261117/packed_dma_trace.nsys-rep

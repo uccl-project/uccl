@@ -93,4 +93,4 @@ retaining the same local payload volume. For ReduceScatter, the paired reduction
 half alone applies. Those AR/RS algorithms are designs only; this change measures
 AllGather and leaves AR/RS selection unchanged.
 
-See [the paired results, negative pilots and reproduction commands](../benchmarks/data/ag_dual_matched_2x4l4_20261115/README.md).
+See [the paired results, negative pilots and reproduction commands](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/ag_dual_matched_2x4l4_20261115/README.md).

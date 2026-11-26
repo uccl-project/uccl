@@ -1,8 +1,0 @@
-========= COMPUTE-SANITIZER
-check mini bytes=64
-check mini bytes=528
-check mini bytes=32768
-check mini bytes=65536
-check mini bytes=1048576
-check resident round=0 start
-check resident bytes=64 op=0

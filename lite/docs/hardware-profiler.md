@@ -17,7 +17,7 @@ Device arguments define rank order. The probe reports shared PCIe paths, NUMA
 placement and InfiniBand port state/rate. PCIe and NIC rates are advertised
 capabilities; memory bandwidth and effective transfer rates remain unknown
 until calibrated. This command neither measures bandwidth nor starts routing
-workers. See [runtime migration status](topology-runtime-refactor.md) for the
+workers. See [runtime migration status](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/topology-runtime-refactor.md) for the
 remaining planner and execution integration work.
 
 [hardware_profiler.cu](../benchmarks/probes/hardware_profiler.cu) is a standalone
@@ -67,11 +67,11 @@ x16, two GPUs per NUMA node, dual Intel Xeon Silver 4410Y, CUDA runtime 12.9,
 driver 595.58.03. It used 16 MiB per GPU, 8 MiB per CPU worker, four workers
 per node, two warmups, ten timed iterations, three repetitions per run, and
 three independent complete runs. There is no comparison baseline. The
-[validated summary](../benchmarks/data/hardware_profile_4l4_20261110_summary.csv)
+[validated summary](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/hardware_profile_4l4_20261110_summary.csv)
 reports the median of the three run medians and the full min–max range. The
-[raw runs 1](../benchmarks/data/hardware_profile_4l4_20261110_run1.txt),
-[2](../benchmarks/data/hardware_profile_4l4_20261110_run2.txt), and
-[3](../benchmarks/data/hardware_profile_4l4_20261110_run3.txt) include PCI
+[raw runs 1](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/hardware_profile_4l4_20261110_run1.txt),
+[2](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/hardware_profile_4l4_20261110_run2.txt), and
+[3](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/hardware_profile_4l4_20261110_run3.txt) include PCI
 paths, peer matrices, every directed link, and per-run ranges.
 
 | Concurrent workload | Median useful bandwidth |
@@ -89,7 +89,7 @@ placement and thread count; they do not prove a router or
 collective crossover. Use the paired collective calibration in
 [CPU-router selection](cpu-router.md) to decide whether to route a workload.
 
-A later [1.5-GiB-per-NUMA STREAM-style triad](../benchmarks/data/host_memory_bw_4l4_20261111/README.md)
+A later [1.5-GiB-per-NUMA STREAM-style triad](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/host_memory_bw_4l4_20261111/README.md)
 measures sustained host DRAM useful bandwidth at about 87 GB/s per socket
 with 12 physical-core threads, or about 175 GB/s for both sockets running
 simultaneously. It uses a different kernel and larger working set than the

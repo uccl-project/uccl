@@ -1,1 +1,0 @@
-The newly added post-finalize assertion initially expected ncclInvalidUsage. The adapter has always rejected finalized handles with ncclInvalidArgument, and did reject this request. The test now checks that exact existing result. Numerical oracles, tolerances, tested extents and route assertions were not relaxed.

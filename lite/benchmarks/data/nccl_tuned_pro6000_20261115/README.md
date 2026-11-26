@@ -1,5 +1,8 @@
 # Independently tuned NCCL references on two PRO6000 GPUs
 
+> This directory retains only inputs and metadata needed by current figures or checks. [Complete original experiment](https://github.com/zhongjiechen/uccl-zhongjie-dev/tree/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_tuned_pro6000_20261115) includes raw runs, removed scripts and source snapshots. Historical commands below require that archive.
+
+
 This 2026-11-15 study adds tuned NCCL reference curves to the PRO6000 ×2
 AllReduce, AllGather and ReduceScatter figures. The original UCCL and
 default-NCCL curves remain unchanged. These new NCCL runs use the original
@@ -51,7 +54,7 @@ the cause of the stalls or their behavior outside the recorded harness.
 [cases.csv](cases.csv) contains every final latency, bus-bandwidth value,
 selected configuration and fresh default control. The figures retain the
 **original** default-NCCL curve; fresh controls are supplied here for comparing
-the tuning itself. [transport.json](transport.json) records the actual
+the tuning itself. [transport.json](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_tuned_pro6000_20261115/transport.json) records the actual
 per-case selection: P2P channels for kernel collectives, and explicit
 copy-engine collective selection at five AllGather sizes.
 
@@ -89,7 +92,7 @@ It compiles with `NCCL_REFERENCE_ONLY` and links no UCCL implementation.
 The earlier AllGather exploration tested P2P chunk size, collective buffer
 size, channel count, thread count, peer-read mode, the P2P memcpy transport,
 and the zero-CTA collective path. Its ascending-size results are preserved
-in [allgather_exploration.tar.gz](allgather_exploration.tar.gz). They are not
+in [allgather_exploration.tar.gz](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_tuned_pro6000_20261115/allgather_exploration.tar.gz). They are not
 substituted for the matched final measurements in these figures.
 
 The matched study screens 23 configurations, including default. Each candidate
@@ -102,8 +105,8 @@ lock is held, and GPU occupancy is checked before every process.
 For each operation and exact size, a candidate must beat its bracketed
 default control by at least 5% in **both** calibration orders. Among eligible
 candidates, selection minimizes geometric-mean calibration latency. Otherwise
-default remains selected. The resulting [schedule.json](schedule.json) is
-frozen, hashed and timestamped in [selection.json](selection.json) before
+default remains selected. The resulting [schedule.json](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_tuned_pro6000_20261115/schedule.json) is
+frozen, hashed and timestamped in [selection.json](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_tuned_pro6000_20261115/selection.json) before
 final evaluation, which uses different seeds.
 
 The tuned curve is therefore a **per-size calibrated benchmark schedule**.
@@ -136,25 +139,25 @@ selection traces record actual collective protocols and transport edges.
 
 ## Reproduction and review
 
-- [build_probe.py](build_probe.py) asserts the original source hash and builds
+- [build_probe.py](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_tuned_pro6000_20261115/build_probe.py) asserts the original source hash and builds
   the optional-registration NCCL reference using the repository Makefile.
-- [run.py](run.py) records commands, settings, timestamps, correctness status
+- [run.py](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_tuned_pro6000_20261115/run.py) records commands, settings, timestamps, correctness status
   and hashes for calibration, supplementary probes, evaluation and traces.
-- [select.py](select.py) produces the frozen schedule exclusively from
+- [select.py](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_tuned_pro6000_20261115/select.py) produces the frozen schedule exclusively from
   calibration evidence; it does not read final measurements.
-- [analyze.py](analyze.py) reconstructs all final medians from individual
+- [analyze.py](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_tuned_pro6000_20261115/analyze.py) reconstructs all final medians from individual
   samples, validates counts, correctness and settings against the frozen
-  schedule, and emits [cases.csv](cases.csv) and [summary.json](summary.json).
+  schedule, and emits [cases.csv](cases.csv) and [summary.json](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_tuned_pro6000_20261115/summary.json).
 - The figure script is
   [../pro6000_b0ac7b4a_validation/plot.py](../pro6000_b0ac7b4a_validation/plot.py).
   Run it with `--preview` from `experimental/lite`; SVGs go to `docs/assets/`
   and PNG/PDF previews go to `build/figures/`.
-- [check_traces.py](check_traces.py) validates actual selection at every
+- [check_traces.py](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_tuned_pro6000_20261115/check_traces.py) validates actual selection at every
   scheduled key. Raw harness labels such as `nccl_default` are generic;
   the run manifests and frozen schedule identify each actual configuration.
 
 Raw calibration, failure, supplementary, final and trace files are packaged
-in [measurements.tar.gz](measurements.tar.gz). For offline verification, copy
+in [measurements.tar.gz](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_tuned_pro6000_20261115/measurements.tar.gz). For offline verification, copy
 this directory to a temporary location, extract that archive there, and run
 `python3 analyze.py` and `python3 check_traces.py`. Do not rerun selection on
 the original package, since that would replace the frozen selection timestamp.

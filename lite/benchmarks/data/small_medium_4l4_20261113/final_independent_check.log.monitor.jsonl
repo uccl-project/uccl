@@ -1,9 +1,0 @@
-{"time": "2026-11-13T21:33:55.748509+00:00", "event": "availability", "pids": []}
-{"time": "2026-11-13T21:33:56.293258+00:00", "event": "start", "command": ["./build/uccl_lite_peer_small_medium_check"]}
-{"time": "2026-11-13T21:33:56.360575+00:00", "event": "sample", "child": 1517638, "pids": [], "foreign": []}
-{"time": "2026-11-13T21:33:56.911363+00:00", "event": "sample", "child": 1517638, "pids": [1517638], "foreign": []}
-{"time": "2026-11-13T21:33:57.452259+00:00", "event": "sample", "child": 1517638, "pids": [1517638], "foreign": []}
-{"time": "2026-11-13T21:33:57.995360+00:00", "event": "sample", "child": 1517638, "pids": [1517638], "foreign": []}
-{"time": "2026-11-13T21:33:58.740738+00:00", "event": "sample", "child": 1517638, "pids": [1517638], "foreign": []}
-{"time": "2026-11-13T21:33:59.280877+00:00", "event": "sample", "child": 1517638, "pids": [], "foreign": []}
-{"time": "2026-11-13T21:33:59.280998+00:00", "event": "finish", "status": 0, "contaminated": false}

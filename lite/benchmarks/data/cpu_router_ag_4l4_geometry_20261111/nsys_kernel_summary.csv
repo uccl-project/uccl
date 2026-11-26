@@ -1,3 +1,0 @@
-report,kernel,launches,actual_grid_blocks,threads_per_block,mean_kernel_us
-nsys_router_final_1g.nsys-rep,dispatchTransport,16,180,256,37697.442
-nsys_nccl_1g.nsys-rep,ncclDevKernel_AllGather_RING_LL,16,2,544,50663.947125

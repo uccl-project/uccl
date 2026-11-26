@@ -27,7 +27,7 @@ manylinux portability claim.
 Install into the same Python environment that runs SGLang or PyTorch:
 
 ```bash
-python -m pip install ./lite/integration/nccl_lite/wheels/uccl_lite_nccl-0.1.1-py3-none-linux_x86_64.whl
+python -m pip install ./lite/integration/nccl_lite/build/wheels/uccl_lite_nccl-0.1.1-py3-none-linux_x86_64.whl
 uccl-lite-nccl --real-nccl /absolute/path/to/libnccl.so.2 \
   -- python -m sglang.launch_server YOUR_SGLANG_ARGS
 ```

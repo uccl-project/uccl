@@ -120,7 +120,7 @@ specialized to two hosts with four GPUs each. The
 direct exchange for other supported layouts and BF16; hierarchy's own contract
 is unchanged. Host/NUMA measurement coverage, control/SM costs and
 broader distributed algorithms are still tracked in
-[the migration record](topology-runtime-refactor.md).
+[the migration record](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/topology-runtime-refactor.md).
 
 ## Running checks
 

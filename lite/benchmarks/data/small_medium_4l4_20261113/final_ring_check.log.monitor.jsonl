@@ -1,7 +1,0 @@
-{"time": "2026-11-13T21:39:37.714912+00:00", "event": "availability", "pids": []}
-{"time": "2026-11-13T21:39:38.256647+00:00", "event": "start", "command": ["./build/uccl_lite_peer_ring_check"]}
-{"time": "2026-11-13T21:39:38.380411+00:00", "event": "sample", "child": 1518638, "pids": [], "foreign": []}
-{"time": "2026-11-13T21:39:38.921047+00:00", "event": "sample", "child": 1518638, "pids": [1518638], "foreign": []}
-{"time": "2026-11-13T21:39:39.462694+00:00", "event": "sample", "child": 1518638, "pids": [1518638], "foreign": []}
-{"time": "2026-11-13T21:39:40.003394+00:00", "event": "sample", "child": 1518638, "pids": [], "foreign": []}
-{"time": "2026-11-13T21:39:40.003525+00:00", "event": "finish", "status": 0, "contaminated": false}

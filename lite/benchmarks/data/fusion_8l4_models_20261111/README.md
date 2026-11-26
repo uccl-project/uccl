@@ -1,5 +1,8 @@
 # Eight-L4 model-shape GEMM + AllReduce sweep (2026-11-11)
 
+> This directory retains only inputs and metadata needed by current figures or checks. [Complete original experiment](https://github.com/zhongjiechen/uccl-zhongjie-dev/tree/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/fusion_8l4_models_20261111) includes raw runs, removed scripts and source snapshots. Historical commands below require that archive.
+
+
 This experiment measures BF16 row-parallel FFN down projection followed by
 AllReduce on one eight-L4 host. GPUs 0–3 are on NUMA node 0 and GPUs 4–7 on
 node 1; peer access is unavailable between the groups. Each GPU computes
@@ -56,22 +59,22 @@ The 12 prefill shapes have aggregate NCCL/fused speedup of 1.17×–1.44×.
 | Qwen3-32B | 17.592 ms | 14.900 ms | 12.540 ms | 1.40× |
 
 The raw samples are [run 1](samples_run1.csv) and [run 2](samples_run2.csv).
-The [summary](summary.csv) records both run medians and their median. The
+The [summary](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/fusion_8l4_models_20261111/summary.csv) records both run medians and their median. The
 [decode figure](../../../docs/assets/fusion-8l4-model-gemm-ar-decode-m64-labeled-bars.svg) and
 [prefill figure](../../../docs/assets/fusion-8l4-model-gemm-ar-prefill-labeled-bars.svg)
 show those summary values on linear latency axes.
 
-The previous `M=16` samples remain in [run 1](samples_m16_run1.csv),
-[run 2](samples_m16_run2.csv), and their [summary](summary_m16.csv). They
+The previous `M=16` samples remain in [run 1](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/fusion_8l4_models_20261111/samples_m16_run1.csv),
+[run 2](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/fusion_8l4_models_20261111/samples_m16_run2.csv), and their [summary](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/fusion_8l4_models_20261111/summary_m16.csv). They
 include the Qwen3.5-9B case where NCCL was 0.292 ms versus 0.298 ms fused,
 and the Qwen3.5-27B case whose winner changed between runs. The
-[earlier decode figure](../../../docs/assets/fusion-8l4-model-gemm-ar-decode-labeled-bars.svg)
+[earlier decode figure](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/assets/fusion-8l4-model-gemm-ar-decode-labeled-bars.svg)
 is retained as a historical view.
 
 ## Reproduce
 
 From `experimental/lite`, with the same local NCCL shim as the
-[historical eight-GPU record](../cpu_router_8l4_20261110/README.md):
+[historical eight-GPU record](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/cpu_router_8l4_20261110/README.md):
 
 ```bash
 make -j2 build/uccl_lite_router_fusion_8l4 \

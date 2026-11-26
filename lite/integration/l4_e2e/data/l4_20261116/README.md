@@ -1,5 +1,8 @@
 # L4 parameter-sharded application measurements, 2026-11-16
 
+> This directory retains only inputs and metadata needed by current figures or checks. [Complete original experiment](https://github.com/zhongjiechen/uccl-zhongjie-dev/tree/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/integration/l4_e2e/data/l4_20261116) includes raw runs, removed scripts and source snapshots. Historical commands below require that archive.
+
+
 The final cohort uses pretrained **GPT-2-XL**, BF16, fixed **GPU-progress packet
 AllGather + existing peer ReduceScatter**. Training rematerializes each block
 with activation checkpointing (96 AG / 48 RS calls per full SGD step). Serving

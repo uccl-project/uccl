@@ -4,7 +4,7 @@
 > UCCL Lite binaries**. All nine unchanged nccl-tests sweeps also pass.
 > The default policy is now `graph512`; native NCCL fallback is forbidden.
 > [Qualification and default-build evidence](../../benchmarks/data/uccl_reference_gap_20261118/reference_protocol/qualified_release/README.md).
-> Earlier failures remain in the [progress record](../../docs/uccl-reference-no-regression.md).
+> Earlier failures remain in the [progress record](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/uccl-reference-no-regression.md).
 
 # Strict UCCL Lite NCCL ABI replacement
 
@@ -198,21 +198,21 @@ The older driver mode without `--abi-only` runs separate native baseline process
 and uses `--max-regression` relative to NCCL. Those historical measurements are
 retained below for provenance; they do not prove the active UCCL-relative target.
 
-The [strict 1-KiB–1-GiB evaluation](../../benchmarks/data/mscclpp_strict_2x4l4_20261117/README.md)
+The [strict 1-KiB–1-GiB evaluation](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/mscclpp_strict_2x4l4_20261117/README.md)
 passed correctness and per-size no-fallback checks in all 24 jobs. It failed
 the performance gate in 91/126 rows; the worst slowdown was 31.33%. No
 performance-parity claim or automatic performance admission is made.
 
 Subsequent working changes and their measurements are tracked in
-[strict optimization progress](../../docs/strict-optimization-progress.md).
-The [final independent validation](../../benchmarks/data/strict_release_2x4l4_20261117/README.md)
+[strict optimization progress](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/strict-optimization-progress.md).
+The [final independent validation](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/strict_release_2x4l4_20261117/README.md)
 passes **126/126 rows** under the established 5% per-row latency limit. Worst
 candidate/native ratios are AG 1.04125, RS 1.03403 and AR 1.04712. All numerical,
 per-rank/per-size route and native-library assertions pass. This is a scoped
 5%-tolerance result, not a claim of zero absolute slowdown or full NCCL API coverage.
 The report records the complete second AR round repeated after a controller
 interruption, the unchanged binary hash, and all validation/provenance artifacts.
-[Optimization history](../../benchmarks/data/strict_ll_rs_graph_2x4l4_20261117/README.md)
+[Optimization history](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/strict_ll_rs_graph_2x4l4_20261117/README.md)
 retains failed variants and screening outliers.
 
 Additional core checks build through the Makefile:
@@ -231,8 +231,8 @@ avoid waiting indefinitely on an absent rank.
 
 ## Earlier records
 
-[The initial adapter](../../benchmarks/data/mscclpp_adapter_2x4l4_20261117/README.md)
-and [the mixed-routing 1-GiB pass](../../benchmarks/data/mscclpp_1g_2x4l4_20261117/README.md)
+[The initial adapter](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/mscclpp_adapter_2x4l4_20261117/README.md)
+and [the mixed-routing 1-GiB pass](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/mscclpp_1g_2x4l4_20261117/README.md)
 are historical measurements of implementations that allowed native fallback.
 They do not satisfy the strict requirement and do not validate this changed
 implementation.

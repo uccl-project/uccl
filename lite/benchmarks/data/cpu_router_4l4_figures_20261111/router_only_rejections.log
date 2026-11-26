@@ -1,6 +1,0 @@
-explicit NCCL fallback
-error: --router-only cannot use a fallback, profile, calibration or disabled router
-exit_code=1
-disabled router
-error: --router-only cannot use a fallback, profile, calibration or disabled router
-exit_code=1

@@ -1,7 +1,0 @@
-sm:multicast:self
-sm:multicast:pair
-dma:multicast:pair
-sm:paired:host
-dma:paired:host
-sm:paired:pair
-dma:paired:pair

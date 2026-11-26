@@ -1,6 +1,0 @@
-{
-  "method": "minimum sum log calibration latency + log(1.03) per configuration switch",
-  "validation_used": false,
-  "cases": 252,
-  "segments": 40
-}

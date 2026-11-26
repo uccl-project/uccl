@@ -1,5 +1,0 @@
-# Preserve the recorded benchmark evidence in this directory.
-!*.csv
-!*.json
-!*.jsonl
-!*.log

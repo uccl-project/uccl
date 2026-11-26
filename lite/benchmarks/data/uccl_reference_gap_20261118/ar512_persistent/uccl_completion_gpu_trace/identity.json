@@ -1,5 +1,0 @@
-{
-  "binary": "build/uccl_completion_gpu_trace/nccl_lite/libuccl_lite_nccl_strict.so",
-  "sha256": "2bd40544c3849975552328bcb5f2af1cdb25e230c85ab089bac1957681f836fc",
-  "scope": "fixed experimental build; comparisons to original UCCL are diagnostic, not matched admission"
-}

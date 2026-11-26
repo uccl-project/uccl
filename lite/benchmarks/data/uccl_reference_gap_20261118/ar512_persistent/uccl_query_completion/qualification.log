@@ -1,8 +1,0 @@
-Starting measure_all.py
-Starting fixed-library ag
-AG diagnostic 0
-AG diagnostic 1
-AG diagnostic 2
-[{'bytes': 8388608, 'layout': 'out-of-place', 'median_us': 332.27, 'min_us': 332.14, 'max_us': 332.61, 'reference_us': 355.3684666666667, 'diagnostic_ratio': 0.9350013610286562}, {'bytes': 8388608, 'layout': 'in-place', 'median_us': 331.88, 'min_us': 331.75, 'max_us': 332.11, 'reference_us': 355.3684666666667, 'diagnostic_ratio': 0.9339039085628869}, {'bytes': 1073741824, 'layout': 'out-of-place', 'median_us': 39399.3, 'min_us': 39365.1, 'max_us': 39418.1, 'reference_us': 41921.7642, 'diagnostic_ratio': 0.9398292450678878}, {'bytes': 1073741824, 'layout': 'in-place', 'median_us': 39461.6, 'min_us': 39421.3, 'max_us': 39470.7, 'reference_us': 41921.7642, 'diagnostic_ratio': 0.9413153466475536}]
-Starting fixed-library ar
-AR diagnostic 0

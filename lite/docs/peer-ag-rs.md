@@ -13,7 +13,7 @@ eager GPU-event curves. The README links the current full-size tables.
 
 ## Archived November 11 four-L4 AllGather figure
 
-The [owner-host FP32 paired sweep](../benchmarks/data/fp32_packet_ag_per_source_4l4_20261111/README.md)
+The [owner-host FP32 paired sweep](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/fp32_packet_ag_per_source_4l4_20261111/README.md)
 keeps `push-serial` at 1 KiB–2 MiB and the direct peer path at 4–8 MiB,
 then uses the per-source GPU-progress host-packet router at 16 MiB–1 GiB.
 Every size uses the
@@ -24,7 +24,7 @@ FP32 implementations and values.
 
 ## Archived FP32 four-L4 AllGather
 
-The [November 11 paired sweep](../benchmarks/data/ag_midrange_4l4_20261111/README.md)
+The [November 11 paired sweep](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/ag_midrange_4l4_20261111/README.md)
 adds a single-CTA source-side push. Each GPU writes its shard to all four
 rank-ordered output slices, visiting one peer at a time; the four sources
 rotate destination order. This removes the many copy submissions and peer
@@ -43,7 +43,7 @@ below uses only the l40 sweep, with one selected UCCL path and NCCL.
 
 ## Archived FP32 four-L4 ReduceScatter
 
-The [new paired sweep and candidate data](../benchmarks/data/rs_ar_serial_4l4_20261111/README.md)
+The [new paired sweep and candidate data](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/rs_ar_serial_4l4_20261111/README.md)
 uses one source-side CTA per GPU to visit peer scratch regions sequentially.
 Through 1 MiB, the destination's same kernel waits for system-scope source
 flags and reduces the four contributions. An LL16 packet form is selected at
@@ -63,9 +63,9 @@ AllGather on four L4 GPUs. Each GPU uploads its shard in chunks to two reusable
 host slots bound to its PCI NUMA node; every GPU downloads all four shards in
 rank order. Cross-device CUDA events protect slot reuse while uploads of the
 next chunk overlap the current fan-out. The [duplex-optimized 21-size sweep,
-raw samples, and Nsight timelines](../benchmarks/data/cpu_router_ag_duplex_20261111/README.md)
+raw samples, and Nsight timelines](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/cpu_router_ag_duplex_20261111/README.md)
 use 4 MiB chunks and compare against direct peer paths and NCCL 2.28.7.
-The [original CUDA-allocated host-slot sweep](../benchmarks/data/cpu_router_ag_4l4_20261111/README.md)
+The [original CUDA-allocated host-slot sweep](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/cpu_router_ag_4l4_20261111/README.md)
 is retained as an ablation.
 This is an experimental host-staged candidate, separate from the BF16 CPU
 router module and from the archived FP32 direct-peer curve in this document.
@@ -93,9 +93,9 @@ reads its own input shard directly and skips the local copy into scratch.
 The tested 128-KiB, 512-KiB, and 16-MiB exceptions retain that copy because
 the direct-self variant regressed there on at least one host.
 
-![Optimized four-L4 AllGather latency and bus throughput](assets/collectives-4l4-allgather-optimized.svg)
+[Archived figure: Optimized four-L4 AllGather latency and bus throughput](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/assets/collectives-4l4-allgather-optimized.svg)
 
-![Optimized four-L4 ReduceScatter latency and bus throughput](assets/collectives-4l4-reducescatter-optimized.svg)
+[Archived figure: Optimized four-L4 ReduceScatter latency and bus throughput](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/assets/collectives-4l4-reducescatter-optimized.svg)
 
 At 2 KiB, AG takes **14.07 versus 26.57 µs** and RS **13.73 versus
 26.34 µs** (UCCL Lite versus NCCL). At 1 GiB, AG takes **45.489 versus
@@ -103,7 +103,7 @@ At 2 KiB, AG takes **14.07 versus 26.57 µs** and RS **13.73 versus
 at 13 of 21 sizes and RS at 7 of 21; medium-size regressions remain in the
 full sweep.
 
-The [optimization record](../benchmarks/data/optimization_20261110/README.md)
+The [optimization record](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/optimization_20261110/README.md)
 links the complete raw log, 3-run samples, every UCCL candidate, and the
 Nsight/ablation evidence. An unfenced peer-read prototype failed RS
 correctness at 1 MiB and is retained there as a negative result.
@@ -118,9 +118,9 @@ Each of three repetitions has five warmups and ten timed calls. Every warmup
 and timed output is fully checked with a changed input generation. A separate
 1008-byte non-power-of-two tail check passes.
 
-![Fresh four-L4 AllGather latency and bus throughput](assets/collectives-4l4-allgather-refresh.svg)
+[Archived figure: Fresh four-L4 AllGather latency and bus throughput](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/assets/collectives-4l4-allgather-refresh.svg)
 
-![Fresh four-L4 ReduceScatter latency and bus throughput](assets/collectives-4l4-reducescatter-refresh.svg)
+[Archived figure: Fresh four-L4 ReduceScatter latency and bus throughput](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/assets/collectives-4l4-reducescatter-refresh.svg)
 
 | Complete bytes/rank | AG peer / NCCL (µs) | RS peer / NCCL (µs) |
 | ---: | ---: | ---: |
@@ -130,10 +130,10 @@ and timed output is fully checked with a changed input generation. A separate
 | 1 GiB | 45644.624 / 49371.273 | 51001.610 / 49011.466 |
 
 The 1-GiB AG result is 1.082× faster; RS loses by about 4%. Small-message
-losses remain substantial. The [complete summary](../benchmarks/data/refresh_20261110/single_peer_summary.csv),
-[2,520 timed call samples](../benchmarks/data/refresh_20261110/single_peer_samples.csv),
-[raw log](../benchmarks/data/refresh_20261110/single_peer_ag_rs_raw.log),
-and [tail check](../benchmarks/data/refresh_20261110/single_peer_tail_1008.log)
+losses remain substantial. The [complete summary](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110/single_peer_summary.csv),
+[2,520 timed call samples](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110/single_peer_samples.csv),
+[raw log](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110/single_peer_ag_rs_raw.log),
+and [tail check](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110/single_peer_tail_1008.log)
 retain every size and repetition. The older sweep below is historical and
 uses a different per-run batch timing method.
 
@@ -165,7 +165,7 @@ make peer_ag_rs NCCL_HOME=/path/to/nccl/build
 
 ## Measured result
 
-The [complete 17-size sweep](../benchmarks/data/peer_ag_rs_4l4_20261110.txt)
+The [complete 17-size sweep](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/peer_ag_rs_4l4_20261110.txt)
 was run November 10, 2026 on four NVIDIA L4s, PCIe Gen4 x16, NUMA pairs
 `(0,1)` and `(2,3)`, driver 595.58.03, CUDA 12.9 and NCCL 2.28.7. Each
 backend uses the same process, buffers, streams, dtype, size, and timing

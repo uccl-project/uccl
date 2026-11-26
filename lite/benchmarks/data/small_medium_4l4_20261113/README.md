@@ -1,5 +1,8 @@
 # Four-L4 full-size and small/medium optimization study
 
+> This directory retains only inputs and metadata needed by current figures or checks. [Complete original experiment](https://github.com/zhongjiechen/uccl-zhongjie-dev/tree/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/small_medium_4l4_20261113) includes raw runs, removed scripts and source snapshots. Historical commands below require that archive.
+
+
 This follow-up explicitly covers small, medium and large messages. Hardware is
 `mibura-sky-test-02`: four NVIDIA L4s, PCIe Gen4 x16, NUMA pairs (0,1)/(2,3),
 dual Xeon Silver 4410Y, CUDA toolkit/runtime 12.9, driver 595.58.03, NCCL 2.28.7.
@@ -22,9 +25,9 @@ GPU; AG inputs and RS outputs are one quarter of that extent.
   NCCL. They are benchmark envelopes, not a portable runtime routing policy.
   Min/max run means, every candidate and all negative results remain in CSV/logs.
 
-[AR selected](ar_selected.csv) · [AR candidates](ar_candidates.csv) ·
-[AG selected](ag_selected.csv) · [AG candidates](ag_candidates.csv) ·
-[RS selected](rs_selected.csv) · [RS candidates](rs_candidates.csv).
+[AR selected](ar_selected.csv) · [AR candidates](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/small_medium_4l4_20261113/ar_candidates.csv) ·
+[AG selected](ag_selected.csv) · [AG candidates](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/small_medium_4l4_20261113/ag_candidates.csv) ·
+[RS selected](rs_selected.csv) · [RS candidates](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/small_medium_4l4_20261113/rs_candidates.csv).
 These CSVs retain paired UCCL/NCCL timings in microseconds, including every
 slower UCCL median; differences are descriptive, not significance tests.
 
@@ -112,14 +115,14 @@ and integration into application graphs are not validated.
 `resident_doorbell_final.log` covers 16 B–1 MiB, 17 sizes × 3 operations,
 20 warmups and 3 alternating rounds × 20 calls. All configured warmups and
 all **6,120 timed invocations** check changed signed-random inputs against an
-independent GPU sum/reference. [Full resident data](resident_selected.csv) are separate from eager curves.
+independent GPU sum/reference. [Full resident data](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/small_medium_4l4_20261113/resident_selected.csv) are separate from eager curves.
 At 1 KiB, AR / AG / RS take **7.65 / 6.03 / 7.42 µs**, versus their paired eager
 NCCL controls **33.80 / 30.15 / 29.95 µs**.
 
 A stronger control captures NCCL into a single multi-device fork/join graph,
 without per-GPU timing nodes. `resident_graph_final.log` contains another
 6,120 checked timed calls with the same input-ready host timer; graph
-preparation is excluded. Its [own paired data](resident_graph_selected.csv)
+preparation is excluded. Its [own paired data](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/small_medium_4l4_20261113/resident_graph_selected.csv)
 must be used for ratios. A separate per-device-graph probe at 1 KiB passed but
 was slower than the global-graph control; its raw results are retained.
 These observations do not imply that graphs never help NCCL or that a resident

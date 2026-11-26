@@ -1,19 +1,0 @@
-Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 1240.55it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 1239.26it/s]
-Traceback (most recent call last):
-  File "/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/integration/peer_e2e/benchmark.py", line 399, in <module>
-    main()
-  File "/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/integration/peer_e2e/benchmark.py", line 376, in main
-    reference = reference_check(args, model)
-                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/xinze/dev/FreeToken-dev/.venv/lib/python3.12/site-packages/torch/utils/_contextlib.py", line 124, in decorate_context
-    return func(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^
-  File "/home/xinze/dev/uccl-lite-e2e-pro6000-20261115/integration/peer_e2e/benchmark.py", line 336, in reference_check
-    torch.testing.assert_close(actual, expected, atol=0.25, rtol=0.02)
-  File "/home/xinze/dev/FreeToken-dev/.venv/lib/python3.12/site-packages/torch/testing/_comparison.py", line 1689, in assert_close
-    raise error_metas[0].to_error(msg)
-AssertionError: Tensor-likes are not close!
-
-Mismatched elements: 50662 / 1608224 (3.2%)
-Greatest absolute difference: 3.75 at index (1, 0, 7456) (up to 0.25 allowed)
-Greatest relative difference: 0.09154929220676422 at index (1, 0, 407) (up to 0.02 allowed)

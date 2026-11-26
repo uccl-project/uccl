@@ -1,6 +1,0 @@
-mkdir -p build/uccl_host_warp_flags/nccl_lite
-/usr/local/cuda/bin/nvcc -O3 -arch=sm_89 -MMD -MP -DUCCL_LITE_HOST_GATHER_EXPERIMENT -DUCCL_LITE_HOST_HYBRID_EXPERIMENT -DUCCL_LITE_HOST_FUSE_FLAGS -DUCCL_LITE_HOST_WARP_FLAGS -std=c++20 -Xcompiler=-fPIC -Xcompiler=-fvisibility=hidden -Iinclude -I/home/zhongjie/third_party/mscclpp/include -I/home/zhongjie/third_party/mscclpp/build-ib-pcieccl/include -c src/multinode/mscclpp_backend.cu -o build/uccl_host_warp_flags/nccl_lite/mscclpp_backend.o
-g++ -O3 -std=c++17 -fPIC -shared -pthread -Iinclude -I/usr/local/cuda/include -I/home/zhongjie/third_party/nccl/build/include integration/nccl_lite/mscclpp_strict.cc build/uccl_host_warp_flags/nccl_lite/mscclpp_backend.o -Wl,--version-script=integration/nccl_lite/mscclpp_exports.version -Wl,-soname,libnccl.so.2 -L/home/zhongjie/third_party/mscclpp/build-ib-pcieccl/lib -lmscclpp -Wl,-rpath,/home/zhongjie/third_party/mscclpp/build-ib-pcieccl/lib -L/usr/local/cuda/lib64 -lcudart -Wl,-rpath,/usr/local/cuda/lib64  -o build/uccl_host_warp_flags/nccl_lite/libuccl_lite_nccl_strict.so
-mkdir -p build/uccl_host_warp_flags/nccl_lite/strict
-ln -sfn ../libuccl_lite_nccl_strict.so build/uccl_host_warp_flags/nccl_lite/strict/libnccl.so.2
-ln -sfn libuccl_lite_nccl_strict.so build/uccl_host_warp_flags/nccl_lite/libuccl_lite_nccl_mscclpp.so

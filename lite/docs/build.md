@@ -82,7 +82,7 @@ candidate never admits it: live capability checks and exact-request timing
 remain required. Historical timing does not qualify rebuilt artifacts.
 
 For current limitations and execution commands, see
-[the migration record](topology-runtime-refactor.md),
+[the migration record](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/topology-runtime-refactor.md),
 [prepared local selection](prepared-local-runtime.md), and
 [owned graphs](prepared-graphs.md). The standalone benchmark targets below retain
 their recorded workload/topology names.
@@ -279,7 +279,7 @@ The `--graph` peer harness supports SM pull/push-serial and NCCL through 1 MiB;
 CE peer copies and host-generation LL/fence candidates are excluded. Its timing
 is graph-versus-graph, separate from the eager README curves.
 Native AR `-a 8` selects only the existing ring for diagnostics; omitting `-a`
-retains the original candidate sweep. See the [additional optimization results](../benchmarks/data/optimization_4l4_20261113/README.md#reducescatter-granularity).
+retains the original candidate sweep. See the [additional optimization results](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/optimization_4l4_20261113/README.md#reducescatter-granularity).
 
 ## Full-size and small/medium follow-up
 

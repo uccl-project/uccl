@@ -1,8 +1,0 @@
-# NUMA group0 host_node=0 ranks=0(device0),1(device1),
-# NUMA group1 host_node=1 ranks=2(device2),3(device3),
-# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=4 NUMA_groups=2
-# packet_progress=gpu routing_cpu_workers=0
-# CPU-router BF16: packet=4194304 slots=2 blocks<=248 threads=256 CPU<=8/node grain=8192; no NCCL collective fallback
-# reduction_placement=gpu
-# scatter_packet_order=flat
-{"kind": "serving", "case": "8:32:4", "samples_s": [0.23517190665006638, 0.23488596826791763, 0.23458699882030487, 0.23475079983472824, 0.23499759659171104], "median_s": 0.23488596826791763, "prompt_sha256": "06f5a04fea4eb50222d38415aa9920b8cd33f890a4b0604f181d81e4d84c9754", "response_sha256": ["420a6bdf52ad1a94c31715b59ac17ded36fdb3ce07aa0e355141a82aae5d7ff7", "420a6bdf52ad1a94c31715b59ac17ded36fdb3ce07aa0e355141a82aae5d7ff7", "420a6bdf52ad1a94c31715b59ac17ded36fdb3ce07aa0e355141a82aae5d7ff7", "420a6bdf52ad1a94c31715b59ac17ded36fdb3ce07aa0e355141a82aae5d7ff7", "420a6bdf52ad1a94c31715b59ac17ded36fdb3ce07aa0e355141a82aae5d7ff7"]}

@@ -1,6 +1,0 @@
-{
-  "retained-pcieccl.patch": "Exact patch against pinned commit8cf173918d7e46fdd9734fac4f7292e310439837, includes required formatting.",
-  "algorithm-changes.diff": "Review-only difference against identically formatted original source; isolates algorithm changes.",
-  "formatted_original_sha256": "690587c6f4233e03cf385803e3f4c97170ee67d5e41053e3229ca8a6741f4240",
-  "retained_sha256": "ce751fa67339d5163171721a350c09d8edc14876a2e89cb808349ba984f75175"
-}

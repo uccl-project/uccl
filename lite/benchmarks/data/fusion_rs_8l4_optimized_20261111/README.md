@@ -1,5 +1,8 @@
 # Eight-L4 GEMM + ReduceScatter after prefill scheduling fixes
 
+> This directory retains only inputs and metadata needed by current figures or checks. [Complete original experiment](https://github.com/zhongjiechen/uccl-zhongjie-dev/tree/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/fusion_rs_8l4_optimized_20261111) includes raw runs, removed scripts and source snapshots. Historical commands below require that archive.
+
+
 BF16, eight L4 GPUs (0–3 and 4–7 on separate NUMA nodes), driver 580.178.04,
 CUDA 12.9.41, CUTLASS 4.5.0, local NCCL 2.28.9 shim. All methods use 512 KiB
 router packets where applicable. Each sample is the slowest GPU's CUDA-event
@@ -44,11 +47,11 @@ scheduling.
 
 [Prefill bars](../../../docs/assets/fusion-8l4-model-gemm-rs-prefill-optimized-labeled-bars.svg) ·
 [decode bars](../../../docs/assets/fusion-8l4-model-gemm-rs-decode-optimized-labeled-bars.svg) ·
-[summary CSV](summary_gemm_rs.csv) ·
+[summary CSV](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/fusion_rs_8l4_optimized_20261111/summary_gemm_rs.csv) ·
 [run 1 samples](samples_gemm_rs_run1.csv) ·
 [run 2 samples](samples_gemm_rs_run2.csv) ·
-[run 1 log](gemm_rs_run1.log) ·
-[run 2 log](gemm_rs_run2.log)
+[run 1 log](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/fusion_rs_8l4_optimized_20261111/gemm_rs_run1.log) ·
+[run 2 log](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/fusion_rs_8l4_optimized_20261111/gemm_rs_run2.log)
 
 From `experimental/lite`, reproduce with:
 

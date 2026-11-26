@@ -10,8 +10,8 @@ forward collective calls to native NCCL.
 One fixed library passes all 126 performance points: AG 42/42, AR 42/42,
 RS 42/42. The default Makefile policy is `four-l4-fp32`. A fresh default build
 is byte-identical to the measured library, and its stock nccl-tests confirmation
-passes. See the [qualification report](../benchmarks/data/nccl_local_strict_4l4_20261119/report.md)
-and [progress record](local-strict-progress.md), which retains negative results.
+passes. See the [qualification report](archived-experiments.md#local-only-records)
+and [progress record](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/local-strict-progress.md), which retains negative results.
 
 The supported test scope is FP32 AllGather and FP32 SUM AllReduce/ReduceScatter,
 eager calls, one live communicator per process, and serialized host submission.

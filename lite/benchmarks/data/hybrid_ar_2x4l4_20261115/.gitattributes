@@ -1,2 +1,0 @@
-raw/*.log -text -diff
-*.csv text eol=lf

@@ -1,8 +1,0 @@
-operation,bytes,selected,uccl_us,nccl_us
-all_reduce,16777216,ring-packet,1376.2336,1485.4208
-all_reduce,33554432,ring-packet,2542.7327999999998,2916.448
-all_reduce,67108864,ring-packet,4938.6272,5513.5616
-all_reduce,134217728,ring-packet,9692.2784,10910.2752
-all_reduce,268435456,ring-packet,19178.6398,21752.8157
-all_reduce,536870912,ring-packet,38127.9138,43410.8096
-all_reduce,1073741824,ring-packet,75978.17300000001,91165.354

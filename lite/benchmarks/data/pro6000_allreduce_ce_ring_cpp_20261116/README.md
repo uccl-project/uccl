@@ -1,5 +1,8 @@
 # UCCL Lite AllReduce: large-message bottleneck and CE ring follow-up
 
+> This directory retains only inputs and metadata needed by current figures or checks. [Complete original experiment](https://github.com/zhongjiechen/uccl-zhongjie-dev/tree/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/pro6000_allreduce_ce_ring_cpp_20261116) includes raw runs, removed scripts and source snapshots. Historical commands below require that archive.
+
+
 **The measured target is met:** UCCL Lite wins **all 21 sizes in all five
 independent validation rounds**, and its slowest observed run beats NCCL CE's
 fastest observed run at every size. Policies were frozen before validation.
@@ -10,15 +13,15 @@ At 64 MiB they are 2.300 versus 2.430 ms; at 1 KiB,
 9.10 versus 186.90 µs. There are no remaining losing sizes in this
 recorded configuration. This remains an experimental, hardware-specific policy.
 
-This experiment follows the [earlier staged-CE measurements](../pro6000_allreduce_ce_cpp_20261116/README.md).
+This experiment follows the [earlier staged-CE measurements](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/pro6000_allreduce_ce_cpp_20261116/README.md).
 The earlier results remain intact. This run adds a topology-aware CE ring,
 corrects CPU affinity enforcement, and independently recalibrates both backends.
 The NCCL reference calls `ncclAllReduce` directly from the matched C++ harness;
 it is **not the official nccl-tests executable**.
 
-[all five measurements](summary.csv)
+[all five measurements](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/pro6000_allreduce_ce_ring_cpp_20261116/summary.csv)
 
-![Frozen-policy FP32/C++ comparison](../../../docs/assets/collectives-pro6000x8-allreduce-fp32-ce-ring.svg)
+[Archived figure: Frozen-policy FP32/C++ comparison](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/assets/collectives-pro6000x8-allreduce-fp32-ce-ring.svg)
 
 ## Bottleneck found before changing the algorithm
 
@@ -42,7 +45,7 @@ about **52 GB/s**. A diagnostic 2-lane/256-MiB-tile ring control with one copy s
 36.66-ms kernel span and 36.14 ms of payload copying per rank. These are
 separate instrumented diagnostics, excluded from calibration and validation.
 
-![Measured copy-time bottleneck](../../../docs/assets/collectives-pro6000x8-allreduce-ce-bottleneck.svg)
+[Archived figure: Measured copy-time bottleneck](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/assets/collectives-pro6000x8-allreduce-ce-bottleneck.svg)
 
 Both schedules transfer **1.75N bytes per rank**. The ring does not reduce
 that volume. It actually increases aggregate SYS payload from 2N to 3.5N
@@ -189,7 +192,7 @@ validate performance. The source change removes ordering between lanes; we
 do not infer an exact control-versus-compute breakdown from these traces.
 
 The historical staged epoch's buffer-reuse failure and its repair remain in the
-[earlier archive](../pro6000_allreduce_ce_cpp_20261116/README.md). Historical
+[earlier archive](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/pro6000_allreduce_ce_cpp_20261116/README.md). Historical
 measurements validate only their recorded source and placement.
 
 ## Reproduction

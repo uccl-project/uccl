@@ -1,8 +1,0 @@
-{
-  "benchmarks/cpu_router/compact_collectives.cu": "3650d52f0a0c6f46eec59d456624cca2faca40f477caf46d84245d6cf09f0512",
-  "benchmarks/cpu_router/compact_transport.cuh": "8fe68f863b7837f887bfa054f1074cd96d1eda78a2fcd668779d084802d6295e",
-  "scripts/run_compact_transfer.py": "79ae7ab20bdc832763393af38d9c9e499fcb3e115fc2e846517ad7181bee9f36",
-  "build/transfer_4to8_20261114/uccl_lite_compact_collectives": "0c6db41125147dfe6a2618c9d68a53c7a8a72f29ac1cd200ed711a42aaba73a7",
-  "build/transfer_4to8_20261114/uccl_lite_collectives": "f0beeb27f85cca192f655128beb91a80a06fa42cb88791bb0669af5fb48a2bc0",
-  "commit": "5da288f6cd530c40953de4f3220f8f7857a3f60e"
-}

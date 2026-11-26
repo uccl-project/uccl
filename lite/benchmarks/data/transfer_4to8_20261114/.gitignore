@@ -1,5 +1,0 @@
-# Preserve benchmark evidence, including negative diagnostic runs.
-!*.log
-!*.csv
-!*.json
-!*.profile

@@ -1,5 +1,0 @@
-resident collectives: CUDA line 497: operation not permitted when stream is capturing
-# four L4 resident experiment; FP32 signed random; AG/RS out-of-place; AR in-place; input-ready host post-to-completion; prepare excluded; warmups=5 iterations=10 repeats=3; no resident CTA during NCCL
-# resident command uses one packed 64-bit release/acquire doorbell
-# packet-mode=1; LL RS through 8192 bytes, AR through 2048 bytes; larger AR uses RS+AG
-# NCCL baseline=per-device-graph; graph mode preselects root context before both timers

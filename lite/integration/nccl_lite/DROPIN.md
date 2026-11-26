@@ -13,7 +13,7 @@ required a separate reduce-scatter process group and hook. Testbed 4's serving
 and training results used an explicit parameter-sharded application adapter.
 Neither figure establishes performance for this implementation.
 
-The [full validation report](data/dropin_8l4_20261115/README.md) includes fresh
+The [full validation report](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/integration/nccl_lite/data/dropin_8l4_20261115/README.md) includes fresh
 serving/training results, raw repetitions, correctness checks and limitations.
 
 ## Fresh eight-L4 serving results
@@ -53,8 +53,8 @@ All recorded parameter samples match across backends; the maximum complete
 loss-history difference is 0.00104. These checks are not a convergence study
 or a comparison of every trained parameter.
 
-[Raw training data and summary](data/dropin_8l4_20261115/training/summary.json)
-and [local calibration](data/dropin_8l4_20261115/calibration/summary.json) retain
+[Raw training data and summary](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/integration/nccl_lite/data/dropin_8l4_20261115/training/summary.json)
+and [local calibration](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/integration/nccl_lite/data/dropin_8l4_20261115/calibration/summary.json) retain
 the underlying measurements. The profile accepts **26 of 36** exact shapes;
 the remaining ten use NCCL. These are fresh local measurements, separate from
 the historical figures.
@@ -79,7 +79,7 @@ python3 integration/nccl_lite/dropin_profile.py \
 ```
 
 The ready profile for this exact host/build is
-[`data/dropin_8l4_20261115/profile.tsv`](data/dropin_8l4_20261115/profile.tsv).
+[`data/dropin_8l4_20261115/profile.tsv`](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/integration/nccl_lite/data/dropin_8l4_20261115/profile.tsv).
 Use the recorded `NCCL_NET=Socket NCCL_NET_PLUGIN=none NCCL_PROFILER_PLUGIN=none`
 environment and `/data/wxzheng/kt-venv/bin/python` for the measured setup.
 

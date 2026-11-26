@@ -1,12 +1,4 @@
-# Joint peer/router evaluation (EAT setup baseline)
-
-This file records the historical frozen experiment protocol. For the integrated
-branch, current build targets, four/eight-rank router fixtures, measured losses
-and reproduction commands, see [retained optimizations](../../docs/retained-optimizations.md).
-
-This experiment starts from committed UCCL Lite `5b9a7f86`, separately from the earlier CPU-router-only EAT task. The original checkout's uncommitted experiments are excluded. Integrating the two methods and adding BF16/rank support creates a **new baseline**, not an optimization win.
-
-The direct-peer adapter in `src/collectives/joint_collectives.cu` generalizes the destination-pull patterns of `peer_ag_rs.cu` from four-rank FP32 to two/four-rank BF16, with full-tensor reduction for AR. It is not an unchanged historical FP32 benchmark or a claim about a separately named PCIeCCL project. It requires all-pairs CUDA peer access. The router method uses the current upstream `CpuRouterOptions` defaults, which include an optional GPU-progress reduction for the exact small-RS case; “router” denotes the routed transport, not exclusively CPU arithmetic.
+# Joint peer/router benchmark
 
 Build `make joint-bench joint-nccl-reference` with the node's CUDA/NCCL/CUTLASS paths. `build/uccl_lite_joint_nccl_reference` is compiled with `NCCL_REFERENCE_ONLY`: candidate headers, dispatch/policy implementations and router/peer objects are excluded. It provides the immutable NCCL reference. NCCL default is primary on **both** nodes; `--shm-only` is a separate diagnostic and must not replace that primary comparison. The wrapper's peer/router/joint execution never calls NCCL.
 
@@ -29,8 +21,5 @@ Standard output contains a summary CSV followed by `# correctness: PASS`; stderr
 
 `--selftest --gpus N --source-identity REVISION` additionally checks missing and stale profile identities, mismatched size/placement/alignment, unsupported peer capability, delayed producers, twelve asynchronous back-to-back calls with input reuse, repeated instantiation, and eager-only capture rejection/recovery. An independent host double oracle covers broad finite BF16 reductions with a forward error bound allowing intermediate BF16 tree rounding; AG checks arbitrary BF16 bit patterns including signed zero, subnormals, infinities and NaNs exactly. Odd 257-element contributions test tails outside the scored grid. Existing router policy, dispatcher, eager and graph tests remain separate required checks.
 
-The benchmark, this protocol, reference code and test sources are frozen after setup and before optimization iteration 1. Short diagnostics may override repetition counts but are labeled diagnostic; they cannot establish final NCCL parity or override promotion gates. Preserve failures and rejected trials, report separate node scores, and distinguish setup integration, optimization improvement, per-case wins and aggregate NCCL parity.
 
-## Protocol amendment before scored trials
-
-The user was informed before evaluation continuation: actual joint and NCCL control curves retain100 warmups and5x20 measurements across all63cases. Separate pure-router/peer diagnostic curves and independent calibration use3 warmups and3x5 measurements. The initial scalar peer adapter is exceptionally slow for large cross-NUMA transfers and is not the upstream selected best FP32 implementation. This amendment avoids exhausting the run on that known weak unselected path. Pure-path scores are diagnostic; official score remains full measured joint/NCCLdefault. Calibration remains a separate process with a distinct generation seed. Pre-amendment baseline logs are preserved and labeled.
+Frozen experiment-specific source copies and the original optimization journal are in [the archive](../../docs/archived-experiments.md). Current capability checks and fresh exact-request qualification remain required.

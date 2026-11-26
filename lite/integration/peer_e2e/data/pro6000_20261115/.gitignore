@@ -1,3 +1,0 @@
-# Retain benchmark evidence, including failures, despite the repository log rule.
-!*.log
-!*.json

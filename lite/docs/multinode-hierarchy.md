@@ -92,4 +92,4 @@ repeated-generation and delayed-consumer cases, and two-host end-to-end checks
 before promotion. Current November 15 validation covers the GPU RS experiment,
 not this proposed CPU adapter or graph replay.
 
-See [the current measurement record](../benchmarks/data/multinode_overlap_20261115/README.md).
+See [the current measurement record](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/multinode_overlap_20261115/README.md).

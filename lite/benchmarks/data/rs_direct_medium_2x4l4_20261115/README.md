@@ -1,5 +1,8 @@
 # ReduceScatter: direct medium-message ring, November 15
 
+> This directory retains only inputs and metadata needed by current figures or checks. [Complete original experiment](https://github.com/zhongjiechen/uccl-zhongjie-dev/tree/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/rs_direct_medium_2x4l4_20261115) includes raw runs, removed scripts and source snapshots. Historical commands below require that archive.
+
+
 Standalone `--rs-auto 1` now uses a **single direct-ring piece at 8–16 MiB**.
 The original standard-layout input remains immutable, so the input permutation
 kernel and its packed-buffer traffic are avoided. Other size regimes retain
@@ -26,14 +29,14 @@ and min/max of round means. The candidate uses one fixed size rule, not a
 measured best-variant-per-size envelope. This remains an explicit standalone
 eager benchmark; no automatic application router changes.
 
-The [exploratory screen](../rs_full_screen_2x4l4_20261115/README.md) retains the
+The [exploratory screen](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/rs_full_screen_2x4l4_20261115/README.md) retains the
 rejected launch, piece-size, serial and fused-forwarding experiments. Gains
 against the old default launch are not used to qualify this change.
 
-![ReduceScatter latency and throughput](results.svg)
+[Archived figure: ReduceScatter latency and throughput](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/rs_direct_medium_2x4l4_20261115/results.svg)
 
 The displayed NCCL curve is **unchanged historical data** from the
-[November 11 tuned control](../nccl_tuned_2x4l4_20261111/README.md). No NCCL
+[November 11 tuned control](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_tuned_2x4l4_20261111/README.md). No NCCL
 benchmark is run for this change. Its hardware/dtype and host timing scope match,
 but these are separate measurement dates, not a fresh paired comparison.
 `summary.csv` combines candidate measurements with those recorded NCCL rows;

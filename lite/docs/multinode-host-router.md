@@ -169,7 +169,7 @@ graph tests do not establish graph support for this eager MPI implementation.
 Keep production selection behind explicit preparation and matching topology,
 process ownership, dtype, exact size, software identity and timing evidence.
 
-See the [full measured configurations, raw samples and negative results](../benchmarks/data/ag_host_router_2x4l4_20261115/README.md).
+See the [full measured configurations, raw samples and negative results](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/ag_host_router_2x4l4_20261115/README.md).
 
 ## Retained alternatives
 
@@ -219,4 +219,4 @@ process/GPU placement, NUMA/HCA mapping, dtype, exact size, software identity,
 and validated timings before selecting a route. Core graph regression tests do
 not establish graph support for this MPI-driven host data path.
 
-See [results and reproduction commands](../benchmarks/data/ag_host_router_2x4l4_20261115/README.md).
+See [results and reproduction commands](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/ag_host_router_2x4l4_20261115/README.md).

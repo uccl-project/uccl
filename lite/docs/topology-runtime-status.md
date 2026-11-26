@@ -70,6 +70,6 @@ identities or create GPU-count-only dispatch rules.
   Models need not predict every timing accurately for measured qualification
   to reject an unsuitable candidate.
 
-The [migration record](topology-runtime-refactor.md) preserves the sequence of
+The [migration record](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/topology-runtime-refactor.md) preserves the sequence of
 changes, negative results and validation artifacts. Earlier statements there
 about pending work describe their stage, not the present capability matrix.

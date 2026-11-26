@@ -46,7 +46,7 @@ more queued calls than the command-ring depth, repeated multi-call CUDA graphs,
 output guards and recovery after rejected calls. `dispatcher_check` covers
 allocation-free fallback and calibration separation. Current experiment status
 and raw runs are recorded in
-[`rs_recovery_8l4_20261114`](../benchmarks/data/rs_recovery_8l4_20261114/README.md).
+[`rs_recovery_8l4_20261114`](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/rs_recovery_8l4_20261114/README.md).
 The benchmark's fixed `current` schedule uses this option only at 1–8 MiB;
 `previous` reproduces the pre-recovery selection in the same executable.
 Library defaults remain unchanged.

@@ -1,4 +1,0 @@
-AG diagnostic 0
-AG diagnostic 1
-AG diagnostic 2
-[{'bytes': 8388608, 'layout': 'out-of-place', 'median_us': 482.15, 'min_us': 477.74, 'max_us': 487.8, 'reference_us': 355.3684666666667, 'diagnostic_ratio': 1.3567607855658548}, {'bytes': 8388608, 'layout': 'in-place', 'median_us': 475.52, 'min_us': 469.63, 'max_us': 476.79, 'reference_us': 355.3684666666667, 'diagnostic_ratio': 1.3381040936477762}, {'bytes': 1073741824, 'layout': 'out-of-place', 'median_us': 45071.8, 'min_us': 45064.8, 'max_us': 45152.3, 'reference_us': 41921.7642, 'diagnostic_ratio': 1.07514082148289}, {'bytes': 1073741824, 'layout': 'in-place', 'median_us': 44138.3, 'min_us': 44017.6, 'max_us': 44241.9, 'reference_us': 41921.7642, 'diagnostic_ratio': 1.052873151745842}]

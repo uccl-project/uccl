@@ -1,5 +1,8 @@
 # PRO6000 reproduction of the integrated branch
 
+> This directory retains only inputs and metadata needed by current figures or checks. [Complete original experiment](https://github.com/zhongjiechen/uccl-zhongjie-dev/tree/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/pro6000_b0ac7b4a_validation) includes raw runs, removed scripts and source snapshots. Historical commands below require that archive.
+
+
 Measured commit: `b0ac7b4a442fb49c61a3b0d051e7f7af7480d88b`, verified against
 remote branch `codex/uccl-lite-retained-optimizations` before source export.
 All 75 exported source/fixture files match this Git commit. Later documentation

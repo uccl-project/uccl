@@ -1,5 +1,8 @@
 # Eight-L4 GPU and SHM overview figures
 
+> This directory retains only inputs and metadata needed by current figures or checks. [Complete original experiment](https://github.com/zhongjiechen/uccl-zhongjie-dev/tree/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/overview_8l4_20261114) includes raw runs, removed scripts and source snapshots. Historical commands below require that archive.
+
+
 The Testbed 1/2 figures show **UCCL Lite**, **NCCL CE (tuned)**,
 **NCCL SM (tuned)** and **NCCL (default)**, using the RTX PRO 6000 ×2 figure
 layout. SM (tuned) is the tuned default NCCL implementation; CE (tuned) enables
@@ -9,8 +12,8 @@ The original UCCL and default-NCCL curves retain their recorded source,
 configuration and measurements below.
 
 All six ordinary-call figures use **complete 1 KiB–1 GiB measurements**.
-AR/AG retain [the full refresh](../full_refresh_8l4_20261114/README.md);
-RS uses the subsequent [ring recovery confirmation](../rs_recovery_8l4_20261114/README.md)
+AR/AG retain [the full refresh](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/full_refresh_8l4_20261114/README.md);
+RS uses the subsequent [ring recovery confirmation](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/rs_recovery_8l4_20261114/README.md)
 at every size, including freshly paired NCCL controls. There are no mixed-run
 tails within a curve or reused GPU/SHM UCCL curves. BF16; AllReduce in place, AllGather and
 ReduceScatter out of place. Sizes denote complete AR/RS input or AG output per
@@ -59,7 +62,7 @@ host memory in both modes. See the raw transport evidence in the full refresh.
 
 `collectives-8l4-resident-small.svg` remains a separate earlier experiment. Its
 1–64-KiB host-blocking resident measurements and NCCL graph controls come from
-[the compact transfer study](../transfer_4to8_20261114/README.md). No resident
+[the compact transfer study](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/transfer_4to8_20261114/README.md). No resident
 number is inserted into the freshly measured ordinary-call overviews, and no
 resident result is extrapolated to 1 GiB.
 

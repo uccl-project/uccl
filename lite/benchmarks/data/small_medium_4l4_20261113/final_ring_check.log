@@ -1,4 +1,0 @@
-PASS bytes=1008 signed-random delayed-ranks async-generations=12
-PASS bytes=262160 signed-random delayed-ranks async-generations=12
-PASS bytes=8388624 signed-random delayed-ranks async-generations=12
-PASS bytes=67108880 signed-random delayed-ranks async-generations=12

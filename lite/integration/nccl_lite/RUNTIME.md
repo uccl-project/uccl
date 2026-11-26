@@ -236,4 +236,4 @@ nccl-tests correctness sweep. See the migration record for exact artifacts and
 timing scope. The single-host eight-GPU BF16 provider still has compilation and
 registry checks only; a two-host run does not validate that different layout. The primary runtime's automatic multi-provider planning, general rank/rail
 layouts, CPU/NIC resource calibration and remaining migration work are tracked
-in [the runtime migration record](../../docs/topology-runtime-refactor.md).
+in [the runtime migration record](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/topology-runtime-refactor.md).

@@ -1,5 +1,8 @@
 # Per-call preparation and full-retirement comparison
 
+> This directory retains only inputs and metadata needed by current figures or checks. [Complete original experiment](https://github.com/zhongjiechen/uccl-zhongjie-dev/tree/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/uccl_reference_gap_20261118/reference_protocol) includes raw runs, removed scripts and source snapshots. Historical commands below require that archive.
+
+
 **The goal is not complete.** The 27-job comparison finishes successfully but
 54/126 latency rows are slower (AG 21, AR 11, RS 22). This is separate from the
 passing unchanged nccl-tests batch-throughput diagnostic. No failed row is

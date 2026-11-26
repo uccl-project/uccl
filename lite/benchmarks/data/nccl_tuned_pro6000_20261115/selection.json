@@ -1,8 +1,0 @@
-{
-  "frozen_utc": "2026-11-15T04:56:08.199901+00:00",
-  "rule": "Choose lowest geometric-mean calibration latency among configurations that beat both bracketed default controls by >=5%; otherwise keep default.",
-  "schedule_sha256": "8251cbf95b469c2f8fb069eca0a8affdc417abc894b2790e56055548b8c645e9",
-  "calibration_runs_sha256": "7df11901dbbac9fd51cea2d225d61a6abfb709ee2b13581c1120c9e4c726b9d1",
-  "supplement_runs_sha256": "a966013efa6613db06c51e5633cc6c6bca0b48e116bba6bb402f87c2ab581890",
-  "final_measurements_used": false
-}

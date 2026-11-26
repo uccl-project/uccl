@@ -1,5 +1,8 @@
 # November 10 UCCL Lite refresh
 
+> This directory retains only inputs and metadata needed by current figures or checks. [Complete original experiment](https://github.com/zhongjiechen/uccl-zhongjie-dev/tree/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110) includes raw runs, removed scripts and source snapshots. Historical commands below require that archive.
+
+
 This refresh starts from `uccl-lite` commit `61686dc338ca092774d3f4a783f23e74fd94514a`.
 `mibura-sky-test-02` is the sole source owner; `l40` resolves to
 `mibura-sky-test-01` and is a test node. The same built executables and
@@ -8,12 +11,12 @@ push. The existing eight-L4 results are separate and unchanged.
 
 ## Hardware and software
 
-[Owner topology, peer access, CUDA, MPI/UCX and HCAs](hardware_local.txt) ·
-[l40 topology and versions](hardware_l40.txt) ·
-[owner NIC port and UCX check](network_local.txt) ·
-[l40 NIC port and UCX check](network_l40.txt) ·
-[source and local binary/library identities](software_artifacts.txt) ·
-[l40 binary/library identities](software_artifacts_l40.txt).
+[Owner topology, peer access, CUDA, MPI/UCX and HCAs](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110/hardware_local.txt) ·
+[l40 topology and versions](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110/hardware_l40.txt) ·
+[owner NIC port and UCX check](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110/network_local.txt) ·
+[l40 NIC port and UCX check](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110/network_l40.txt) ·
+[source and local binary/library identities](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110/software_artifacts.txt) ·
+[l40 binary/library identities](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110/software_artifacts_l40.txt).
 
 Both hosts have four NVIDIA L4s. GPUs 0/1 are on NUMA node 0, GPUs 2/3 are
 on NUMA node 1; `mlx5_0` and `mlx5_1` are respectively local to those pairs.
@@ -27,11 +30,11 @@ The refreshed collective figures follow the eight-L4 layout: latency through
 from complete bytes per rank divided by median call latency, multiplied by
 `2*(r-1)/r` for AllReduce and `(r-1)/r` for AllGather/ReduceScatter. It is a
 collective useful-byte metric, not physical wire bandwidth.
-The [scoped CUDA build log](build_scoped.log) includes the refreshed AR/AG/RS,
+The [scoped CUDA build log](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110/build_scoped.log) includes the refreshed AR/AG/RS,
 fusion, and NCCL control targets. The
-[four-L4 NCCL control smoke](single_ar_current_nccl_smoke_local.log),
-[peer non-power-of-two tail check](single_peer_tail_1008.log), and
-[two-node checked smoke](multinode_smoke_checked/) passed before the full
+[four-L4 NCCL control smoke](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110/single_ar_current_nccl_smoke_local.log),
+[peer non-power-of-two tail check](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110/single_peer_tail_1008.log), and
+[two-node checked smoke](../../../docs/archived-experiments.md#local-only-records) passed before the full
 sweeps.
 
 ## Single-node collectives
@@ -48,10 +51,10 @@ remain in the candidate CSV and raw logs.
 The NCCL control uses its default P2P and shared-memory selection; no
 `NCCL_P2P_LEVEL`, `NCCL_P2P_DISABLE`, or CUDA-graph override was applied.
 
-[AR paired logs](single_native_l40/) ·
-[5,580 timed call samples](single_native_samples.csv) ·
-[all measured UCCL candidates](single_native_candidates.csv) ·
-[selected path and NCCL summary](single_native_summary.csv).
+[AR paired logs](https://github.com/zhongjiechen/uccl-zhongjie-dev/tree/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110/single_native_l40) ·
+[5,580 timed call samples](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110/single_native_samples.csv) ·
+[all measured UCCL candidates](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110/single_native_candidates.csv) ·
+[selected path and NCCL summary](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110/single_native_summary.csv).
 The sample CSV includes 30 `A0-null` launch-floor diagnostics, which are
 excluded from path selection.
 
@@ -62,10 +65,10 @@ and ten timed calls. Each call uses slowest-rank CUDA-event time and checks
 every output element. These event figures are kept separate from the
 host-clock AR figure.
 
-[AG/RS raw log](single_peer_ag_rs_raw.log) ·
-[2,520 timed call samples](single_peer_samples.csv) ·
-[complete paired summary](single_peer_summary.csv) ·
-[1008-byte tail check](single_peer_tail_1008.log).
+[AG/RS raw log](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110/single_peer_ag_rs_raw.log) ·
+[2,520 timed call samples](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110/single_peer_samples.csv) ·
+[complete paired summary](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110/single_peer_summary.csv) ·
+[1008-byte tail check](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110/single_peer_tail_1008.log).
 
 ## Two-node collectives
 
@@ -82,19 +85,19 @@ The NCCL controls set `NCCL_SOCKET_IFNAME=ibp55s0f0` and
 `NCCL_IB_HCA=mlx5_0,mlx5_1`; P2P and GPUDirect use NCCL defaults. UCCL Lite
 MSCCL++ uses `host-no-atomic` IB signaling.
 
-[AR/AG/RS paired logs](multinode_checked/) ·
-[3,780 timed call samples](multinode_paired_samples.csv) ·
-[all-size paired summary](multinode_paired_summary.csv).
+[AR/AG/RS paired logs](../../../docs/archived-experiments.md#local-only-records) ·
+[3,780 timed call samples](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110/multinode_paired_samples.csv) ·
+[all-size paired summary](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110/multinode_paired_summary.csv).
 
 At 1 MiB, NCCL AllReduce has a high and variable delay in the full sweep.
-The [three additional paired runs](multinode_ar_1m_recheck/) and their
-[run summary](multinode_ar_1m_recheck_summary.csv) reproduce the
+The [three additional paired runs](../../../docs/archived-experiments.md#local-only-records) and their
+[run summary](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110/multinode_ar_1m_recheck_summary.csv) reproduce the
 anomaly, with NCCL run means of 2.213, 1.190 and 2.279 ms. The main summary
 keeps the original full-sweep values, and no stable 1-MiB speedup is inferred
 from this point. Some other small NCCL sizes also have wide ranges; the
 per-call samples expose them.
 
-The earlier [CUDA-event versus host-clock diagnostic sweep](multinode_preliminary/)
+The earlier [CUDA-event versus host-clock diagnostic sweep](../../../docs/archived-experiments.md#local-only-records)
 is **not** used in the refreshed charts or speedup claims. The old
 `multinode_peer_20261110` archive remains separately available with a timing
 correction notice.
@@ -104,8 +107,8 @@ correction notice.
 Dense FP16 uses l40 and the existing in-executable cuBLAS + NCCL controls.
 Eight shapes run three independent times, with the shape order reversed on
 the second run. Each invocation uses five warmups, twenty iterations, and
-correctness checking. [All 24 logs](fusion_dense_l40/),
-[all variant run samples](fusion_dense_samples.csv), and the
+correctness checking. [All 24 logs](https://github.com/zhongjiechen/uccl-zhongjie-dev/tree/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110/fusion_dense_l40),
+[all variant run samples](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110/fusion_dense_samples.csv), and the
 [selected-path summary](fusion_dense_summary.csv) retain small regressions
 and all diagnostic paths. AG takes its recorded dispatch path; RS and AR use
 ready-ring fusion. The chart compares complete-operation latency per shape.
@@ -114,8 +117,8 @@ DeepSeek-shaped BF16 full-layer MoE uses l40. The retained variants are
 NCCL + grouped cuBLAS, UCCL Lite + cuBLAS, and fused UCCL Lite. Each token
 count uses a 2.5-second settling period followed by twelve interleaved rounds
 of four calls per variant. The minimum slowest-rank round time per variant is
-reported, as in the shipped harness. The [full log](fusion_moe_l40.log),
-[per-round samples](fusion_moe_samples.csv), and
+reported, as in the shipped harness. The [full log](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110/fusion_moe_l40.log),
+[per-round samples](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/refresh_20261110/fusion_moe_samples.csv), and
 [summary](fusion_moe_summary.csv) retain every small-batch loss. Routing-plan
 construction and framework work are outside timing.
 

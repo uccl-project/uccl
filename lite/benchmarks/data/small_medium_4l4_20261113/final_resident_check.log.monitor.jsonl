@@ -1,7 +1,0 @@
-{"time": "2026-11-13T21:39:35.342774+00:00", "event": "availability", "pids": []}
-{"time": "2026-11-13T21:39:35.886386+00:00", "event": "start", "command": ["./build/uccl_lite_resident_check"]}
-{"time": "2026-11-13T21:39:35.957910+00:00", "event": "sample", "child": 1518587, "pids": [], "foreign": []}
-{"time": "2026-11-13T21:39:36.509056+00:00", "event": "sample", "child": 1518587, "pids": [1518587], "foreign": []}
-{"time": "2026-11-13T21:39:37.081376+00:00", "event": "sample", "child": 1518587, "pids": [], "foreign": []}
-{"time": "2026-11-13T21:39:37.622791+00:00", "event": "sample", "child": 1518587, "pids": [], "foreign": []}
-{"time": "2026-11-13T21:39:37.622931+00:00", "event": "finish", "status": 0, "contaminated": false}

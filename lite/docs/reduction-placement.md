@@ -40,7 +40,7 @@ reported experiment, three 1-GiB probes compared 512 KiB, 2 MiB and 8 MiB bounds
 
 ## Measured local outcome
 
-![AllGather and ReduceScatter blue bar ablation across every measured size, including regressions](assets/experiments/reduction-placement.svg)
+[Archived figure: AllGather and ReduceScatter blue bar ablation across every measured size, including regressions](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/assets/experiments/reduction-placement.svg)
 
 All four plotted configurations use the same executable and each has a separate
 paired NCCL 2.30.7 sweep: 21 sizes × two collectives × two backends × five runs
@@ -66,7 +66,7 @@ run records 42.438 ms versus its NCCL baseline, a **1.115×** ratio at 1 GiB.
 That is a packet-geometry benefit in the unchanged gather algorithm, not a
 new reduction mechanism or evidence of end-to-end superiority.
 
-[Raw samples, all summaries and provenance](../benchmarks/data/reduction-placement/ablation_provenance.json)
+[Raw samples, all summaries and provenance](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/reduction-placement/ablation_provenance.json)
 include all four full sweeps, the three size-selection probes, and the negative
 version-1 development summaries. The full development logs/raw samples remain
 in the local run directories listed in provenance. The source and binary hashes
@@ -185,7 +185,7 @@ are not reused. Compute Sanitizer is not installed on this host.
 ## Remaining work
 
 The opt-in GPU packet-progress experiment is measured separately in
-[the baseline comparison](baseline-comparison.md). It removes CPU packet-routing
+[the baseline comparison](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/baseline-comparison.md). It removes CPU packet-routing
 workers while preserving input-bank ownership across masks and replay. It does
 not produce a general ReduceScatter win over NCCL. The results above retain the
 earlier CPU-progress configurations and are not rewritten as new measurements.

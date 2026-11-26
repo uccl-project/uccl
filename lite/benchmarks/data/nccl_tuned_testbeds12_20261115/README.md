@@ -1,5 +1,8 @@
 # Tuned NCCL baselines for Testbeds 1 and 2
 
+> This directory retains only inputs and metadata needed by current figures or checks. [Complete original experiment](https://github.com/zhongjiechen/uccl-zhongjie-dev/tree/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_tuned_testbeds12_20261115) includes raw runs, removed scripts and source snapshots. Historical commands below require that archive.
+
+
 These measurements add **NCCL CE (tuned)** and **NCCL SM (tuned)** to the six
 8×L4 AR/AG/RS figures. **UCCL Lite** and **NCCL (default)** retain their original
 [overview measurements](../overview_8l4_20261114/README.md). Figure layout,
@@ -138,4 +141,4 @@ Decimal GB/s; UCCL/default retain the original measurements, and CE/SM use the i
 
 25620 timed calls and 12810 warmup calls passed in independent validation, including unplotted ascending-prefix samples. All selected configurations passed the INFO channel/protocol audit.
 
-Raw samples, setup probes, slower configurations, exact commands and INFO logs are retained in [measurements.tar.gz](measurements.tar.gz); [raw_checksums.json](raw_checksums.json) authenticates every member. Extract into the recorded build directory to rerun `analyze.py` without remeasuring.
+Raw samples, setup probes, slower configurations, exact commands and INFO logs are retained in [measurements.tar.gz](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_tuned_testbeds12_20261115/measurements.tar.gz); [raw_checksums.json](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_tuned_testbeds12_20261115/raw_checksums.json) authenticates every member. Extract into the recorded build directory to rerun `analyze.py` without remeasuring.

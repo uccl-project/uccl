@@ -60,7 +60,7 @@ text hashes differ across backends and also between NCCL repeats. The data
 therefore establish fixed-length serving latency, with no assertion of identical
 generated text or quality. This case has fewer independent server starts than
 the one-token study. Its raw samples and server flags are in
-[long_prompt_response](data/e2e_large_messages_8l4_20261115/long_prompt_response/manifest.json).
+[long_prompt_response](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/integration/nccl_lite/data/e2e_large_messages_8l4_20261115/long_prompt_response/manifest.json).
 
 To reproduce this case, use the serving command below with
 `--backends nccl packet --cases 32:2048:32`, a fresh output directory, and
@@ -83,7 +83,7 @@ To reproduce this case, use the serving command below with
   Weights use the checkpoint's FP8 configuration; intercepted collectives
   carry BF16. The model and prompts are identical within every comparison.
 
-The [software record](data/e2e_large_messages_8l4_20261115/software.json),
+The [software record](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/integration/nccl_lite/data/e2e_large_messages_8l4_20261115/software.json),
 [source/build provenance](data/e2e_large_messages_8l4_20261115/provenance.json),
 GPU records, manifests, and server logs retain the exact local configuration.
 
@@ -129,7 +129,7 @@ token timestamp, is retained separately in the raw samples.
 An initial attempt used `mem_fraction_static=0.93` and chunk setting 16,384
 (2,048 tokens per DP rank). It ran out of GPU memory in the Triton MoE
 intermediate allocation. That failed attempt is retained in
-[nccl_pilot_server.log](data/e2e_large_messages_8l4_20261115/nccl_pilot_server.log)
+[nccl_pilot_server.log](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/integration/nccl_lite/data/e2e_large_messages_8l4_20261115/nccl_pilot_server.log)
 and contributes no timing sample. Lowering the KV reservation leaves room for
 the larger activation intermediates; this is a capacity adjustment applied
 equally to both modes.
@@ -220,7 +220,7 @@ not exhaustive equality of every trained parameter.
 **Ordinary FSDP with one communicator is not supported by this proxy.** Its AG
 and RS use different streams, which triggers the existing one-stream-per-
 communicator guard. That failure is preserved in
-[training_22809_shared_stream_failed](data/e2e_large_messages_8l4_20261115/training_22809_shared_stream_failed/manifest.json).
+[training_22809_shared_stream_failed](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/integration/nccl_lite/data/e2e_large_messages_8l4_20261115/training_22809_shared_stream_failed/manifest.json).
 
 The measured adapter gives RS its own process group and uses PyTorch's
 standard `DefaultState`/`reduce_scatter_hook` averaging implementation for
@@ -235,7 +235,7 @@ claim of general FSDP compatibility for the wheel or default launcher.
 Earlier verifier-development failures, their measured source snapshots, and
 the short passing checks are retained in the data directory. They contribute
 no samples to the training table. Only the eight completed final trials in
-[training_22809](data/e2e_large_messages_8l4_20261115/training_22809/manifest.json)
+[training_22809](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/integration/nccl_lite/data/e2e_large_messages_8l4_20261115/training_22809/manifest.json)
 are summarized.
 
 To reproduce, after building the proxy as above:
@@ -270,7 +270,7 @@ The observed 56-MiB AR also exceeds the old 32-MiB interception cap; raising
 the cap permits those calls to use the packet implementation. This diagnostic
 does not attribute GPU time or the total speedup to individual operations.
 
-[shape_probe.json](data/e2e_large_messages_8l4_20261115/shape_probe.json) retains
+[shape_probe.json](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/integration/nccl_lite/data/e2e_large_messages_8l4_20261115/shape_probe.json) retains
 the complete histogram, log byte offset, and a corrected analysis assumption:
 the initial diagnostic asserted a minimum of 64 MiB, but the measured maximum
 was 56 MiB. The request completed successfully; the size assertion was too
@@ -303,7 +303,7 @@ The [data directory](data/e2e_large_messages_8l4_20261115/) retains all **54
 timed serving batches**, all **eight final training trials** (80 timed steps),
 the failed memory/compatibility/verifier attempts, short checks, raw logs,
 library/source hashes, and the diagnostic trace. The
-[validation record](data/e2e_large_messages_8l4_20261115/validation.json) lists
+[validation record](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/integration/nccl_lite/data/e2e_large_messages_8l4_20261115/validation.json) lists
 the final check commands and return codes.
 [summary.json](data/e2e_large_messages_8l4_20261115/summary.json) contains every
 reported case, both independent session/trial medians where available,

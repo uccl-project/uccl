@@ -1,9 +1,0 @@
-bytes,progress,router_median_us,router_min_us,router_max_us,paired_peer_us,paired_nccl_us,source
-4194304,per-source,251.936,250.813,252.362,242.374,234.458,pilot_4m_16m.log
-8388608,per-source,425.565,425.187,426.278,407.235,414.598,pilot_4m_16m.log
-16777216,per-source,692.928,692.154,694.749,744.483,775.043,pilot_4m_16m.log
-4194304,all-ready,269.091,266.451,270.922,243.267,234.493,control_all_ready_4m_16m.log
-8388608,all-ready,445.491,443.888,448.445,407.395,416.518,control_all_ready_4m_16m.log
-16777216,all-ready,723.715,722.563,728.653,744.918,783.35,control_all_ready_4m_16m.log
-1073741824,per-source,36303.709,36301.619,36318.877,45497.933,48693.459,per_source_1g.log
-1073741824,all-ready,36839.722,36837.984,36839.907,45502.266,47828.656,all_ready_1g.log

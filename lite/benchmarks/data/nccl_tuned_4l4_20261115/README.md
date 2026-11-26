@@ -1,5 +1,8 @@
 # Testbed 3: independently tuned NCCL CE and SM references
 
+> This directory retains only inputs and metadata needed by current figures or checks. [Complete original experiment](https://github.com/zhongjiechen/uccl-zhongjie-dev/tree/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_tuned_4l4_20261115) includes raw runs, removed scripts and source snapshots. Historical commands below require that archive.
+
+
 This November 15, 2026 study adds `NCCL CE (tuned)` and `NCCL SM (tuned)`
 to the three four-L4 FP32 collective figures. The existing UCCL Lite and
 default-NCCL measurements come from the
@@ -31,7 +34,7 @@ those points are plotted in full.
 
 - `mibura-sky-test-02`: four NVIDIA L4 GPUs, PCIe Gen4, dual Xeon Silver
   4410Y, NUMA pairs `(0,1)` and `(2,3)`, no NVLink. CUDA 12.9 and NCCL 2.28.7.
-  [Environment](environment.json) records GPU/driver details, topology,
+  [Environment](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_tuned_4l4_20261115/environment.json) records GPU/driver details, topology,
   CUDA P2P read/write support, MPI version and source revision.
 - FP32; 21 powers of two from 1 KiB through 1 GiB. Bytes mean complete
   AllReduce/ReduceScatter input or AllGather output per GPU.
@@ -70,10 +73,10 @@ SM candidates disable P2P memcpy. The candidate family includes the default
 policy, buffer/channel tuning under that policy, ordinary P2P, P2P buffer sizes,
 channel counts, a thread-count change,
 Ring/Simple and peer reads. CE candidates vary buffers and channel counts.
-All exact settings are in [candidates.json](candidates.json).
+All exact settings are in [candidates.json](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_tuned_4l4_20261115/candidates.json).
 
 Two independently randomized calibration rounds select one configuration
-per operation, exact size and family. [schedule.json](schedule.json) is frozen
+per operation, exact size and family. [schedule.json](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_tuned_4l4_20261115/schedule.json) is frozen
 before three fresh validation rounds. Validation runs each selected
 configuration over the entire ascending sweep; only the preselected points
 are evaluated for the final curves. No final-run best-of selection among
@@ -93,7 +96,7 @@ Validation exposed small-message regressions in some P2P configurations.
 A non-default SM configuration is retained only if all three validation runs
 beat their default controls and the median improvement is at least 3%.
 Otherwise it returns to default settings; another tuned winner is not selected.
-The resulting [final schedule](final_schedule.json) is then fixed, and default
+The resulting [final schedule](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_tuned_4l4_20261115/final_schedule.json) is then fixed, and default
 settings are confirmed in three **new** complete sweeps per operation. Every
 default point in the SM curve uses those confirmation runs. Retained tuned
 points use their three independent validation runs. This fallback refinement
@@ -104,20 +107,20 @@ to be an untouched holdout experiment.
 
 - [cases.csv](cases.csv): final CE/SM medians and run ranges, selected
   configurations, and independently remeasured default controls.
-- [selected_runs.csv](selected_runs.csv): all three evaluation run means
+- [selected_runs.csv](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_tuned_4l4_20261115/selected_runs.csv): all three evaluation run means
   or confirmation run means, their stage and each point's original calibration
-  configuration/score. [initial_cases.csv](initial_cases.csv) retains the
+  configuration/score. [initial_cases.csv](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_tuned_4l4_20261115/initial_cases.csv) retains the
   pre-fallback validation results, including the rejected regressions.
-- [calibration.csv](calibration.csv) and [samples.csv](samples.csv): all
+- [calibration.csv](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_tuned_4l4_20261115/calibration.csv) and [samples.csv](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_tuned_4l4_20261115/samples.csv): all
   successful candidate run means and every checked timed sample.
-- [transport.json](transport.json): verified channel paths for every run.
-- [validation.json](validation.json): sweep/sample totals and archive hash.
-- [measurements.tar.gz](measurements.tar.gz): raw stdout, stderr, NCCL
+- [transport.json](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_tuned_4l4_20261115/transport.json): verified channel paths for every run.
+- [validation.json](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_tuned_4l4_20261115/validation.json): sweep/sample totals and archive hash.
+- [measurements.tar.gz](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_tuned_4l4_20261115/measurements.tar.gz): raw stdout, stderr, NCCL
   transport logs, run commands/settings, source snapshots, environment and
   binary/source/library hashes. Compiled binaries are not archived.
 
 `build_probe.py` creates a NCCL-only copy of the existing AG/RS benchmark in
-`build/`; [source.patch](source.patch) changes only its backend lists.
+`build/`; [source.patch](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/nccl_tuned_4l4_20261115/source.patch) changes only its backend lists.
 Input generation, full-output checks and timing functions are unchanged.
 The AR control uses `benchmarks/collectives/nccl_4l4_mpi_baseline.cu` unchanged.
 The copied AG/RS harness retains its legacy `# selected` summary strings;

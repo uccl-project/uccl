@@ -1,1 +1,0 @@
-CPU BF16 scalar oracle: 524312 checks passed (all encodings, tails, alias, 1/2/8/32 inputs)

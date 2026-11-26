@@ -1,7 +1,7 @@
 # Qualified default UCCL Lite policy
 
 The default `graph512` policy is qualified on the recorded two four-L4 hosts.
-Its [full paired comparison](../../benchmarks/data/uccl_reference_gap_20261118/reference_protocol/graph512_full/README.md)
+Its [full paired comparison](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/uccl_reference_gap_20261118/reference_protocol/graph512_full/README.md)
 passes 126/126 points, and the [default-build qualification](../../benchmarks/data/uccl_reference_gap_20261118/reference_protocol/qualified_release/README.md)
 records all checks and artifact identities. The earlier failed configurations
 remain archived; these results do not validate other placements or API modes.

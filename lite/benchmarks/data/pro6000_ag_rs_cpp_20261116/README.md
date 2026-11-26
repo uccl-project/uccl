@@ -1,5 +1,8 @@
 # UCCL Lite AllGather and ReduceScatter on eight RTX PRO 6000 GPUs
 
+> This directory retains only inputs and metadata needed by current figures or checks. [Complete original experiment](https://github.com/zhongjiechen/uccl-zhongjie-dev/tree/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/pro6000_ag_rs_cpp_20261116) includes raw runs, removed scripts and source snapshots. Historical commands below require that archive.
+
+
 **Both collectives beat tuned NCCL at all 21 sizes in all five independent
 validation rounds.** At every size, the slowest UCCL Lite run is faster than
 the fastest NCCL run. The same result holds in the separate validation with
@@ -12,9 +15,9 @@ result of 51.94 GB/s. Across the complete size grid, speedups are
 **1.021–1.879× for AllGather** and **1.015–1.766× for ReduceScatter**.
 This remains an experimental, hardware-specific standalone implementation.
 
-[AllGather samples](allgather.csv) ·
-[ReduceScatter samples](reducescatter.csv) · [frozen policy](policy.json) ·
-[raw evidence](measurements.tar.gz)
+[AllGather samples](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/pro6000_ag_rs_cpp_20261116/allgather.csv) ·
+[ReduceScatter samples](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/pro6000_ag_rs_cpp_20261116/reducescatter.csv) · [frozen policy](policy.json) ·
+[raw evidence](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/pro6000_ag_rs_cpp_20261116/measurements.tar.gz)
 
 | Operation | Size | UCCL Lite | Tuned NCCL |
 | --- | ---: | ---: | ---: |
@@ -25,8 +28,8 @@ This remains an experimental, hardware-specific standalone implementation.
 | AllGather | 1 GiB | 18.125 ms | 18.765 ms |
 | ReduceScatter | 1 GiB | 18.170 ms | 18.880 ms |
 
-![FP32 AllGather](../../../docs/assets/collectives-pro6000x8-allgather-fp32.svg)
-![FP32 ReduceScatter](../../../docs/assets/collectives-pro6000x8-reducescatter-fp32.svg)
+[Archived figure: FP32 AllGather](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/assets/collectives-pro6000x8-allgather-fp32.svg)
+[Archived figure: FP32 ReduceScatter](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/docs/assets/collectives-pro6000x8-reducescatter-fp32.svg)
 
 Points are medians; blue bands show the UCCL Lite observed ranges. NCCL ranges
 are retained in the linked tables and samples. The initialization-only NCCL
@@ -94,7 +97,7 @@ remains for setup/teardown rather than per-operation tuning. **These latter resu
 form every primary table and figure.** Each run retains its own actual
 transport edges; per-size protocol/algorithm dispatch is attested by the
 matching traced validation. The auditor rejects any non-logging environment
-or command difference. [The complete logging control](logging-control.csv)
+or command difference. [The complete logging control](https://github.com/zhongjiechen/uccl-zhongjie-dev/blob/cea1faf6473fc76b5bd192db025f5291169d3b58/lite/benchmarks/data/pro6000_ag_rs_cpp_20261116/logging-control.csv)
 retains both sets; differences are run-to-run observations, not isolated
 causal estimates of logging cost.
 

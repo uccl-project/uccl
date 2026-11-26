@@ -5,7 +5,7 @@ AllReduce/ReduceScatter experiment. It transfers the shared-packet,
 readiness-driven progress, and reader-credit techniques from the November 15
 AllGather experiment. **It is slower than the existing GPU implementations in
 the measured 1–64 MiB sweep.** No automatic policy or README performance curve
-selects it. See the [measurement record](../benchmarks/data/host_reduce_2x4l4_20261115/README.md).
+selects it. See the [measurement record](archived-experiments.md#local-only-records).
 
 ## Schedule and ownership
 

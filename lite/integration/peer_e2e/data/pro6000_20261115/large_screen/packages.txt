@@ -1,1 +1,0 @@
-/home/xinze/dev/FreeToken-dev/.venv/bin/python: No module named pip

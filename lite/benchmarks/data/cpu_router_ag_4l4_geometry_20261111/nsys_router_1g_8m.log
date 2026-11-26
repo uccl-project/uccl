@@ -1,26 +1,0 @@
-WARNING: Device-side CUDA Event completion trace is currently enabled.
-         This may increase runtime overhead and the likelihood of false
-         dependencies across CUDA Streams. If you wish to avoid this, please
-         disable the feature with --cuda-event-trace=false.
-# NUMA group0 host_node=0 ranks=0(device0),1(device1),
-# NUMA group1 host_node=1 ranks=2(device2),3(device3),
-# PacketPipeline transport=kernel; registered spans; shared BF16 executor; generational ownership; ranks=4 NUMA_groups=2
-# packet_progress=cpu routing_cpu_workers=16
-# CPU-router BF16: packet=8388608 slots=2 blocks<=64 threads=256 CPU<=8/node grain=8192; no NCCL collective fallback
-# reduction_placement=cpu
-# scatter_packet_order=flat
-all_gather 1073741824: CPU-router explicitly forced; no performance claim
-profile GPU0 consumer ready0 135.1 copy0 285.0 total 42315.1 us
-profile GPU1 consumer ready0 139.9 copy0 271.5 total 42306.5 us
-profile GPU2 consumer ready0 111.1 copy0 285.7 total 42285.5 us
-profile GPU3 consumer ready0 89.5 copy0 300.8 total 42279.3 us
-# GPUs=4 dtype=BF16 fallback=nccl:22807; no hidden calibration; checks outside timed region
-# topology=uccl-lite-router-v1;cuda=12090;driver=595.58.03;avx2=1;avx512f=1;avx512bw=1;cpu=model name	: Intel(R) Xeon(R) Silver 4410Y;gpu=0:0000:4A:00.0:0:NVIDIA L4:625bec3104eba6c0090c540882f849e10111;gpu=1:0000:61:00.0:0:NVIDIA L4:b1e93377226f10fde97fb95e444080ff1011;gpu=2:0000:CA:00.0:1:NVIDIA L4:bc38df0c8fa0a9a273957e9fade6e4ba1101;gpu=3:0000:E1:00.0:1:NVIDIA L4:d9a6edf914dc1e7de85579610f9ccd031110;node=0:cpus=0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46,;node=1:cpus=1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31,33,35,37,39,41,43,45,47,;benchmark-nccl-config-v1
-collective,bytes,in_place,backend,median_us,min_us,max_us,speedup,dispatcher_router_initialized
-all_gather,1073741824,0,cpu-router,42324.738,42293.919,42359.104,0.0000,1
-# correctness: PASS (every invocation, all ranks)
-Collecting data...
-Generating '/tmp/nsys-report-e065.qdstrm'
-[1/1] [0%                          ] nsys_router_1g_8m.nsys-rep[1/1] [0%                          ] nsys_router_1g_8m.nsys-rep[1/1] [5%                          ] nsys_router_1g_8m.nsys-rep[1/1] [8%                          ] nsys_router_1g_8m.nsys-rep[1/1] [9%                          ] nsys_router_1g_8m.nsys-rep[1/1] [==========48%               ] nsys_router_1g_8m.nsys-rep[1/1] [=============58%            ] nsys_router_1g_8m.nsys-rep[1/1] [========================100%] nsys_router_1g_8m.nsys-rep[1/1] [========================100%] nsys_router_1g_8m.nsys-rep
-Generated:
-	/home/zhongjie/uccl-zhongjie-dev/experimental/lite/build/router_ag_4l4_packet_20261111/nsys_router_1g_8m.nsys-rep

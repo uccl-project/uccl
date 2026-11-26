@@ -1,6 +1,0 @@
-auto_allreduce_known {1024: True, 2048: True, 4096: True, 8192: True, 16384: True, 32768: True, 65536: True, 131072: True, 262144: True, 524288: True, 1048576: True, 2097152: True, 4194304: True}
-auto_allreduce_unknown {1536: False}
-auto_allreduce_changed_threshold {1024: False, 2048: False, 4096: False, 8192: False, 16384: False, 32768: False, 65536: False, 131072: False, 262144: False, 524288: False, 1048576: False, 2097152: False, 4194304: False}
-auto_allgather_known {1024: True, 2048: True, 4096: True, 8192: True, 16384: True, 32768: True, 65536: True, 131072: True, 262144: True, 524288: True, 1048576: True, 2097152: True, 4194304: True}
-auto_allgather_unknown {1536: False}
-auto_allgather_changed_threshold {1024: False, 2048: False, 4096: False, 8192: False, 16384: False, 32768: False, 65536: False, 131072: False, 262144: False, 524288: False, 1048576: False, 2097152: False, 4194304: False}

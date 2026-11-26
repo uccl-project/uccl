@@ -1,9 +1,0 @@
-operation,full_bytes_per_rank,config,min_run_mean_us,median_run_mean_us,max_run_mean_us
-allreduce,524288,default,1198.856,1495.228,3370.266
-allreduce,524288,simple,157.247,232.205,285.189
-allgather,524288,default,1732.071,2083.718,2235.23
-allgather,524288,simple,98.99,100.369,178.088
-reducescatter,524288,default,2136.785,2226.218,2652.282
-reducescatter,524288,simple,90.202,90.421,90.951
-allreduce,1048576,default,664.906,693.706,703.492
-allreduce,1048576,simple,205.091,206.871,210.394
