@@ -223,7 +223,7 @@ bool EQDS::grant_credit(EQDSCC* eqds_cc, bool idle, PullQuanta* ret_increment) {
 
   eqds_cc->latest_pull_ += increment;
 
-  if (!send_pull_packet(eqds_cc)) {
+  if (increment != 0 && !send_pull_packet(eqds_cc)) {
     eqds_cc->latest_pull_ -= increment;
     UCCL_VLOG(5) << "Failed to send pull packet.";
     *ret_increment = 0;
