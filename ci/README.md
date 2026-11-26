@@ -160,6 +160,12 @@ nightly or label trigger. Benchmarks do not run correctness suites first.
 - CPU suites run on GitHub; GPU/RDMA suites run on lab nodes.
 - GPU runs serialize per target. Busy GPUs, held locks or unverifiable GPU
   activity skip the target; CPU-only work does not block it.
+- NVIDIA desktop activity is tolerated up to 5% utilization per GPU when all
+  foreign contexts on that GPU are graphics-only `/usr/lib/xorg/Xorg` or
+  `/usr/bin/gnome-shell` processes using at most 256 MiB combined. Compute or
+  mixed compute/graphics contexts still block admission, even at 0% utilization.
+  Unknown or heavier activity retains the existing idle check. This policy is
+  shared by correctness tests and benchmarks; desktop processes are left running.
 - CI rechecks GPU activity during execution and stops its own work if another job
   starts. Only verified stale CI processes may be cleaned up.
 - Unreachable lab SSH skips the target with a reason; recorded test failures still
